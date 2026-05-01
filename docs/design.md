@@ -1,7 +1,7 @@
 # Design
 
-Linode Image Lab M1 models the control-plane contract for a future image
-freeze/thaw workflow without implementing real Linode mutations.
+Linode Image Lab M1 models the control-plane contract for a future custom image
+capture/deploy workflow without implementing real Linode mutations.
 
 ## Goals
 
@@ -13,9 +13,8 @@ freeze/thaw workflow without implementing real Linode mutations.
 ## Non-Goals
 
 - No real Linode API mutations.
-- No scheduler integration.
-- No deployment automation.
-- No GitHub Actions integration.
+- No deployment, GitHub Enterprise, or external scheduler integration.
+- CI exists to run `make check`.
 
 ## Components
 

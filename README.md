@@ -1,12 +1,12 @@
 # Linode Image Lab
 
-Linode Image Lab is a small Python scaffold for modeling image freeze/thaw
-workflows before any real cloud mutation behavior exists.
+Linode Image Lab is a small Python scaffold for modeling custom image
+capture/deploy workflows before any real cloud mutation behavior exists.
 
 M1 is intentionally conservative:
 
 - `plan` emits a dry-run, sanitized manifest-like preview.
-- `freeze`, `thaw`, and `freeze-thaw` are explicit placeholders.
+- `capture`, `deploy`, and `capture-deploy` are explicit placeholders.
 - `cleanup` is first-class and independently runnable.
 - Manifest schema, rediscoverable tags, and cleanup selection are the foundation.
 
@@ -34,17 +34,17 @@ Every modeled resource uses rediscoverable tags:
 
 - `project=linode-image-lab`
 - `run_id=<unique-id>`
-- `mode=<freeze|thaw|freeze-thaw>`
-- `component=<builder|thaw>`
+- `mode=<capture|deploy|capture-deploy>`
+- `component=<capture|deploy>`
 - `ttl=<timestamp>`
 
 ## Commands
 
 ```sh
 PYTHONPATH=src python3 -m linode_image_lab.cli plan --region us-east,us-west
-PYTHONPATH=src python3 -m linode_image_lab.cli freeze --region us-east
-PYTHONPATH=src python3 -m linode_image_lab.cli thaw --region us-east
-PYTHONPATH=src python3 -m linode_image_lab.cli freeze-thaw --region us-east
+PYTHONPATH=src python3 -m linode_image_lab.cli capture --region us-east
+PYTHONPATH=src python3 -m linode_image_lab.cli deploy --region us-east
+PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy --region us-east
 PYTHONPATH=src python3 -m linode_image_lab.cli cleanup
 ```
 

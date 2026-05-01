@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +12,15 @@ BANNED_TERMS = (
     "corp" + "orate email",
     "internal user" + "name",
     "proprietary ident" + "ifier",
+)
+# Build legacy workflow terms from fragments so the scanner cannot flag its own source.
+LEGACY_WORKFLOW_TERMS = tuple(
+    "".join(parts)
+    for parts in (
+        ("fr", "eeze"),
+        ("th", "aw"),
+        ("fr", "eeze-", "th", "aw"),
+    )
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PRIVATE_URL_RE = re.compile(
@@ -54,6 +64,33 @@ def iter_text_files(root: Path) -> list[Path]:
     return files
 
 
+def is_text_path(path: Path) -> bool:
+    return path.suffix in TEXT_SUFFIXES or path.name == "Makefile"
+
+
+def iter_tracked_text_files(root: Path) -> list[Path]:
+    if not (root / ".git").exists():
+        return iter_text_files(root)
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return iter_text_files(root)
+
+    files: list[Path] = []
+    for name in result.stdout.decode("utf-8").split("\0"):
+        if not name:
+            continue
+        path = Path(name)
+        if is_text_path(path):
+            files.append(root / path)
+    return files
+
+
 def is_under(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
 
@@ -92,6 +129,21 @@ def scan_public_safety(root: Path) -> list[str]:
             if any(character in BIDI_CONTROL_CHARS for character in line):
                 findings.append(f"{relative}:{line_number}: hidden Unicode bidi control detected")
 
+    findings.extend(scan_terminology_drift(root))
+    return findings
+
+
+def scan_terminology_drift(root: Path) -> list[str]:
+    findings: list[str] = []
+    for path in iter_tracked_text_files(root):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(root)
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            lower_line = line.lower()
+            if any(term in lower_line for term in LEGACY_WORKFLOW_TERMS):
+                findings.append(f"{relative}:{line_number}: legacy image workflow terminology detected")
     return findings
 
 

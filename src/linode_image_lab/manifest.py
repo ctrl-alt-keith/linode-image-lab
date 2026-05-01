@@ -11,8 +11,8 @@ from .redaction import redact
 
 PROJECT = "linode-image-lab"
 SCHEMA_VERSION = 1
-VALID_MODES = {"freeze", "thaw", "freeze-thaw"}
-VALID_COMPONENTS = {"builder", "thaw"}
+VALID_MODES = {"capture", "deploy", "capture-deploy"}
+VALID_COMPONENTS = {"capture", "deploy"}
 REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
 
 
@@ -70,7 +70,7 @@ def tags_to_dict(tags: list[str] | dict[str, str]) -> dict[str, str]:
 
 
 def component_for_mode(mode: str) -> str:
-    return "thaw" if mode == "thaw" else "builder"
+    return "deploy" if mode == "deploy" else "capture"
 
 
 def create_manifest(

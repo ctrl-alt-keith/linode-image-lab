@@ -18,13 +18,14 @@ M1 is designed to be public-safe and non-mutating.
 - private network URLs,
 - restricted workplace metadata,
 - hidden Unicode bidirectional control characters,
-- non-public fixture placement.
+- non-public fixture placement,
+- legacy image workflow terminology.
 
 The scan is intentionally small and local. It is a guardrail, not a full data
 loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `freeze`, `thaw`, and `freeze-thaw` return explicit
-placeholder responses. `cleanup` currently selects candidates from provided data
-structures and does not call Linode.
+`plan` is dry-run only. `capture`, `deploy`, and `capture-deploy` return
+explicit placeholder responses. `cleanup` currently selects candidates from
+provided data structures and does not call Linode.
