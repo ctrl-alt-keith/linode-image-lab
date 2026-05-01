@@ -43,6 +43,27 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(findings, ["sample.py:2: hidden Unicode bidi control detected"])
 
+    def test_reports_legacy_workflow_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            legacy_term = "fr" + "eeze"
+            path.write_text(f"{legacy_term}\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, ["README.md:1: legacy image workflow terminology detected"])
+
+    def test_allows_current_workflow_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            path.write_text("capture deploy capture-deploy custom image\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, [])
+
 
 if __name__ == "__main__":
     unittest.main()

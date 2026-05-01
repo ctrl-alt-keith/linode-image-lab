@@ -7,10 +7,10 @@ import sys
 from typing import Any
 
 from .cleanup import select_cleanup_candidates
-from .freeze import freeze_plan
+from .capture import capture_plan
+from .deploy import deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
-from .thaw import thaw_plan
 
 
 def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
@@ -32,19 +32,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_region_args(plan, required=True)
     plan.add_argument(
         "--mode",
-        choices=("freeze", "thaw", "freeze-thaw"),
-        default="freeze-thaw",
+        choices=("capture", "deploy", "capture-deploy"),
+        default="capture-deploy",
         help="Workflow mode to model.",
     )
 
-    freeze = subparsers.add_parser("freeze", help="Placeholder freeze command.")
-    add_region_args(freeze, required=True)
+    capture = subparsers.add_parser("capture", help="Placeholder capture command.")
+    add_region_args(capture, required=True)
 
-    thaw = subparsers.add_parser("thaw", help="Placeholder thaw command.")
-    add_region_args(thaw, required=True)
+    deploy = subparsers.add_parser("deploy", help="Placeholder deploy command.")
+    add_region_args(deploy, required=True)
 
-    freeze_thaw = subparsers.add_parser("freeze-thaw", help="Placeholder combined command.")
-    add_region_args(freeze_thaw, required=True)
+    capture_deploy = subparsers.add_parser("capture-deploy", help="Placeholder combined command.")
+    add_region_args(capture_deploy, required=True)
 
     cleanup = subparsers.add_parser("cleanup", help="Placeholder cleanup command.")
     cleanup.add_argument("--run-id", help="Optional run id to include in the cleanup preview.")
@@ -65,29 +65,29 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             status="planned",
         )
 
-    if args.command == "freeze":
-        return freeze_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
+    if args.command == "capture":
+        return capture_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
 
-    if args.command == "thaw":
-        return thaw_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
+    if args.command == "deploy":
+        return deploy_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
 
-    if args.command == "freeze-thaw":
+    if args.command == "capture-deploy":
         manifest = create_manifest(
-            command="freeze-thaw",
-            mode="freeze-thaw",
+            command="capture-deploy",
+            mode="capture-deploy",
             regions=parse_regions(args.region),
             run_id=args.run_id,
             ttl=args.ttl,
             dry_run=True,
             status="placeholder",
         )
-        manifest["message"] = "freeze-thaw is a non-mutating placeholder in M1"
+        manifest["message"] = "capture-deploy is a non-mutating placeholder in M1"
         return manifest
 
     if args.command == "cleanup":
         manifest = create_manifest(
             command="cleanup",
-            mode="freeze-thaw",
+            mode="capture-deploy",
             regions=[],
             run_id=args.run_id,
             ttl=args.ttl,

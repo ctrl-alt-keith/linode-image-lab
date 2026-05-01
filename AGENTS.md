@@ -7,8 +7,8 @@ Repo-local rules take precedence only for repo-specific behavior.
 ## Repo Scope
 
 - This repo contains a public-safe Linode Image Lab scaffold.
-- M1 behavior is limited to dry-run planning, manifest modeling, tag contracts,
-  cleanup selection logic, docs, and tests.
+- M1 behavior is limited to dry-run custom image capture/deploy planning,
+  manifest modeling, tag contracts, cleanup selection logic, docs, and tests.
 - Do not add real Linode mutation behavior until a later milestone explicitly
   asks for it.
 
