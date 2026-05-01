@@ -49,17 +49,32 @@ TEXT_SUFFIXES = {
     ".sh",
     ".mk",
 }
-SKIP_DIRS = {".git", ".mypy_cache", ".pytest_cache", "__pycache__"}
+SKIP_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "htmlcov",
+}
 FIXTURE_ROOT = Path("tests/fixtures")
 SANITIZED_FIXTURE_ROOT = FIXTURE_ROOT / "sanitized"
 
 
-def iter_text_files(root: Path) -> list[Path]:
+def should_skip_local_path(path: Path) -> bool:
+    return any(part in SKIP_DIRS or part.endswith(".egg-info") for part in path.parts)
+
+
+def iter_local_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for path in root.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        if should_skip_local_path(path):
             continue
-        if path.is_file() and (path.suffix in TEXT_SUFFIXES or path.name == "Makefile"):
+        if path.is_file():
             files.append(path)
     return files
 
@@ -68,9 +83,9 @@ def is_text_path(path: Path) -> bool:
     return path.suffix in TEXT_SUFFIXES or path.name == "Makefile"
 
 
-def iter_tracked_text_files(root: Path) -> list[Path]:
+def iter_scanned_files(root: Path) -> list[Path]:
     if not (root / ".git").exists():
-        return iter_text_files(root)
+        return iter_local_files(root)
 
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
@@ -79,16 +94,18 @@ def iter_tracked_text_files(root: Path) -> list[Path]:
         stderr=subprocess.DEVNULL,
     )
     if result.returncode != 0:
-        return iter_text_files(root)
+        return iter_local_files(root)
 
     files: list[Path] = []
     for name in result.stdout.decode("utf-8").split("\0"):
         if not name:
             continue
-        path = Path(name)
-        if is_text_path(path):
-            files.append(root / path)
+        files.append(root / Path(name))
     return files
+
+
+def iter_scanned_text_files(root: Path) -> list[Path]:
+    return [path for path in iter_scanned_files(root) if is_text_path(path)]
 
 
 def is_under(path: Path, parent: Path) -> bool:
@@ -96,14 +113,12 @@ def is_under(path: Path, parent: Path) -> bool:
 
 
 def scan_fixture_placement(root: Path) -> list[str]:
-    fixture_root = root / FIXTURE_ROOT
     sanitized_root = root / SANITIZED_FIXTURE_ROOT
-    if not fixture_root.exists():
-        return []
 
     findings: list[str] = []
-    for path in fixture_root.rglob("*"):
-        if path.is_file() and not is_under(path, sanitized_root):
+    for path in iter_scanned_files(root):
+        relative_path = path.relative_to(root)
+        if is_under(relative_path, FIXTURE_ROOT) and not is_under(path, sanitized_root):
             relative = path.relative_to(root)
             findings.append(f"{relative}: fixture files must live under {SANITIZED_FIXTURE_ROOT}/")
     return findings
@@ -111,7 +126,7 @@ def scan_fixture_placement(root: Path) -> list[str]:
 
 def scan_public_safety(root: Path) -> list[str]:
     findings = scan_fixture_placement(root)
-    for path in iter_text_files(root):
+    for path in iter_scanned_text_files(root):
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root)
         lower_text = text.lower()
@@ -135,7 +150,7 @@ def scan_public_safety(root: Path) -> list[str]:
 
 def scan_terminology_drift(root: Path) -> list[str]:
     findings: list[str] = []
-    for path in iter_tracked_text_files(root):
+    for path in iter_scanned_text_files(root):
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")

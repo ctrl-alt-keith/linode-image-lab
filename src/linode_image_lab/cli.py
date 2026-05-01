@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy validation Linode after execution.",
     )
 
-    cleanup = subparsers.add_parser("cleanup", help="Placeholder cleanup command.")
+    cleanup = subparsers.add_parser("cleanup", help="Preview tag-scoped cleanup selection.")
     cleanup.add_argument("--run-id", help="Optional run id to include in the cleanup preview.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 

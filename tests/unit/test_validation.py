@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,35 @@ class ValidationTests(unittest.TestCase):
             findings = scan_public_safety(root)
 
         self.assertEqual(findings, [])
+
+    def test_skips_local_install_artifacts_without_git(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".venv" / "lib" / "dependency.py"
+            path.parent.mkdir(parents=True)
+            email_like = "person" + "@" + "example.com"
+            path.write_text(f"maintainer = '{email_like}'\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, [])
+
+    def test_git_checkout_scans_tracked_files_not_ignored_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            email_like = "person" + "@" + "example.com"
+            readme = root / "README.md"
+            readme.write_text(f"contact {email_like}\n", encoding="utf-8")
+            venv_file = root / ".venv" / "lib" / "dependency.py"
+            venv_file.parent.mkdir(parents=True)
+            private_url = "http://" + "127.0.0.1:8000"
+            venv_file.write_text(f"url = '{private_url}'\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, ["README.md: email-like value detected"])
 
 
 if __name__ == "__main__":

@@ -27,6 +27,6 @@ Before opening a PR:
 - confirm fixtures are sanitized,
 - confirm dry-run commands remain non-mutating,
 - confirm real mutation remains limited to explicit `capture --execute` and
-  `deploy --execute`,
+  `deploy --execute`, and `capture-deploy --execute`,
 - confirm cleanup only targets resources with complete matching tags,
 - confirm docs describe behavior without private context.
