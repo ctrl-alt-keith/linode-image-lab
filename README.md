@@ -25,9 +25,16 @@ systems, data, or credentials.
 ## Quick Start
 
 ```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -e .
+linode-image-lab --help
+linode-image-lab plan --region us-east --run-id demo-run
 make check
-PYTHONPATH=src python3 -m linode_image_lab.cli plan --region us-east --run-id demo-run
 ```
+
+For no-install use, `PYTHONPATH=src python3 -m linode_image_lab.cli` remains
+available.
 
 `LINODE_TOKEN` is read only when `capture --execute`, `deploy --execute`, or
 `capture-deploy --execute` is used. Dry-run commands do not read the token, call
