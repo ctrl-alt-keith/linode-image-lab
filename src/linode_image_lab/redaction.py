@@ -11,10 +11,23 @@ SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|api[_-]?key|credential)",
 TOKEN_TEXT_RE = re.compile(
     r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]{8,}|\b(token|secret|password)=([^\s]+)"
 )
+PROVIDER_IDENTIFIER_KEYS = {
+    "account_id",
+    "disk_id",
+    "image_id",
+    "linode_id",
+    "provider_id",
+    "resource_id",
+    "user_id",
+}
 
 
 def is_sensitive_key(key: str) -> bool:
     return bool(SENSITIVE_KEY_RE.search(key))
+
+
+def is_provider_identifier_key(key: str) -> bool:
+    return key in PROVIDER_IDENTIFIER_KEYS
 
 
 def redact_text(value: str) -> str:
@@ -38,7 +51,10 @@ def redact(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            redacted[key_text] = REDACTION if is_sensitive_key(key_text) else redact(item)
+            if is_sensitive_key(key_text) or is_provider_identifier_key(key_text):
+                redacted[key_text] = REDACTION
+            else:
+                redacted[key_text] = redact(item)
         return redacted
 
     if isinstance(value, str):

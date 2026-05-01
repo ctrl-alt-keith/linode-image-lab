@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from .cleanup import select_cleanup_candidates
-from .capture import capture_plan
+from .capture import CaptureError, capture_plan
 from .deploy import deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
@@ -37,8 +37,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workflow mode to model.",
     )
 
-    capture = subparsers.add_parser("capture", help="Placeholder capture command.")
+    capture = subparsers.add_parser("capture", help="Plan or execute a single-region capture.")
     add_region_args(capture, required=True)
+    capture.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    capture.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
+    capture.add_argument("--type", dest="instance_type", help="Linode type for the temporary capture Linode.")
+    capture.add_argument("--image-label", help="Optional label for the captured custom image.")
+    capture.add_argument(
+        "--preserve-source",
+        action="store_true",
+        help="Keep the temporary capture-source Linode after execution.",
+    )
 
     deploy = subparsers.add_parser("deploy", help="Placeholder deploy command.")
     add_region_args(deploy, required=True)
@@ -66,7 +75,16 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "capture":
-        return capture_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
+        return capture_plan(
+            regions=parse_regions(args.region),
+            run_id=args.run_id,
+            ttl=args.ttl,
+            execute=args.execute,
+            source_image=args.source_image,
+            instance_type=args.instance_type,
+            image_label=args.image_label,
+            preserve_source=args.preserve_source,
+        )
 
     if args.command == "deploy":
         return deploy_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
@@ -81,7 +99,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             dry_run=True,
             status="placeholder",
         )
-        manifest["message"] = "capture-deploy is a non-mutating placeholder in M1"
+        manifest["message"] = "capture-deploy is a non-mutating placeholder"
         return manifest
 
     if args.command == "cleanup":
@@ -94,7 +112,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             dry_run=True,
             status="placeholder",
         )
-        manifest["message"] = "cleanup is independently runnable and non-mutating in M1"
+        manifest["message"] = "cleanup is independently runnable and non-mutating"
         manifest["cleanup_candidates"] = select_cleanup_candidates([])
         return manifest
 
@@ -106,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         manifest = command_manifest(args)
+    except CaptureError as exc:
+        if exc.manifest is not None:
+            sys.stdout.write(serialize_manifest(exc.manifest))
+            sys.stderr.write("capture --execute failed\n")
+            return 1
+        parser.error(str(exc))
     except ValueError as exc:
         parser.error(str(exc))
     sys.stdout.write(serialize_manifest(manifest))

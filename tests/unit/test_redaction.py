@@ -15,6 +15,14 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(redact_text("Bearer abcdefgh123456"), f"Bearer {REDACTION}")
         self.assertEqual(redact_text("token=abcdefgh123456"), f"token={REDACTION}")
 
+    def test_redacts_provider_identifiers_but_keeps_run_id(self) -> None:
+        payload = {"linode_id": 123, "image_id": "private/123", "run_id": "run-test"}
+
+        self.assertEqual(
+            redact(payload),
+            {"linode_id": REDACTION, "image_id": REDACTION, "run_id": "run-test"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
