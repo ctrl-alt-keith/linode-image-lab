@@ -1,0 +1,9 @@
+schema_version = 1
+
+[defaults]
+region = "us-east"
+ttl = "2030-01-01T00:00:00Z"
+
+[capture-deploy]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"

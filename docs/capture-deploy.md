@@ -72,6 +72,16 @@ LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli depl
   --run-id "run-m3-smoke"
 ```
 
+With config-backed defaults:
+
+```sh
+LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli \
+  --config examples/config/deploy-existing-image.toml \
+  deploy \
+  --execute \
+  --run-id "run-m3-smoke"
+```
+
 ## Capture-Deploy
 
 The capture-deploy flow validates the end-to-end path by capturing a custom
@@ -113,6 +123,20 @@ LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli capt
   --type g6-nanode-1 \
   --run-id "run-m4-smoke"
 ```
+
+With config-backed defaults:
+
+```sh
+LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli \
+  --config examples/config/capture-deploy-smoke.toml \
+  capture-deploy \
+  --execute \
+  --run-id "run-m4-smoke"
+```
+
+Config defaults can replace omitted `--region`, `--source-image`,
+`--image-id`, `--type`, and `--ttl` values. They do not replace `--execute`,
+preservation flags, run ids, or environment-based token injection.
 
 ## Cleanup
 

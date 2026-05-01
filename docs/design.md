@@ -31,6 +31,7 @@ cleanup as a first-class outcome.
 ## Components
 
 - `cli.py` owns command parsing and JSON output.
+- `config.py` owns explicit TOML config loading and safe default resolution.
 - `capture.py` owns dry-run capture manifests and execute-mode orchestration.
 - `deploy.py` owns dry-run deploy manifests and execute-mode orchestration.
 - `capture_deploy.py` owns the combined capture-deploy execute orchestration.
@@ -60,6 +61,31 @@ nested cleanup blocks preserve phase-specific status. Internal manifests may
 carry provider resource identifiers required for cleanup and debugging. Normal
 stdout uses sanitized serialization, which redacts provider identifiers before
 printing.
+
+## Config Defaults
+
+Config is opt-in through `--config PATH`, either before or after the command,
+and uses TOML `schema_version = 1`. The config file can provide execution
+defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`, and
+`[cleanup]` tables. CLI flags take precedence over command-specific config,
+command-specific config takes precedence over `[defaults]`, and existing
+generated defaults remain last.
+
+Supported config values are intentionally narrow:
+
+- `region` or `regions`,
+- `ttl`,
+- `source_image` for capture and capture-deploy,
+- `image_id` for deploy,
+- `type` for capture, deploy, and capture-deploy.
+
+`--execute`, preservation flags, run id fields, image labels, tokens,
+passwords, SSH keys, root passwords, and cloud-init or user-data fields are not
+configurable. Unknown keys and secret-like keys fail before command execution.
+
+Multi-region config is accepted for dry-run manifests. Execute mode still
+requires exactly one effective region and fails before token lookup when config
+or CLI values resolve to multiple regions.
 
 ## Capture Execution Boundary
 
