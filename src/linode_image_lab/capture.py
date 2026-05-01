@@ -29,6 +29,10 @@ class CaptureOptions:
     instance_type: str | None = None
     image_label: str | None = None
     preserve_source: bool = False
+    command: str = "capture"
+    mode: str = "capture"
+    component: str = "capture"
+    defer_cleanup: bool = False
 
 
 def capture_plan(
@@ -60,8 +64,9 @@ def capture_plan(
 
 def dry_run_manifest(options: CaptureOptions) -> dict[str, Any]:
     manifest = create_manifest(
-        command="capture",
-        mode="capture",
+        command=options.command,
+        mode=options.mode,
+        component=options.component,
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
@@ -80,8 +85,9 @@ def execute_capture(
 ) -> dict[str, Any]:
     validate_execute_options(options)
     manifest = create_manifest(
-        command="capture",
-        mode="capture",
+        command=options.command,
+        mode=options.mode,
+        component=options.component,
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
@@ -97,7 +103,7 @@ def execute_capture(
     for action in manifest["planned_actions"]:
         action["mutates"] = True
 
-    run_client = client or LinodeClient.from_env()
+    run_client = client or LinodeClient.from_env(command=options.command)
     capture_source: dict[str, Any] | None = None
     custom_image: dict[str, Any] | None = None
 
@@ -179,13 +185,16 @@ def execute_capture(
         manifest["resources"][1] = dict(custom_image)
         finish_step(manifest, "wait_custom_image_available")
 
-        cleanup_capture_source(
-            manifest,
-            run_client,
-            capture_source=capture_source,
-            preserve_source=options.preserve_source,
-            required_tags=tags,
-        )
+        if options.defer_cleanup:
+            manifest["cleanup"] = {"status": "deferred", "deleted": [], "preserved": []}
+        else:
+            cleanup_capture_source(
+                manifest,
+                run_client,
+                capture_source=capture_source,
+                preserve_source=options.preserve_source,
+                required_tags=tags,
+            )
         manifest["status"] = "succeeded"
         return manifest
     except Exception as exc:

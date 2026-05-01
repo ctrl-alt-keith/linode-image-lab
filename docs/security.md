@@ -7,8 +7,8 @@ non-mutating; capture and deploy execution require explicit opt-in.
 
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
-- The CLI reads `LINODE_TOKEN` only for `capture --execute` and
-  `deploy --execute`.
+- The CLI reads `LINODE_TOKEN` only for `capture --execute`,
+  `deploy --execute`, or `capture-deploy --execute`.
 - Dry-run commands do not read token values.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
 - Normal stdout and stderr must not print tokens, authorization headers, root
@@ -16,8 +16,8 @@ non-mutating; capture and deploy execution require explicit opt-in.
 
 ## Execute Permissions
 
-`capture --execute` and `deploy --execute` need a personal access token or
-equivalent OAuth access that can:
+`capture --execute`, `deploy --execute`, and `capture-deploy --execute` need a
+personal access token or equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - create, read, shut down, and delete temporary Linodes,
@@ -48,12 +48,16 @@ loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `capture` and `deploy` are dry-run unless `--execute`
-is provided. `capture-deploy` returns an explicit placeholder response.
-`cleanup` currently selects candidates from provided data structures and does
-not call Linode.
+`plan` is dry-run only. `capture`, `deploy`, and `capture-deploy` are dry-run
+unless `--execute` is provided. `cleanup` currently selects candidates from
+provided data structures and does not call Linode.
 
-`capture --execute` and `deploy --execute` fail before mutation if required
-options or `LINODE_TOKEN` are missing. They perform non-mutating token preflight
-before creating resources. Partial-failure cleanup only targets resources whose
-required tags exactly match the current run.
+`capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
+before mutation if required options or `LINODE_TOKEN` are missing. They perform
+non-mutating token preflight before creating resources. Partial-failure cleanup
+only targets resources whose required tags exactly match the current run.
+
+`capture-deploy --execute` creates resources with `mode=capture-deploy` and a
+component-specific tag: capture resources use `component=capture`, and deploy
+resources use `component=deploy`. The custom image is preserved by default.
+Temporary Linodes are deleted only when all required tags match the current run.

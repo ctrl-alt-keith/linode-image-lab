@@ -78,6 +78,7 @@ def create_manifest(
     command: str,
     mode: str,
     regions: list[str],
+    component: str | None = None,
     run_id: str | None = None,
     ttl: str | None = None,
     dry_run: bool = True,
@@ -91,11 +92,12 @@ def create_manifest(
     created_at = format_timestamp(utc_now())
     manifest_run_id = run_id or f"run-{uuid4().hex[:12]}"
     manifest_ttl = ttl or default_ttl()
-    component = component_for_mode(mode)
+    manifest_component = component or component_for_mode(mode)
+    validate_component(manifest_component)
     tags = generate_tags(
         run_id=manifest_run_id,
         mode=mode,
-        component=component,
+        component=manifest_component,
         ttl=manifest_ttl,
     )
 
@@ -115,7 +117,7 @@ def create_manifest(
             {
                 "action": command,
                 "region": region,
-                "component": component,
+                "component": manifest_component,
                 "mutates": False,
                 "tags": tags,
             }

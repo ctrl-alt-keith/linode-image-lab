@@ -9,13 +9,14 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Create sanitized manifest previews for dry-run planning.
 - Define a stable tag contract for resource rediscovery.
 - Make cleanup selection testable without cloud access.
-- Allow single-region capture and deploy execution only after explicit opt-in.
+- Allow single-region capture, deploy, and capture-deploy execution only after
+  explicit opt-in.
 
 ## Non-Goals
 
 - No implicit Linode API mutations.
-- No capture-deploy execution, multi-region execution, GitHub Actions mutation,
-  or external scheduler integration.
+- No multi-region execution, GitHub Actions mutation, or external scheduler
+  integration.
 - CI exists to run `make check`.
 
 ## Components
@@ -23,6 +24,7 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - `cli.py` owns command parsing and JSON output.
 - `capture.py` owns dry-run capture manifests and execute-mode orchestration.
 - `deploy.py` owns dry-run deploy manifests and execute-mode orchestration.
+- `capture_deploy.py` owns the combined capture-deploy execute orchestration.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
   serialization.
 - `regions.py` owns one-or-many region parsing.
@@ -40,9 +42,11 @@ contract.
 M2 capture execution adds `execution_mode`, ordered `steps`, `resources`,
 `capture_source`, `custom_image`, and `cleanup` fields. M3 deploy execution adds
 `execution_mode`, ordered `steps`, `resources`, `deploy_source`,
-`deploy_instance`, `validation`, and `cleanup` fields. Internal manifests may
-carry provider resource identifiers required for cleanup and debugging. Normal
-stdout uses sanitized serialization, which redacts provider identifiers before
+`deploy_instance`, `validation`, and `cleanup` fields. M4 capture-deploy
+execution adds top-level `execution_mode`, `steps`, `resources`, `capture`,
+`deploy`, `validation`, and `cleanup` fields. Internal manifests may carry
+provider resource identifiers required for cleanup and debugging. Normal stdout
+uses sanitized serialization, which redacts provider identifiers before
 printing.
 
 ## Capture Execution Boundary
@@ -78,3 +82,23 @@ The execute flow is intentionally linear:
 
 M3 does not perform SSH, cloud-init, service, or application readiness
 validation.
+
+## Capture-Deploy Execution Boundary
+
+`capture-deploy` without `--execute` remains non-mutating and does not read
+`LINODE_TOKEN`. `capture-deploy --execute` requires exactly one region, a source
+image, a Linode type, and `LINODE_TOKEN`.
+
+The execute flow reuses the capture and deploy internals:
+
+1. run capture with `mode=capture-deploy` and `component=capture`,
+2. pass the internal custom image id to deploy without exposing it in stdout,
+3. run deploy with `mode=capture-deploy` and `component=deploy`,
+4. surface deploy's provider/API-level validation result,
+5. delete the temporary capture-source Linode when its current-run tags match,
+6. delete or preserve the temporary deploy Linode according to
+   `--preserve-instance`,
+7. preserve the custom image as the deliverable.
+
+Capture-deploy cleanup is tag-scoped. It only deletes resources carrying all
+required tags for the current run, including the matching component tag.
