@@ -8,6 +8,7 @@ from typing import Any
 
 from .cleanup import select_cleanup_candidates
 from .capture import CaptureError, capture_plan
+from .capture_deploy import CaptureDeployError, capture_deploy_plan
 from .deploy import DeployError, deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
@@ -60,8 +61,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy Linode after execution.",
     )
 
-    capture_deploy = subparsers.add_parser("capture-deploy", help="Placeholder combined command.")
+    capture_deploy = subparsers.add_parser("capture-deploy", help="Plan or execute capture plus deploy validation.")
     add_region_args(capture_deploy, required=True)
+    capture_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    capture_deploy.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
+    capture_deploy.add_argument(
+        "--type",
+        dest="instance_type",
+        help="Linode type for the temporary capture and deploy Linodes.",
+    )
+    capture_deploy.add_argument(
+        "--preserve-instance",
+        action="store_true",
+        help="Keep the temporary deploy validation Linode after execution.",
+    )
 
     cleanup = subparsers.add_parser("cleanup", help="Placeholder cleanup command.")
     cleanup.add_argument("--run-id", help="Optional run id to include in the cleanup preview.")
@@ -106,17 +119,15 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "capture-deploy":
-        manifest = create_manifest(
-            command="capture-deploy",
-            mode="capture-deploy",
+        return capture_deploy_plan(
             regions=parse_regions(args.region),
             run_id=args.run_id,
             ttl=args.ttl,
-            dry_run=True,
-            status="placeholder",
+            execute=args.execute,
+            source_image=args.source_image,
+            instance_type=args.instance_type,
+            preserve_instance=args.preserve_instance,
         )
-        manifest["message"] = "capture-deploy is a non-mutating placeholder"
-        return manifest
 
     if args.command == "cleanup":
         manifest = create_manifest(
@@ -150,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
         if exc.manifest is not None:
             sys.stdout.write(serialize_manifest(exc.manifest))
             sys.stderr.write("deploy --execute failed\n")
+            return 1
+        parser.error(str(exc))
+    except CaptureDeployError as exc:
+        if exc.manifest is not None:
+            sys.stdout.write(serialize_manifest(exc.manifest))
+            sys.stderr.write("capture-deploy --execute failed\n")
             return 1
         parser.error(str(exc))
     except ValueError as exc:

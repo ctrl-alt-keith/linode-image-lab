@@ -28,6 +28,10 @@ class DeployOptions:
     image_id: str | None = None
     instance_type: str | None = None
     preserve_instance: bool = False
+    command: str = "deploy"
+    mode: str = "deploy"
+    component: str = "deploy"
+    defer_cleanup: bool = False
 
 
 def deploy_plan(
@@ -57,8 +61,9 @@ def deploy_plan(
 
 def dry_run_manifest(options: DeployOptions) -> dict[str, Any]:
     manifest = create_manifest(
-        command="deploy",
-        mode="deploy",
+        command=options.command,
+        mode=options.mode,
+        component=options.component,
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
@@ -77,8 +82,9 @@ def execute_deploy(
 ) -> dict[str, Any]:
     validate_execute_options(options)
     manifest = create_manifest(
-        command="deploy",
-        mode="deploy",
+        command=options.command,
+        mode=options.mode,
+        component=options.component,
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
@@ -95,7 +101,7 @@ def execute_deploy(
     for action in manifest["planned_actions"]:
         action["mutates"] = True
 
-    run_client = client or LinodeClient.from_env(command="deploy")
+    run_client = client or LinodeClient.from_env(command=options.command)
     deploy_instance: dict[str, Any] | None = None
 
     try:
@@ -142,13 +148,16 @@ def execute_deploy(
         }
         finish_step(manifest, "validate_deploy_instance")
 
-        cleanup_deploy_instance(
-            manifest,
-            run_client,
-            deploy_instance=deploy_instance,
-            preserve_instance=options.preserve_instance,
-            required_tags=tags,
-        )
+        if options.defer_cleanup:
+            manifest["cleanup"] = {"status": "deferred", "deleted": [], "preserved": []}
+        else:
+            cleanup_deploy_instance(
+                manifest,
+                run_client,
+                deploy_instance=deploy_instance,
+                preserve_instance=options.preserve_instance,
+                required_tags=tags,
+            )
         manifest["status"] = "succeeded"
         return manifest
     except Exception as exc:

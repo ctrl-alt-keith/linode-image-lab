@@ -80,6 +80,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--type", error.getvalue())
 
+    def test_capture_deploy_execute_requires_options_before_mutation(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["capture-deploy", "--region", "us-east", "--execute", "--source-image", "linode/debian12"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--type", error.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

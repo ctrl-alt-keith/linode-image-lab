@@ -1,8 +1,8 @@
 # Capture-Deploy Workflow
 
 This document describes the current capture/deploy workflow shape. M2 adds
-single-region capture execution, M3 adds single-region deploy execution, and
-capture-deploy execution remains out of scope.
+single-region capture execution, M3 adds single-region deploy execution, and M4
+adds single-region capture-deploy execution.
 
 ## Capture
 
@@ -73,8 +73,40 @@ LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli depl
 ## Capture-Deploy
 
 The capture-deploy flow validates the end-to-end path by capturing a custom
-image, then deploying a new Linode from it. The command currently returns a
-placeholder manifest with `mode=capture-deploy`.
+image, then deploying a new Linode from it. By default, the command returns a
+dry-run manifest and performs no Linode action.
+
+`capture-deploy --execute` is the only mutating combined command. It requires:
+
+- exactly one `--region`,
+- `--source-image`,
+- `--type`,
+- `LINODE_TOKEN`.
+
+Execution steps:
+
+1. run capture execution with `mode=capture-deploy` and `component=capture`,
+2. retain the internal custom image id in memory,
+3. run deploy execution with `mode=capture-deploy` and `component=deploy`,
+4. validate provider/API-level running status, requested region, and required tags,
+5. delete the temporary capture-source Linode,
+6. delete the temporary deploy validation Linode unless `--preserve-instance` is set,
+7. preserve the custom image as the workflow deliverable.
+
+The internal image id is passed directly from capture to deploy. Normal stdout
+redacts provider identifiers, so the image id is not exposed in serialized
+manifests.
+
+Live smoke command shape:
+
+```sh
+LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
+  --region us-east \
+  --execute \
+  --source-image linode/debian12 \
+  --type g6-nanode-1 \
+  --run-id "run-m4-smoke"
+```
 
 ## Cleanup
 
@@ -89,8 +121,9 @@ required tags are present:
 - `ttl=<timestamp>`
 
 Execute-mode cleanup is narrower than general cleanup. Capture only attempts to
-delete the current run's temporary capture-source Linode, and deploy only
-attempts to delete the current run's temporary deploy Linode. In both cases,
-cleanup proceeds only when the resource has all required tags matching the
-current run. If tags are missing or do not match, cleanup is skipped and the
-manifest reports the skip.
+delete the current run's temporary capture-source Linode, deploy only attempts
+to delete the current run's temporary deploy Linode, and capture-deploy only
+attempts to delete those two temporary Linodes for the current combined run. In
+all cases, cleanup proceeds only when the resource has all required tags
+matching the current run. If tags are missing or do not match, cleanup is
+skipped and the manifest reports the skip.
