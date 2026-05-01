@@ -78,7 +78,15 @@ class CliTests(unittest.TestCase):
             main(["deploy", "--region", "us-east", "--execute", "--image-id", "private/789"])
 
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("--type", error.getvalue())
+        self.assertIn("--type for the temporary deploy Linode", error.getvalue())
+
+    def test_deploy_execute_requires_image_id_before_mutation(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--region", "us-east", "--execute", "--type", "g6-nanode-1"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--image-id for the custom image to deploy", error.getvalue())
 
     def test_capture_deploy_execute_requires_options_before_mutation(self) -> None:
         error = StringIO()

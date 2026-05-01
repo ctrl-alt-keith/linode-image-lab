@@ -137,7 +137,7 @@ class CaptureExecutionTests(unittest.TestCase):
                 )
 
     def test_execute_requires_single_region(self) -> None:
-        with self.assertRaisesRegex(CaptureError, "exactly one region"):
+        with self.assertRaisesRegex(CaptureError, "exactly one non-empty --region"):
             capture_plan(
                 regions=["us-east", "us-west"],
                 run_id="run-test",
@@ -196,6 +196,7 @@ class CaptureExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["capture_source"]["linode_id"], 123)
         self.assertEqual(manifest["custom_image"]["image_id"], "private/789")
         self.assertEqual(manifest["cleanup"]["status"], "deleted")
+        self.assertEqual(manifest["validation"]["status"], "succeeded")
 
     def test_execute_applies_required_tags_to_created_resources(self) -> None:
         client = FakeLinodeClient()
@@ -232,6 +233,8 @@ class CaptureExecutionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["status"], "preserved")
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "requested")
+        self.assertEqual(manifest["steps"][-1]["action"], "preserve")
 
     def test_partial_failure_cleanup_skips_resource_missing_required_tags(self) -> None:
         client = FakeLinodeClient(missing_create_tags=True)
@@ -249,7 +252,8 @@ class CaptureExecutionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, [])
         self.assertIsNotNone(raised.exception.manifest)
-        self.assertEqual(raised.exception.manifest["cleanup"]["status"], "skipped_tag_mismatch")
+        self.assertEqual(raised.exception.manifest["cleanup"]["status"], "preserved")
+        self.assertEqual(raised.exception.manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
 
     def test_serialized_execute_manifest_redacts_provider_ids(self) -> None:
         manifest = capture_plan(

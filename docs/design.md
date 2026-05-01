@@ -36,17 +36,20 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 
 Manifests are plain JSON-compatible dictionaries. They include schema version,
 project, command, mode, regions, timestamps, dry-run status, tags, and planned
-actions. Future milestones can add fields while preserving the required tag
-contract.
+actions. Serialized manifests use stable JSON formatting and redacted provider
+identifiers.
 
 M2 capture execution adds `execution_mode`, ordered `steps`, `resources`,
-`capture_source`, `custom_image`, and `cleanup` fields. M3 deploy execution adds
-`execution_mode`, ordered `steps`, `resources`, `deploy_source`,
+`capture_source`, `custom_image`, `validation`, and `cleanup` fields. M3 deploy
+execution adds `execution_mode`, ordered `steps`, `resources`, `deploy_source`,
 `deploy_instance`, `validation`, and `cleanup` fields. M4 capture-deploy
 execution adds top-level `execution_mode`, `steps`, `resources`, `capture`,
-`deploy`, `validation`, and `cleanup` fields. Internal manifests may carry
-provider resource identifiers required for cleanup and debugging. Normal stdout
-uses sanitized serialization, which redacts provider identifiers before
+`deploy`, `validation`, and `cleanup` fields. Top-level `resources` is the
+combined resource list; nested `capture.resources` and `deploy.resources` are
+phase-specific views. Top-level `cleanup` is the combined cleanup summary;
+nested cleanup blocks preserve phase-specific status. Internal manifests may
+carry provider resource identifiers required for cleanup and debugging. Normal
+stdout uses sanitized serialization, which redacts provider identifiers before
 printing.
 
 ## Capture Execution Boundary
@@ -65,6 +68,9 @@ The execute flow is intentionally linear:
 6. capture a custom image from the selected disk,
 7. wait for image availability,
 8. delete or preserve the source according to explicit flags.
+
+Capture validation is provider/API-level only. It verifies region, required
+tags, disk presence, image availability, and image tags from API responses.
 
 ## Deploy Execution Boundary
 
@@ -102,3 +108,15 @@ The execute flow reuses the capture and deploy internals:
 
 Capture-deploy cleanup is tag-scoped. It only deletes resources carrying all
 required tags for the current run, including the matching component tag.
+Because capture and deploy remain independently reusable, capture-deploy runs
+each phase's non-mutating API preflight. Seeing two `preflight_api_access`
+steps in a combined manifest is expected.
+
+## Cleanup Semantics
+
+Cleanup status is narrow and literal. `deleted` means a temporary Linode was
+deleted after matching current-run tags. `preserved` means no deletion occurred
+for that resource because preservation was requested or tags did not match.
+`completed` is reserved for combined cleanup after the phase cleanup blocks
+finish. `failed` means cleanup did not complete. Preserved entries include a
+`reason`; the custom image uses `deliverable`.

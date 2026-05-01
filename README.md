@@ -58,8 +58,9 @@ PYTHONPATH=src python3 -m linode_image_lab.cli cleanup
 
 `capture --execute` requires exactly one region, `--source-image`, `--type`, and
 `LINODE_TOKEN`. It creates a temporary capture-source Linode, waits for it to be
-ready, powers it off, captures a custom image from its disk, waits for the image,
-then deletes the temporary source unless `--preserve-source` is provided.
+ready, checks provider/API-level region, tags, and disk presence, powers it off,
+creates a custom image, waits for image availability, then deletes the temporary
+source unless `--preserve-source` is provided.
 
 `deploy --execute` requires exactly one region, `--image-id`, `--type`, and
 `LINODE_TOKEN`. `--image-id` is the existing custom image to boot from. The
@@ -74,6 +75,20 @@ validation Linode from that image, validates provider/API-level running status,
 requested region, and required tags, then deletes the temporary capture-source
 and deploy validation Linodes. The custom image is preserved by default as the
 deliverable. `--preserve-instance` keeps only the deploy validation Linode.
+
+## Manifest Shape
+
+Execute manifests use consistent top-level `status`, `steps`, `resources`,
+`validation`, and `cleanup` fields. For `capture-deploy`, top-level
+`resources` is the combined resource list, while `capture.resources` and
+`deploy.resources` show phase-specific resource views. Top-level `cleanup`
+summarizes combined cleanup; nested cleanup blocks show capture and deploy
+results separately.
+
+Cleanup status values are literal: `deleted` means a temporary Linode was
+deleted, `preserved` means a resource was kept or skipped for safety,
+`completed` means combined cleanup finished, and `failed` means cleanup did not
+complete.
 
 Normal stdout is a redacted, export-safe manifest view. Local in-memory
 manifests may retain provider identifiers needed for cleanup and debugging, but
