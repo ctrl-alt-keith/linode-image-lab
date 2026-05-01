@@ -75,11 +75,32 @@ LINODE_TOKEN='op://Private/Linode API Token/credential' op run -- \
     --execute
 ```
 
+## Config Defaults
+
+Pass `--config` before the command to load optional TOML execution defaults.
+Config values fill omitted CLI flags; explicit CLI flags always win.
+
+```sh
+linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy
+linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy --execute
+```
+
+Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
+`[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
+`region` or `regions`, `ttl`, `source_image`, `image_id`, and `type`, depending
+on the command.
+
+Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
+values, passwords, SSH keys, cloud-init data, `execute`, preservation flags, or
+run id fields. `--execute` must still be passed explicitly, and `LINODE_TOKEN`
+must still come from the environment or approved environment injection.
+
 ## Behavior Clarifications
 
 - All commands are dry-run by default.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`, and
   `capture-deploy`.
+- Config values only fill omitted command options; CLI flags override config.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
 - Custom images are preserved as deliverables.

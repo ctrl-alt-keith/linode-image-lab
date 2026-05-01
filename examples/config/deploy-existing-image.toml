@@ -1,0 +1,9 @@
+schema_version = 1
+
+[defaults]
+region = "us-east"
+ttl = "2030-01-01T00:00:00Z"
+
+[deploy]
+image_id = "private/example-custom-image"
+type = "g6-nanode-1"

@@ -9,6 +9,7 @@ from typing import Any
 from .cleanup import select_cleanup_candidates
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
+from .config import ConfigError, command_defaults, load_config
 from .deploy import DeployError, deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
@@ -18,7 +19,7 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
     parser.add_argument(
         "--region",
         action="append",
-        required=required,
+        required=False,
         help="Linode region id. May be repeated or comma-separated.",
     )
     parser.add_argument("--run-id", help="Optional run id for deterministic planning.")
@@ -27,6 +28,7 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="linode-image-lab")
+    parser.add_argument("--config", help="Optional TOML file with execution defaults.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
@@ -81,6 +83,40 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
     return parser
+
+
+def resolve_config_defaults(args: argparse.Namespace) -> None:
+    config = load_config(args.config)
+    defaults = command_defaults(config, args.command)
+
+    if args.command in {"plan", "capture", "deploy", "capture-deploy"}:
+        if args.region is None:
+            args.region = config_regions(defaults)
+        if not parse_regions(args.region):
+            raise ValueError("at least one non-empty --region is required")
+
+    if args.ttl is None and "ttl" in defaults:
+        args.ttl = defaults["ttl"]
+
+    if args.command in {"capture", "capture-deploy"}:
+        if args.source_image is None and "source_image" in defaults:
+            args.source_image = defaults["source_image"]
+        if args.instance_type is None and "type" in defaults:
+            args.instance_type = defaults["type"]
+
+    if args.command == "deploy":
+        if args.image_id is None and "image_id" in defaults:
+            args.image_id = defaults["image_id"]
+        if args.instance_type is None and "type" in defaults:
+            args.instance_type = defaults["type"]
+
+
+def config_regions(defaults: dict[str, Any]) -> list[str] | None:
+    if "regions" in defaults:
+        return list(defaults["regions"])
+    if "region" in defaults:
+        return [defaults["region"]]
+    return None
 
 
 def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -150,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        resolve_config_defaults(args)
         manifest = command_manifest(args)
     except CaptureError as exc:
         if exc.manifest is not None:
@@ -169,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("capture-deploy --execute failed\n")
             return 1
         parser.error(str(exc))
-    except ValueError as exc:
+    except (ConfigError, ValueError) as exc:
         parser.error(str(exc))
     sys.stdout.write(serialize_manifest(manifest))
     return 0

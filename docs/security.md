@@ -10,9 +10,25 @@ non-mutating; capture and deploy execution require explicit opt-in.
 - The CLI reads `LINODE_TOKEN` only for `capture --execute`,
   `deploy --execute`, or `capture-deploy --execute`.
 - Dry-run commands do not read token values.
+- Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
+  non-secret execution defaults after explicit `--config PATH`.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
 - Normal stdout and stderr must not print tokens, authorization headers, root
   passwords, SSH keys, cloud-init secrets, or provider resource identifiers.
+
+## Config Safety
+
+Config files are parsed with the Python standard library TOML parser and must
+declare `schema_version = 1`. Unknown keys fail, and secret-like keys fail even
+when they appear in a table that is not used by the selected command.
+
+Supported config values are limited to region defaults, TTL, source image,
+existing custom image id, and Linode type. Config cannot set `--execute`,
+preservation flags, run ids, image labels, tokens, passwords, SSH keys, root
+passwords, cloud-init data, or user-data.
+
+Config loading and validation happen before token lookup. Execute mode still
+requires `LINODE_TOKEN` from the environment or approved environment injection.
 
 ## Execute Permissions
 
