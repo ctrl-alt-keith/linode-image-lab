@@ -38,6 +38,11 @@ def request_payload(request: object) -> dict[str, object]:
 
 
 class LinodeClientTests(unittest.TestCase):
+    def http_error(self, status: int, message: str) -> HTTPError:
+        error = HTTPError(f"{API_BASE_URL}/profile", status, message, {}, None)
+        self.addCleanup(error.close)
+        return error
+
     def test_from_env_missing_token_raises_token_error(self) -> None:
         with self.assertRaisesRegex(LinodeTokenError, "LINODE_TOKEN"):
             LinodeClient.from_env({})
@@ -199,14 +204,59 @@ class LinodeClientTests(unittest.TestCase):
         self.assertIsNone(getattr(requests[0], "data"))
         self.assertEqual(resource, {"linode_id": 123, "deleted": True})
 
+    def test_wait_instance_ready_polls_until_running(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            poll_interval_seconds=0,
+            max_wait_seconds=1,
+        )
+        responses = [
+            FakeHTTPResponse(
+                {
+                    "id": 123,
+                    "label": "lil-run-deploy",
+                    "region": "us-east",
+                    "status": "provisioning",
+                    "tags": ["project=linode-image-lab"],
+                }
+            ),
+            FakeHTTPResponse(
+                {
+                    "id": 123,
+                    "label": "lil-run-deploy",
+                    "region": "us-east",
+                    "status": "running",
+                    "tags": ["project=linode-image-lab"],
+                }
+            ),
+        ]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return responses.pop(0)
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.wait_instance_ready(123)
+
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [f"{API_BASE_URL}/linode/instances/123", f"{API_BASE_URL}/linode/instances/123"],
+        )
+        self.assertEqual(resource["status"], "running")
+        self.assertEqual(responses, [])
+
     def test_auth_failures_map_to_token_error(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
 
         for status in (401, 403):
             with self.subTest(status=status):
+                error = self.http_error(status, "auth failed")
                 with patch(
                     "linode_image_lab.linode_api.urlopen",
-                    side_effect=HTTPError(f"{API_BASE_URL}/profile", status, "auth failed", {}, None),
+                    side_effect=error,
                 ):
                     with self.assertRaises(LinodeTokenError):
                         client.preflight()
@@ -216,7 +266,7 @@ class LinodeClientTests(unittest.TestCase):
 
         with patch(
             "linode_image_lab.linode_api.urlopen",
-            side_effect=HTTPError(f"{API_BASE_URL}/profile", 500, "server failed", {}, None),
+            side_effect=self.http_error(500, "server failed"),
         ):
             with self.assertRaises(LinodeApiError) as raised:
                 client.preflight()

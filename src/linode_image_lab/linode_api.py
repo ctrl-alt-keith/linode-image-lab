@@ -1,4 +1,4 @@
-"""Linode API boundary for capture execution."""
+"""Linode API boundary for explicit execution commands."""
 
 from __future__ import annotations
 
@@ -71,11 +71,11 @@ class LinodeClient:
     max_wait_seconds: float = 900
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> "LinodeClient":
+    def from_env(cls, env: dict[str, str] | None = None, *, command: str = "capture") -> "LinodeClient":
         values = env if env is not None else os.environ
         token = values.get(TOKEN_ENV_NAME)
         if not token:
-            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for capture --execute")
+            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for {command} --execute")
         return cls(token=token)
 
     def preflight(self) -> None:

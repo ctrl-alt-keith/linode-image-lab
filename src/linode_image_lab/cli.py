@@ -8,7 +8,7 @@ from typing import Any
 
 from .cleanup import select_cleanup_candidates
 from .capture import CaptureError, capture_plan
-from .deploy import deploy_plan
+from .deploy import DeployError, deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
 
@@ -49,8 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary capture-source Linode after execution.",
     )
 
-    deploy = subparsers.add_parser("deploy", help="Placeholder deploy command.")
+    deploy = subparsers.add_parser("deploy", help="Plan or execute a single-region deploy.")
     add_region_args(deploy, required=True)
+    deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    deploy.add_argument("--image-id", help="Custom image id for the temporary deploy Linode.")
+    deploy.add_argument("--type", dest="instance_type", help="Linode type for the temporary deploy Linode.")
+    deploy.add_argument(
+        "--preserve-instance",
+        action="store_true",
+        help="Keep the temporary deploy Linode after execution.",
+    )
 
     capture_deploy = subparsers.add_parser("capture-deploy", help="Placeholder combined command.")
     add_region_args(capture_deploy, required=True)
@@ -87,7 +95,15 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "deploy":
-        return deploy_plan(regions=parse_regions(args.region), run_id=args.run_id, ttl=args.ttl)
+        return deploy_plan(
+            regions=parse_regions(args.region),
+            run_id=args.run_id,
+            ttl=args.ttl,
+            execute=args.execute,
+            image_id=args.image_id,
+            instance_type=args.instance_type,
+            preserve_instance=args.preserve_instance,
+        )
 
     if args.command == "capture-deploy":
         manifest = create_manifest(
@@ -128,6 +144,12 @@ def main(argv: list[str] | None = None) -> int:
         if exc.manifest is not None:
             sys.stdout.write(serialize_manifest(exc.manifest))
             sys.stderr.write("capture --execute failed\n")
+            return 1
+        parser.error(str(exc))
+    except DeployError as exc:
+        if exc.manifest is not None:
+            sys.stdout.write(serialize_manifest(exc.manifest))
+            sys.stderr.write("deploy --execute failed\n")
             return 1
         parser.error(str(exc))
     except ValueError as exc:
