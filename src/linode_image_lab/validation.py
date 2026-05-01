@@ -40,6 +40,8 @@ TEXT_SUFFIXES = {
     ".mk",
 }
 SKIP_DIRS = {".git", ".mypy_cache", ".pytest_cache", "__pycache__"}
+FIXTURE_ROOT = Path("tests/fixtures")
+SANITIZED_FIXTURE_ROOT = FIXTURE_ROOT / "sanitized"
 
 
 def iter_text_files(root: Path) -> list[Path]:
@@ -52,8 +54,26 @@ def iter_text_files(root: Path) -> list[Path]:
     return files
 
 
-def scan_public_safety(root: Path) -> list[str]:
+def is_under(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
+
+
+def scan_fixture_placement(root: Path) -> list[str]:
+    fixture_root = root / FIXTURE_ROOT
+    sanitized_root = root / SANITIZED_FIXTURE_ROOT
+    if not fixture_root.exists():
+        return []
+
     findings: list[str] = []
+    for path in fixture_root.rglob("*"):
+        if path.is_file() and not is_under(path, sanitized_root):
+            relative = path.relative_to(root)
+            findings.append(f"{relative}: fixture files must live under {SANITIZED_FIXTURE_ROOT}/")
+    return findings
+
+
+def scan_public_safety(root: Path) -> list[str]:
+    findings = scan_fixture_placement(root)
     for path in iter_text_files(root):
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root)
