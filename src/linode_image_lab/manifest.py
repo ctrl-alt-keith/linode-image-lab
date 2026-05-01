@@ -87,7 +87,7 @@ def create_manifest(
     """Create a JSON-compatible manifest for a CLI command."""
     validate_mode(mode)
     if not regions and command != "cleanup":
-        raise ValueError("at least one region is required")
+        raise ValueError("at least one non-empty --region is required")
 
     created_at = format_timestamp(utc_now())
     manifest_run_id = run_id or f"run-{uuid4().hex[:12]}"

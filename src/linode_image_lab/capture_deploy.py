@@ -112,7 +112,7 @@ def execute_capture_deploy(
     deploy_manifest: dict[str, Any] | None = None
 
     try:
-        append_step(manifest, "capture", mutates=True, status="running")
+        append_step(manifest, "run_capture_phase", mutates=True, status="running")
         capture_manifest = execute_capture(
             CaptureOptions(
                 regions=options.regions,
@@ -129,12 +129,12 @@ def execute_capture_deploy(
             ),
             client=run_client,
         )
-        finish_step(manifest, "capture")
+        finish_step(manifest, "run_capture_phase")
         sync_manifest(manifest, capture_manifest=capture_manifest, deploy_manifest=deploy_manifest)
 
         image_id = required_text(capture_manifest.get("custom_image", {}).get("image_id"))
 
-        append_step(manifest, "deploy", mutates=True, status="running")
+        append_step(manifest, "run_deploy_phase", mutates=True, status="running")
         deploy_manifest = execute_deploy(
             DeployOptions(
                 regions=options.regions,
@@ -151,21 +151,21 @@ def execute_capture_deploy(
             ),
             client=run_client,
         )
-        finish_step(manifest, "deploy")
+        finish_step(manifest, "run_deploy_phase")
         sync_manifest(manifest, capture_manifest=capture_manifest, deploy_manifest=deploy_manifest)
 
-        append_step(manifest, "validation", mutates=False, status="running")
+        append_step(manifest, "record_deploy_validation", mutates=False, status="running")
         manifest["validation"] = dict(deploy_manifest.get("validation", {}))
-        finish_step(manifest, "validation")
+        finish_step(manifest, "record_deploy_validation")
 
-        append_step(manifest, "cleanup", mutates=True, status="running")
+        append_step(manifest, "cleanup_temporary_resources", mutates=True, status="running")
         run_deferred_cleanup(
             run_client,
             capture_manifest=capture_manifest,
             deploy_manifest=deploy_manifest,
             preserve_instance=options.preserve_instance,
         )
-        finish_step(manifest, "cleanup")
+        finish_step(manifest, "cleanup_temporary_resources")
 
         sync_manifest(manifest, capture_manifest=capture_manifest, deploy_manifest=deploy_manifest)
         manifest["status"] = "succeeded"
@@ -190,11 +190,11 @@ def execute_capture_deploy(
 
 def validate_execute_options(options: CaptureDeployOptions) -> None:
     if len(options.regions) != 1:
-        raise CaptureDeployError("capture-deploy --execute requires exactly one region")
+        raise CaptureDeployError("capture-deploy --execute requires exactly one non-empty --region")
     if not options.source_image:
-        raise CaptureDeployError("capture-deploy --execute requires --source-image")
+        raise CaptureDeployError("capture-deploy --execute requires --source-image for the temporary capture Linode")
     if not options.instance_type:
-        raise CaptureDeployError("capture-deploy --execute requires --type")
+        raise CaptureDeployError("capture-deploy --execute requires --type for temporary capture and deploy Linodes")
 
 
 def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> None:
@@ -298,6 +298,7 @@ def sync_manifest(
             "resources": capture_manifest.get("resources", []),
             "capture_source": capture_manifest.get("capture_source", {}),
             "custom_image": capture_manifest.get("custom_image", {}),
+            "validation": capture_manifest.get("validation", {}),
             "cleanup": capture_manifest.get("cleanup", {}),
         }
     if deploy_manifest is not None:

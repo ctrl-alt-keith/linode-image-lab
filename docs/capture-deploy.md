@@ -23,13 +23,15 @@ Execution steps:
 1. preflight token access without mutating resources,
 2. create a temporary capture-source Linode from the source image,
 3. wait until the source is ready,
-4. validate requested region, required tags, and disk presence,
+4. validate provider/API-level region, required tags, and disk presence,
 5. power off the source,
 6. create a custom image from the selected disk,
-7. wait until the image is available,
+7. wait until the provider reports the image is available,
 8. delete the temporary source unless `--preserve-source` is set.
 
 The custom image is preserved by default because it is the capture deliverable.
+Capture validation stops at provider/API data; it does not perform SSH,
+cloud-init, service, or application readiness checks.
 
 ## Deploy
 
@@ -56,7 +58,7 @@ Execution steps:
 The deploy instance is deleted by default because deploy execution is a quick
 validation path, not a long-lived server creation flow.
 
-M3 deploy validation stops at provider/API-level instance creation. It does not
+Deploy validation stops at provider/API-level instance creation. It does not
 perform SSH, cloud-init, service, or application readiness checks.
 
 Live smoke command shape:
@@ -97,6 +99,10 @@ The internal image id is passed directly from capture to deploy. Normal stdout
 redacts provider identifiers, so the image id is not exposed in serialized
 manifests.
 
+Capture-deploy intentionally runs the non-mutating API preflight inside both
+the capture and deploy phases. This keeps each phase independently safe and
+reusable, so combined manifests may show two `preflight_api_access` steps.
+
 Live smoke command shape:
 
 ```sh
@@ -125,5 +131,25 @@ delete the current run's temporary capture-source Linode, deploy only attempts
 to delete the current run's temporary deploy Linode, and capture-deploy only
 attempts to delete those two temporary Linodes for the current combined run. In
 all cases, cleanup proceeds only when the resource has all required tags
-matching the current run. If tags are missing or do not match, cleanup is
-skipped and the manifest reports the skip.
+matching the current run. If tags are missing or do not match, cleanup preserves
+the resource and records `reason=tag_mismatch`.
+
+Cleanup manifests use the same fields across commands: `status`, `deleted`,
+and `preserved`. `deleted` lists temporary Linodes removed after required tags
+matched. `preserved` lists resources kept by request or kept because required
+tags did not match, with a `reason` such as `requested`, `tag_mismatch`, or
+`deliverable`. In capture-deploy, top-level cleanup is the combined summary;
+`capture.cleanup` and `deploy.cleanup` are the phase-specific results.
+
+## Manifest Structure
+
+Single-command execute manifests expose top-level `status`, `steps`,
+`resources`, `validation`, and `cleanup`. Capture-deploy keeps the same
+top-level fields and also nests `capture` and `deploy` sections. Top-level
+`resources` is the combined list for the whole run. Nested `capture.resources`
+and `deploy.resources` are phase-specific slices of that same lifecycle.
+
+`validation` means provider/API-level checks only: resource state, requested
+region, required tags, disk presence for capture, and image availability for
+capture. It does not include SSH, app health, service readiness, or cloud-init
+completion checks.

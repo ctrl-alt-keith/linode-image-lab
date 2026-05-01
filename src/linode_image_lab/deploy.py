@@ -105,9 +105,9 @@ def execute_deploy(
     deploy_instance: dict[str, Any] | None = None
 
     try:
-        append_step(manifest, "preflight", mutates=False, status="running")
+        append_step(manifest, "preflight_api_access", mutates=False, status="running")
         run_client.preflight()
-        finish_step(manifest, "preflight")
+        finish_step(manifest, "preflight_api_access")
 
         tags = list(manifest["tags"])
         region = options.regions[0]
@@ -136,7 +136,15 @@ def execute_deploy(
         manifest["resources"][0] = dict(deploy_instance)
         finish_step(manifest, "wait_deploy_instance_ready")
 
-        append_step(manifest, "validate_deploy_instance", mutates=False, status="running")
+        append_step(manifest, "validate_deploy_instance_api", mutates=False, status="running")
+        manifest["validation"] = {
+            "status": "running",
+            "checks": [
+                "instance_running",
+                "region_matches",
+                "required_tags_match",
+            ],
+        }
         validate_deploy_instance(deploy_instance, required_tags=tags, region=region)
         manifest["validation"] = {
             "status": "succeeded",
@@ -146,7 +154,7 @@ def execute_deploy(
                 "required_tags_match",
             ],
         }
-        finish_step(manifest, "validate_deploy_instance")
+        finish_step(manifest, "validate_deploy_instance_api")
 
         if options.defer_cleanup:
             manifest["cleanup"] = {"status": "deferred", "deleted": [], "preserved": []}
@@ -176,16 +184,18 @@ def execute_deploy(
             except Exception:
                 mark_running_step_failed(manifest)
                 manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
+        if manifest.get("validation", {}).get("status") == "running":
+            manifest["validation"]["status"] = "failed"
         raise DeployError("deploy --execute failed", manifest) from exc
 
 
 def validate_execute_options(options: DeployOptions) -> None:
     if len(options.regions) != 1:
-        raise DeployError("deploy --execute requires exactly one region")
+        raise DeployError("deploy --execute requires exactly one non-empty --region")
     if not options.image_id:
-        raise DeployError("deploy --execute requires --image-id")
+        raise DeployError("deploy --execute requires --image-id for the custom image to deploy")
     if not options.instance_type:
-        raise DeployError("deploy --execute requires --type")
+        raise DeployError("deploy --execute requires --type for the temporary deploy Linode")
 
 
 def cleanup_deploy_instance(
@@ -196,24 +206,48 @@ def cleanup_deploy_instance(
     preserve_instance: bool,
     required_tags: list[str],
 ) -> None:
-    append_step(manifest, "cleanup_deploy_instance", mutates=not preserve_instance, status="running")
+    can_delete = has_required_tags(deploy_instance, required_tags)
+    cleanup_action = "delete" if not preserve_instance and can_delete else "preserve"
+    append_step(
+        manifest,
+        "cleanup_deploy_instance",
+        mutates=cleanup_action == "delete",
+        status="running",
+        action=cleanup_action,
+    )
     cleanup = {"status": "not_started", "deleted": [], "preserved": []}
     if preserve_instance:
         cleanup["status"] = "preserved"
-        cleanup["preserved"].append({"resource_type": "linode", "linode_id": deploy_instance.get("linode_id")})
-    elif has_required_tags(deploy_instance, required_tags):
+        cleanup["preserved"].append(
+            {"resource_type": "linode", "linode_id": deploy_instance.get("linode_id"), "reason": "requested"}
+        )
+    elif can_delete:
         client.delete_instance(required_int(deploy_instance.get("linode_id")))
         cleanup["status"] = "deleted"
-        cleanup["deleted"].append({"resource_type": "linode", "linode_id": deploy_instance.get("linode_id")})
+        cleanup["deleted"].append(
+            {"resource_type": "linode", "linode_id": deploy_instance.get("linode_id"), "reason": "tag_match"}
+        )
     else:
-        cleanup["status"] = "skipped_tag_mismatch"
-        cleanup["preserved"].append({"resource_type": "linode", "linode_id": deploy_instance.get("linode_id")})
+        cleanup["status"] = "preserved"
+        cleanup["preserved"].append(
+            {"resource_type": "linode", "linode_id": deploy_instance.get("linode_id"), "reason": "tag_mismatch"}
+        )
     manifest["cleanup"] = cleanup
     finish_step(manifest, "cleanup_deploy_instance")
 
 
-def append_step(manifest: dict[str, Any], name: str, *, mutates: bool, status: str) -> None:
-    manifest["steps"].append({"name": name, "mutates": mutates, "status": status})
+def append_step(
+    manifest: dict[str, Any],
+    name: str,
+    *,
+    mutates: bool,
+    status: str,
+    action: str | None = None,
+) -> None:
+    step = {"name": name, "mutates": mutates, "status": status}
+    if action is not None:
+        step["action"] = action
+    manifest["steps"].append(step)
 
 
 def finish_step(manifest: dict[str, Any], name: str) -> None:

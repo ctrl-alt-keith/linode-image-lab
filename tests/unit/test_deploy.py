@@ -119,7 +119,7 @@ class DeployExecutionTests(unittest.TestCase):
                 )
 
     def test_execute_requires_single_region(self) -> None:
-        with self.assertRaisesRegex(DeployError, "exactly one region"):
+        with self.assertRaisesRegex(DeployError, "exactly one non-empty --region"):
             deploy_plan(
                 regions=["us-east", "us-west"],
                 run_id="run-test",
@@ -230,6 +230,8 @@ class DeployExecutionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["status"], "preserved")
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "requested")
+        self.assertEqual(manifest["steps"][-1]["action"], "preserve")
 
     def test_partial_failure_cleanup_skips_resource_missing_required_tags(self) -> None:
         client = FakeLinodeClient(missing_create_tags=True)
@@ -247,7 +249,8 @@ class DeployExecutionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, [])
         self.assertIsNotNone(raised.exception.manifest)
-        self.assertEqual(raised.exception.manifest["cleanup"]["status"], "skipped_tag_mismatch")
+        self.assertEqual(raised.exception.manifest["cleanup"]["status"], "preserved")
+        self.assertEqual(raised.exception.manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
 
     def test_partial_failure_deletes_tagged_resource_by_default(self) -> None:
         client = FakeLinodeClient(status="offline")

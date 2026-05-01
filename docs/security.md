@@ -56,8 +56,15 @@ provided data structures and does not call Linode.
 before mutation if required options or `LINODE_TOKEN` are missing. They perform
 non-mutating token preflight before creating resources. Partial-failure cleanup
 only targets resources whose required tags exactly match the current run.
+Tag mismatches are represented as preserved resources in manifests, not as
+deletion attempts.
 
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
 resources use `component=deploy`. The custom image is preserved by default.
 Temporary Linodes are deleted only when all required tags match the current run.
+
+Validation is limited to provider/API responses: resource state, requested
+region, required tags, disk presence for capture, and image availability for
+capture. It does not perform SSH, cloud-init, service, or application readiness
+checks.

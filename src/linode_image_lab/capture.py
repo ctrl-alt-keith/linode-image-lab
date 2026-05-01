@@ -99,6 +99,7 @@ def execute_capture(
     manifest["resources"] = []
     manifest["capture_source"] = {}
     manifest["custom_image"] = {}
+    manifest["validation"] = {"status": "not_started", "checks": []}
     manifest["cleanup"] = {"status": "not_started", "deleted": [], "preserved": []}
     for action in manifest["planned_actions"]:
         action["mutates"] = True
@@ -108,9 +109,9 @@ def execute_capture(
     custom_image: dict[str, Any] | None = None
 
     try:
-        append_step(manifest, "preflight", mutates=False, status="running")
+        append_step(manifest, "preflight_api_access", mutates=False, status="running")
         run_client.preflight()
-        finish_step(manifest, "preflight")
+        finish_step(manifest, "preflight_api_access")
 
         tags = list(manifest["tags"])
         region = options.regions[0]
@@ -140,14 +141,24 @@ def execute_capture(
         manifest["resources"][0] = dict(capture_source)
         finish_step(manifest, "wait_capture_source_ready")
 
-        append_step(manifest, "validate_capture_source", mutates=False, status="running")
+        append_step(manifest, "validate_capture_source_api", mutates=False, status="running")
+        manifest["validation"] = {
+            "status": "running",
+            "checks": [
+                "source_region_matches",
+                "source_required_tags_match",
+                "source_disk_found",
+                "custom_image_available",
+                "custom_image_required_tags_match",
+            ],
+        }
         validate_created_resource(capture_source, required_tags=tags, region=region)
         disks = run_client.list_disks(required_int(capture_source.get("linode_id")))
         disk = first_disk(disks)
         capture_source["disk_id"] = disk["disk_id"]
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"][0] = dict(capture_source)
-        finish_step(manifest, "validate_capture_source")
+        finish_step(manifest, "validate_capture_source_api")
 
         append_step(manifest, "shutdown_capture_source", mutates=True, status="running")
         run_client.shutdown_instance(required_int(capture_source.get("linode_id")))
@@ -162,7 +173,7 @@ def execute_capture(
         manifest["resources"][0] = dict(capture_source)
         finish_step(manifest, "wait_capture_source_offline")
 
-        append_step(manifest, "capture_custom_image", mutates=True, status="running")
+        append_step(manifest, "create_custom_image", mutates=True, status="running")
         custom_image = run_client.capture_image(
             disk_id=required_int(capture_source.get("disk_id")),
             label=image_label,
@@ -173,7 +184,7 @@ def execute_capture(
         custom_image["resource_type"] = "image"
         manifest["custom_image"] = dict(custom_image)
         manifest["resources"].append(dict(custom_image))
-        finish_step(manifest, "capture_custom_image")
+        finish_step(manifest, "create_custom_image")
 
         append_step(manifest, "wait_custom_image_available", mutates=False, status="running")
         custom_image = merge_resource(
@@ -183,6 +194,16 @@ def execute_capture(
         validate_created_resource(custom_image, required_tags=tags)
         manifest["custom_image"] = dict(custom_image)
         manifest["resources"][1] = dict(custom_image)
+        manifest["validation"] = {
+            "status": "succeeded",
+            "checks": [
+                "source_region_matches",
+                "source_required_tags_match",
+                "source_disk_found",
+                "custom_image_available",
+                "custom_image_required_tags_match",
+            ],
+        }
         finish_step(manifest, "wait_custom_image_available")
 
         if options.defer_cleanup:
@@ -213,16 +234,18 @@ def execute_capture(
             except Exception:
                 mark_running_step_failed(manifest)
                 manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
+        if manifest.get("validation", {}).get("status") == "running":
+            manifest["validation"]["status"] = "failed"
         raise CaptureError("capture --execute failed", manifest) from exc
 
 
 def validate_execute_options(options: CaptureOptions) -> None:
     if len(options.regions) != 1:
-        raise CaptureError("capture --execute requires exactly one region")
+        raise CaptureError("capture --execute requires exactly one non-empty --region")
     if not options.source_image:
-        raise CaptureError("capture --execute requires --source-image")
+        raise CaptureError("capture --execute requires --source-image for the temporary capture Linode")
     if not options.instance_type:
-        raise CaptureError("capture --execute requires --type")
+        raise CaptureError("capture --execute requires --type for the temporary capture Linode")
 
 
 def cleanup_capture_source(
@@ -233,24 +256,48 @@ def cleanup_capture_source(
     preserve_source: bool,
     required_tags: list[str],
 ) -> None:
-    append_step(manifest, "cleanup_capture_source", mutates=not preserve_source, status="running")
+    can_delete = has_required_tags(capture_source, required_tags)
+    cleanup_action = "delete" if not preserve_source and can_delete else "preserve"
+    append_step(
+        manifest,
+        "cleanup_capture_source",
+        mutates=cleanup_action == "delete",
+        status="running",
+        action=cleanup_action,
+    )
     cleanup = {"status": "not_started", "deleted": [], "preserved": []}
     if preserve_source:
         cleanup["status"] = "preserved"
-        cleanup["preserved"].append({"resource_type": "linode", "linode_id": capture_source.get("linode_id")})
-    elif has_required_tags(capture_source, required_tags):
+        cleanup["preserved"].append(
+            {"resource_type": "linode", "linode_id": capture_source.get("linode_id"), "reason": "requested"}
+        )
+    elif can_delete:
         client.delete_instance(required_int(capture_source.get("linode_id")))
         cleanup["status"] = "deleted"
-        cleanup["deleted"].append({"resource_type": "linode", "linode_id": capture_source.get("linode_id")})
+        cleanup["deleted"].append(
+            {"resource_type": "linode", "linode_id": capture_source.get("linode_id"), "reason": "tag_match"}
+        )
     else:
-        cleanup["status"] = "skipped_tag_mismatch"
-        cleanup["preserved"].append({"resource_type": "linode", "linode_id": capture_source.get("linode_id")})
+        cleanup["status"] = "preserved"
+        cleanup["preserved"].append(
+            {"resource_type": "linode", "linode_id": capture_source.get("linode_id"), "reason": "tag_mismatch"}
+        )
     manifest["cleanup"] = cleanup
     finish_step(manifest, "cleanup_capture_source")
 
 
-def append_step(manifest: dict[str, Any], name: str, *, mutates: bool, status: str) -> None:
-    manifest["steps"].append({"name": name, "mutates": mutates, "status": status})
+def append_step(
+    manifest: dict[str, Any],
+    name: str,
+    *,
+    mutates: bool,
+    status: str,
+    action: str | None = None,
+) -> None:
+    step = {"name": name, "mutates": mutates, "status": status}
+    if action is not None:
+        step["action"] = action
+    manifest["steps"].append(step)
 
 
 def finish_step(manifest: dict[str, Any], name: str) -> None:
