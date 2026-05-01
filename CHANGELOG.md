@@ -6,6 +6,6 @@
 
 ## 0.1.0
 
-- First release candidate for the public-safe Linode Image Lab scaffold.
+- First public-safe release of Linode Image Lab.
 - Includes dry-run-first planning, capture, deploy, capture-deploy, cleanup,
   sanitized manifests, and repo validation.
