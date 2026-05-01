@@ -17,7 +17,16 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - No implicit Linode API mutations.
 - No multi-region execution, GitHub Actions mutation, or external scheduler
   integration.
+- No infrastructure ownership or planning model.
 - CI exists to run `make check`.
+
+## Execution Model Boundary
+
+Future configuration and future multi-region support are execution defaults for
+disposable validation runs. They must not turn the tool into infrastructure
+ownership. Runs remain ephemeral validation workflows with explicit mutation
+entrypoints, provider/API-level validation, tagged temporary resources, and
+cleanup as a first-class outcome.
 
 ## Components
 
