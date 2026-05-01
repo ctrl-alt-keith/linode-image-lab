@@ -64,11 +64,12 @@ printing.
 
 ## Config Defaults
 
-Config is opt-in through `--config PATH` and uses TOML `schema_version = 1`.
-The config file can provide execution defaults in `[defaults]`, `[capture]`,
-`[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. CLI flags take
-precedence over command-specific config, command-specific config takes
-precedence over `[defaults]`, and existing generated defaults remain last.
+Config is opt-in through `--config PATH`, either before or after the command,
+and uses TOML `schema_version = 1`. The config file can provide execution
+defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`, and
+`[cleanup]` tables. CLI flags take precedence over command-specific config,
+command-specific config takes precedence over `[defaults]`, and existing
+generated defaults remain last.
 
 Supported config values are intentionally narrow:
 

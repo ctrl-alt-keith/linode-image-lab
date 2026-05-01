@@ -77,12 +77,12 @@ LINODE_TOKEN='op://Private/Linode API Token/credential' op run -- \
 
 ## Config Defaults
 
-Pass `--config` before the command to load optional TOML execution defaults.
-Config values fill omitted CLI flags; explicit CLI flags always win.
+Pass `--config` before or after the command to load optional TOML execution
+defaults. Config values fill omitted CLI flags; explicit CLI flags always win.
 
 ```sh
 linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy
-linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy --execute
+linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --execute
 ```
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,

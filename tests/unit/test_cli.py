@@ -108,7 +108,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("at least one non-empty --region is required", error.getvalue())
 
-    def test_config_fills_capture_deploy_defaults(self) -> None:
+    def test_global_config_before_subcommand_fills_capture_deploy_defaults(self) -> None:
         config_path = self.write_config(
             """
             schema_version = 1
@@ -132,6 +132,56 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["regions"], ["us-east"])
         self.assertEqual(payload["ttl"], "2030-01-01T00:00:00Z")
+
+    def test_command_local_config_after_subcommand_fills_capture_deploy_defaults(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-east"
+            ttl = "2030-01-01T00:00:00Z"
+
+            [capture-deploy]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["capture-deploy", "--config", config_path])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["regions"], ["us-east"])
+        self.assertEqual(payload["ttl"], "2030-01-01T00:00:00Z")
+
+    def test_duplicate_global_and_command_local_config_fails_clearly(self) -> None:
+        global_config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-east"
+            """
+        )
+        command_config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-west"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["--config", global_config_path, "capture-deploy", "--config", command_config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("provide --config either before or after the command, not both", error.getvalue())
 
     def test_cli_values_override_config_defaults(self) -> None:
         config_path = self.write_config(
