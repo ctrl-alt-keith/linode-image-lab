@@ -1,0 +1,4 @@
+#cloud-config
+package_update: false
+packages: []
+final_message: "linode-image-lab minimal cloud-init complete"
