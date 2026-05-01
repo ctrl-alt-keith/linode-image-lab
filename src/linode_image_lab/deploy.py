@@ -17,5 +17,5 @@ def deploy_plan(*, regions: list[str], run_id: str | None = None, ttl: str | Non
         dry_run=True,
         status="placeholder",
     )
-    manifest["message"] = "deploy is a non-mutating placeholder in M1"
+    manifest["message"] = "deploy is a non-mutating placeholder"
     return manifest

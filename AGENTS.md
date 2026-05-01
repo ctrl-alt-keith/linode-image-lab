@@ -7,10 +7,12 @@ Repo-local rules take precedence only for repo-specific behavior.
 ## Repo Scope
 
 - This repo contains a public-safe Linode Image Lab scaffold.
-- M1 behavior is limited to dry-run custom image capture/deploy planning,
+- M1 behavior established dry-run custom image capture/deploy planning,
   manifest modeling, tag contracts, cleanup selection logic, docs, and tests.
-- Do not add real Linode mutation behavior until a later milestone explicitly
-  asks for it.
+- M2 permits explicit single-region capture execution only through
+  `capture --execute`; default behavior remains non-mutating.
+- Do not add deploy, capture-deploy, multi-region execution, or additional real
+  Linode mutation behavior until a later milestone explicitly asks for it.
 
 ## Public-Safe Boundary
 
@@ -18,6 +20,7 @@ Repo-local rules take precedence only for repo-specific behavior.
 - Do not commit secret values, private identifiers, non-public URLs, or
   workplace metadata.
 - `LINODE_TOKEN` may appear only as an environment variable name.
+- Normal stdout and stderr must not expose provider resource identifiers.
 - Fixtures must be sanitized and live under `tests/fixtures/sanitized/`.
 
 ## Validation
