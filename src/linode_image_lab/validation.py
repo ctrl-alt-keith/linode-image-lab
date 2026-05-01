@@ -1,0 +1,82 @@
+"""Local public-safety validation."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+BANNED_TERMS = (
+    "aka" + "mai",
+    "corp" + "orate email",
+    "internal user" + "name",
+    "proprietary ident" + "ifier",
+)
+EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+PRIVATE_URL_RE = re.compile(
+    r"https?://(?:localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[0-1])\.|[^/\s]+\.internal\b|[^/\s]+\.corp\b)",
+    re.I,
+)
+SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(?:token|secret|password|api[_-]?key)\s*[:=]\s*['\"](?!LINODE_TOKEN['\"])[^'\"\s]{8,}['\"]"
+)
+TEXT_SUFFIXES = {
+    ".md",
+    ".py",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sh",
+    ".mk",
+}
+SKIP_DIRS = {".git", ".mypy_cache", ".pytest_cache", "__pycache__"}
+
+
+def iter_text_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        if path.is_file() and (path.suffix in TEXT_SUFFIXES or path.name == "Makefile"):
+            files.append(path)
+    return files
+
+
+def scan_public_safety(root: Path) -> list[str]:
+    findings: list[str] = []
+    for path in iter_text_files(root):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(root)
+        lower_text = text.lower()
+
+        for term in BANNED_TERMS:
+            if term in lower_text:
+                findings.append(f"{relative}: restricted term detected")
+        if EMAIL_RE.search(text):
+            findings.append(f"{relative}: email-like value detected")
+        if PRIVATE_URL_RE.search(text):
+            findings.append(f"{relative}: private URL detected")
+        if SECRET_VALUE_RE.search(text):
+            findings.append(f"{relative}: secret-like assignment detected")
+
+    return findings
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = argv if argv is not None else sys.argv[1:]
+    root = Path(args[0] if args else ".").resolve()
+    findings = scan_public_safety(root)
+    if findings:
+        for finding in findings:
+            print(finding, file=sys.stderr)
+        return 1
+    print("security-check passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

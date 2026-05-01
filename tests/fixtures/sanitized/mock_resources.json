@@ -1,0 +1,22 @@
+[
+  {
+    "id": "resource-expired",
+    "tags": [
+      "project=linode-image-lab",
+      "run_id=run-test",
+      "mode=freeze-thaw",
+      "component=builder",
+      "ttl=2026-01-01T00:00:00Z"
+    ]
+  },
+  {
+    "id": "resource-active",
+    "tags": [
+      "project=linode-image-lab",
+      "run_id=run-test",
+      "mode=freeze-thaw",
+      "component=builder",
+      "ttl=2030-01-01T00:00:00Z"
+    ]
+  }
+]
