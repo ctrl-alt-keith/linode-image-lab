@@ -20,6 +20,12 @@ PRIVATE_URL_RE = re.compile(
 SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:token|secret|password|api[_-]?key)\s*[:=]\s*['\"](?!LINODE_TOKEN['\"])[^'\"\s]{8,}['\"]"
 )
+# Build these ranges from code points so the scanner cannot flag its own source.
+BIDI_CONTROL_CHARS = frozenset(
+    chr(codepoint)
+    for start, end in ((0x202A, 0x202E), (0x2066, 0x2069))
+    for codepoint in range(start, end + 1)
+)
 TEXT_SUFFIXES = {
     ".md",
     ".py",
@@ -62,6 +68,9 @@ def scan_public_safety(root: Path) -> list[str]:
             findings.append(f"{relative}: private URL detected")
         if SECRET_VALUE_RE.search(text):
             findings.append(f"{relative}: secret-like assignment detected")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if any(character in BIDI_CONTROL_CHARS for character in line):
+                findings.append(f"{relative}:{line_number}: hidden Unicode bidi control detected")
 
     return findings
 

@@ -17,6 +17,7 @@ M1 is designed to be public-safe and non-mutating.
 - email-like values,
 - private network URLs,
 - restricted workplace metadata,
+- hidden Unicode bidirectional control characters,
 - non-public fixture placement.
 
 The scan is intentionally small and local. It is a guardrail, not a full data
