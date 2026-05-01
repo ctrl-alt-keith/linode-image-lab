@@ -10,7 +10,8 @@ The capture flow creates a reusable custom image from an existing Linode or
 disk. By default, the command returns a dry-run manifest and performs no Linode
 action.
 
-`capture --execute` is the only mutating M2 command. It requires:
+`capture --execute` is the only mutating M2 command. It creates Linode
+resources and may incur account charges until cleanup completes. It requires:
 
 - exactly one `--region`,
 - `--source-image`,
