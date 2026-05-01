@@ -1,13 +1,14 @@
 # Security
 
 Linode Image Lab is designed to be public-safe by default. Dry-run behavior is
-non-mutating; M2 capture execution requires explicit opt-in.
+non-mutating; capture and deploy execution require explicit opt-in.
 
 ## Token Handling
 
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
-- The CLI reads `LINODE_TOKEN` only for `capture --execute`.
+- The CLI reads `LINODE_TOKEN` only for `capture --execute` and
+  `deploy --execute`.
 - Dry-run commands do not read token values.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
 - Normal stdout and stderr must not print tokens, authorization headers, root
@@ -15,8 +16,8 @@ non-mutating; M2 capture execution requires explicit opt-in.
 
 ## Execute Permissions
 
-`capture --execute` needs a personal access token or equivalent OAuth access
-that can:
+`capture --execute` and `deploy --execute` need a personal access token or
+equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - create, read, shut down, and delete temporary Linodes,
@@ -25,8 +26,10 @@ that can:
 
 In Linode scope terms, this generally means `linodes:read_write` and
 `images:read_write`, plus account permissions or grants that allow Linode
-creation and tagging. If tags cannot be applied or later verified, execution
-fails safely because cleanup depends on rediscoverable tags.
+creation and tagging. Deploy execution from an existing image does not create a
+custom image, but the same image read permissions are expected. If tags cannot
+be applied or later verified, execution fails safely because cleanup depends on
+rediscoverable tags.
 
 ## Public-Safety Scan
 
@@ -45,12 +48,12 @@ loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `capture` is dry-run unless `--execute` is provided.
-`deploy` and `capture-deploy` return explicit placeholder responses. `cleanup`
-currently selects candidates from provided data structures and does not call
-Linode.
+`plan` is dry-run only. `capture` and `deploy` are dry-run unless `--execute`
+is provided. `capture-deploy` returns an explicit placeholder response.
+`cleanup` currently selects candidates from provided data structures and does
+not call Linode.
 
-`capture --execute` fails before mutation if required options or `LINODE_TOKEN`
-are missing. It performs non-mutating token preflight before creating resources.
-Partial-failure cleanup only targets resources whose required tags exactly
-match the current run.
+`capture --execute` and `deploy --execute` fail before mutation if required
+options or `LINODE_TOKEN` are missing. They perform non-mutating token preflight
+before creating resources. Partial-failure cleanup only targets resources whose
+required tags exactly match the current run.

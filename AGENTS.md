@@ -11,8 +11,10 @@ Repo-local rules take precedence only for repo-specific behavior.
   manifest modeling, tag contracts, cleanup selection logic, docs, and tests.
 - M2 permits explicit single-region capture execution only through
   `capture --execute`; default behavior remains non-mutating.
-- Do not add deploy, capture-deploy, multi-region execution, or additional real
-  Linode mutation behavior until a later milestone explicitly asks for it.
+- M3 permits explicit single-region deploy execution only through
+  `deploy --execute`; default behavior remains non-mutating.
+- Do not add capture-deploy, multi-region execution, or additional real Linode
+  mutation behavior until a later milestone explicitly asks for it.
 
 ## Public-Safe Boundary
 
