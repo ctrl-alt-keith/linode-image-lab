@@ -1,27 +1,168 @@
 # Linode Image Lab
 
-Linode Image Lab is a small Python scaffold for modeling and safely exercising
-custom image capture/deploy workflows.
+Safe, repeatable Linode image capture and deploy validation with automatic cleanup.
 
-M4 remains intentionally conservative:
+- Plans capture, deploy, and capture-deploy runs before any API mutation.
+- Captures custom images from temporary Linode instances.
+- Deploys temporary validation instances from custom images.
+- Validates requested region, tags, resources, and running status at the API level.
+- Cleans up temporary resources while preserving custom images as deliverables.
+- Emits redacted, public-safe manifests for review and automation.
 
-- `plan` emits a dry-run, sanitized manifest-like preview.
-- `capture` is dry-run by default.
-- `deploy` is dry-run by default.
-- `capture-deploy` is dry-run by default.
-- `capture --execute`, `deploy --execute`, and `capture-deploy --execute` are
-  the only commands that can mutate Linode resources.
-- `cleanup` is first-class and independently runnable.
-- Manifest schema, rediscoverable tags, and cleanup selection are the foundation.
+## Quick Start
 
-## Execution Model Boundary
+Set `LINODE_TOKEN` first; execute mode reads it from the environment.
 
-Configuration will provide execution defaults for disposable validation runs.
-Runs are ephemeral validation workflows: they create, validate, and clean up
-temporary resources unless an explicit preservation flag keeps a deliverable.
-Linode Image Lab does not manage durable desired state, does not own long-lived
-infrastructure, and does not perform drift reconciliation. Cleanup and
-validation remain first-class parts of the workflow.
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -e .
+linode-image-lab capture-deploy \
+  --region us-east \
+  --source-image linode/alpine3.23 \
+  --type g6-nanode-1 \
+  --execute
+```
+
+That command creates a temporary capture source, captures a custom image, boots
+a temporary validation instance from it, validates the result through the Linode
+API, cleans up the temporary instances, and preserves the custom image.
+
+## Installation
+
+Run from source:
+
+```sh
+git clone https://github.com/ctrl-alt-keith/linode-image-lab.git
+cd linode-image-lab
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -e .
+linode-image-lab --help
+```
+
+No install fallback:
+
+```sh
+git clone https://github.com/ctrl-alt-keith/linode-image-lab.git
+cd linode-image-lab
+PYTHONPATH=src python3 -m linode_image_lab.cli --help
+PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
+  --region us-east \
+  --source-image linode/alpine3.23 \
+  --type g6-nanode-1
+```
+
+## Authentication
+
+`LINODE_TOKEN` is required only when `--execute` is used. Dry-run commands do
+not read the token, call Linode, or mutate resources.
+
+Use any shell method that exports the variable:
+
+```sh
+export LINODE_TOKEN='<your-linode-api-token>'
+```
+
+With 1Password, inject the token for a single command:
+
+```sh
+LINODE_TOKEN='op://Private/Linode API Token/credential' op run -- \
+  linode-image-lab capture-deploy \
+    --region us-east \
+    --source-image linode/alpine3.23 \
+    --type g6-nanode-1 \
+    --execute
+```
+
+## Behavior Clarifications
+
+- All commands are dry-run by default.
+- `--execute` enables real Linode API mutations for `capture`, `deploy`, and
+  `capture-deploy`.
+- Execute runs use temporary resources and clean them up automatically unless a
+  preservation flag is used.
+- Custom images are preserved as deliverables.
+- `cleanup` is independently runnable and currently previews tag-scoped cleanup
+  selection.
+- Normal stdout is redacted for public-safe review.
+
+## What This Does
+
+- Captures custom images from temporary Linode instances.
+- Deploys temporary validation instances.
+- Validates region, tags, resources, and running status at the API level.
+- Cleans up temporary resources.
+
+## What This Does Not Do
+
+- SSH, cloud-init, service, or application-level validation.
+- Manage long-lived infrastructure.
+- Multi-region orchestration yet.
+
+## Commands
+
+Dry-run previews:
+
+```sh
+linode-image-lab plan --region us-east --mode capture-deploy
+linode-image-lab capture --region us-east
+linode-image-lab deploy --region us-east
+linode-image-lab capture-deploy --region us-east
+linode-image-lab cleanup
+```
+
+Execute capture:
+
+```sh
+linode-image-lab capture \
+  --region us-east \
+  --source-image linode/alpine3.23 \
+  --type g6-nanode-1 \
+  --execute
+```
+
+Execute deploy from an existing custom image:
+
+```sh
+linode-image-lab deploy \
+  --region us-east \
+  --image-id "$CUSTOM_IMAGE_ID" \
+  --type g6-nanode-1 \
+  --execute
+```
+
+Execute capture plus deploy validation:
+
+```sh
+linode-image-lab capture-deploy \
+  --region us-east \
+  --source-image linode/alpine3.23 \
+  --type g6-nanode-1 \
+  --execute
+```
+
+## Required Tags
+
+Modeled resources use rediscoverable tags:
+
+- `project=linode-image-lab`
+- `run_id=<unique-id>`
+- `mode=<capture|deploy|capture-deploy>`
+- `component=<capture|deploy>`
+- `ttl=<timestamp>`
+
+## Manifest Output
+
+Execute manifests use consistent top-level `status`, `steps`, `resources`,
+`validation`, and `cleanup` fields. For `capture-deploy`, top-level `resources`
+and `cleanup` summarize the combined run, while nested `capture` and `deploy`
+blocks show phase-specific details.
+
+Cleanup status values are literal: `deleted` means a temporary Linode was
+deleted, `preserved` means a resource was kept or skipped for safety,
+`completed` means combined cleanup finished, and `failed` means cleanup did not
+complete.
 
 ## Independence and Intent
 
@@ -30,82 +171,3 @@ or organization.
 
 It is designed as a public-safe workflow lab and does not use proprietary
 systems, data, or credentials.
-
-## Quick Start
-
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e .
-linode-image-lab --help
-linode-image-lab plan --region us-east --run-id demo-run
-make check
-```
-
-For no-install use, `PYTHONPATH=src python3 -m linode_image_lab.cli` remains
-available.
-
-`LINODE_TOKEN` is read only when `capture --execute`, `deploy --execute`, or
-`capture-deploy --execute` is used. Dry-run commands do not read the token, call
-Linode, or mutate resources.
-
-## Required Tags
-
-Every modeled resource uses rediscoverable tags:
-
-- `project=linode-image-lab`
-- `run_id=<unique-id>`
-- `mode=<capture|deploy|capture-deploy>`
-- `component=<capture|deploy>`
-- `ttl=<timestamp>`
-
-## Commands
-
-```sh
-PYTHONPATH=src python3 -m linode_image_lab.cli plan --region us-east,us-west
-PYTHONPATH=src python3 -m linode_image_lab.cli capture --region us-east
-PYTHONPATH=src python3 -m linode_image_lab.cli capture --region us-east --execute --source-image linode/debian12 --type g6-nanode-1
-PYTHONPATH=src python3 -m linode_image_lab.cli deploy --region us-east
-PYTHONPATH=src python3 -m linode_image_lab.cli deploy --region us-east --execute --image-id "$CUSTOM_IMAGE_ID" --type g6-nanode-1
-PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy --region us-east
-PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy --region us-east --execute --source-image linode/debian12 --type g6-nanode-1
-PYTHONPATH=src python3 -m linode_image_lab.cli cleanup
-```
-
-`capture --execute` requires exactly one region, `--source-image`, `--type`, and
-`LINODE_TOKEN`. It creates a temporary capture-source Linode, waits for it to be
-ready, checks provider/API-level region, tags, and disk presence, powers it off,
-creates a custom image, waits for image availability, then deletes the temporary
-source unless `--preserve-source` is provided.
-
-`deploy --execute` requires exactly one region, `--image-id`, `--type`, and
-`LINODE_TOKEN`. `--image-id` is the existing custom image to boot from. The
-command creates a temporary deploy Linode, waits for provider/API-level running
-status, validates the requested region and required tags, then deletes the
-temporary instance unless `--preserve-instance` is provided. Deploy validation
-does not perform SSH, cloud-init, service, or application readiness validation.
-
-`capture-deploy --execute` requires exactly one region, `--source-image`,
-`--type`, and `LINODE_TOKEN`. It captures a custom image, deploys a temporary
-validation Linode from that image, validates provider/API-level running status,
-requested region, and required tags, then deletes the temporary capture-source
-and deploy validation Linodes. The custom image is preserved by default as the
-deliverable. `--preserve-instance` keeps only the deploy validation Linode.
-
-## Manifest Shape
-
-Execute manifests use consistent top-level `status`, `steps`, `resources`,
-`validation`, and `cleanup` fields. For `capture-deploy`, top-level
-`resources` is the combined resource list, while `capture.resources` and
-`deploy.resources` show phase-specific resource views. Top-level `cleanup`
-summarizes combined cleanup; nested cleanup blocks show capture and deploy
-results separately.
-
-Cleanup status values are literal: `deleted` means a temporary Linode was
-deleted, `preserved` means a resource was kept or skipped for safety,
-`completed` means combined cleanup finished, and `failed` means cleanup did not
-complete.
-
-Normal stdout is a redacted, export-safe manifest view. Local in-memory
-manifests may retain provider identifiers needed for cleanup and debugging, but
-serialized output redacts those identifiers.
