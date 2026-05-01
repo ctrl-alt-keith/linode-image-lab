@@ -10,6 +10,14 @@ M1 is intentionally conservative:
 - `cleanup` is first-class and independently runnable.
 - Manifest schema, rediscoverable tags, and cleanup selection are the foundation.
 
+## Independence and Intent
+
+This is a personal, independent project. It is not affiliated with any employer
+or organization.
+
+It is designed as a public-safe workflow lab and does not use proprietary
+systems, data, or credentials.
+
 ## Quick Start
 
 ```sh
