@@ -22,6 +22,23 @@ LEGACY_WORKFLOW_TERMS = tuple(
         ("fr", "eeze-", "th", "aw"),
     )
 )
+EXECUTION_MODEL_DRIFT_PATTERNS = tuple(
+    re.compile(pattern, re.I)
+    for pattern in (
+        r"\bdes" + r"ired[- ]sta" + r"te\b",
+        r"\bsta" + r"te[- ]files?\b",
+        r"\bdri" + r"ft[- ]recon" + r"ciliation\b",
+        r"\bres" + r"ource[- ]graphs?\b",
+        r"\bdep" + r"endency[- ]planning\b",
+        r"\bter" + r"raform\b",
+    )
+)
+EXECUTION_MODEL_SECTION = "Execution Model Boundary"
+EXECUTION_MODEL_SECTION_FILES = {
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("docs/design.md"),
+}
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PRIVATE_URL_RE = re.compile(
     r"https?://(?:localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[0-1])\.|[^/\s]+\.internal\b|[^/\s]+\.corp\b)",
@@ -159,7 +176,38 @@ def scan_terminology_drift(root: Path) -> list[str]:
             lower_line = line.lower()
             if any(term in lower_line for term in LEGACY_WORKFLOW_TERMS):
                 findings.append(f"{relative}:{line_number}: legacy image workflow terminology detected")
+            if has_execution_model_drift(line) and not is_allowed_execution_model_section(relative, line_number, text):
+                findings.append(
+                    f"{relative}:{line_number}: out-of-scope infrastructure-management terminology detected"
+                )
     return findings
+
+
+def has_execution_model_drift(line: str) -> bool:
+    return any(pattern.search(line) for pattern in EXECUTION_MODEL_DRIFT_PATTERNS)
+
+
+def is_allowed_execution_model_section(relative: Path, line_number: int, text: str) -> bool:
+    if relative not in EXECUTION_MODEL_SECTION_FILES:
+        return False
+
+    active_heading_level: int | None = None
+    in_allowed_section = False
+    for current_line_number, line in enumerate(text.splitlines(), start=1):
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if heading:
+            level = len(heading.group(1))
+            title = heading.group(2)
+            if title == EXECUTION_MODEL_SECTION:
+                active_heading_level = level
+                in_allowed_section = True
+            elif active_heading_level is not None and level <= active_heading_level:
+                in_allowed_section = False
+                active_heading_level = None
+        if current_line_number == line_number:
+            return in_allowed_section
+
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:

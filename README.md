@@ -14,6 +14,15 @@ M4 remains intentionally conservative:
 - `cleanup` is first-class and independently runnable.
 - Manifest schema, rediscoverable tags, and cleanup selection are the foundation.
 
+## Execution Model Boundary
+
+Configuration will provide execution defaults for disposable validation runs.
+Runs are ephemeral validation workflows: they create, validate, and clean up
+temporary resources unless an explicit preservation flag keeps a deliverable.
+Linode Image Lab does not manage durable desired state, does not own long-lived
+infrastructure, and does not perform drift reconciliation. Cleanup and
+validation remain first-class parts of the workflow.
+
 ## Independence and Intent
 
 This is a personal, independent project. It is not affiliated with any employer

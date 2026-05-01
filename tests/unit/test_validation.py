@@ -65,6 +65,70 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(findings, [])
 
+    def test_reports_execution_model_drift_terms_outside_boundary_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            phrase = "desired" + " state"
+            path.write_text(f"Add {phrase} management later.\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(
+            findings,
+            ["README.md:1: out-of-scope infrastructure-management terminology detected"],
+        )
+
+    def test_allows_execution_model_drift_terms_inside_boundary_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            phrase = "state" + " file"
+            path.write_text(
+                "# Title\n\n"
+                "## Execution Model Boundary\n\n"
+                f"Do not add a {phrase}.\n\n"
+                "## Commands\n\n"
+                "capture remains explicit.\n",
+                encoding="utf-8",
+            )
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, [])
+
+    def test_reports_execution_model_drift_terms_after_boundary_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            phrase = "resource" + " graph"
+            path.write_text(
+                "# Title\n\n"
+                "## Execution Model Boundary\n\n"
+                "Boundary terms are documented here.\n\n"
+                "## Commands\n\n"
+                f"Build a {phrase} later.\n",
+                encoding="utf-8",
+            )
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(
+            findings,
+            ["README.md:9: out-of-scope infrastructure-management terminology detected"],
+        )
+
+    def test_allows_resource_state_status_contexts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "docs" / "capture.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("Validate provider resource state and running status.\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, [])
+
     def test_skips_local_install_artifacts_without_git(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

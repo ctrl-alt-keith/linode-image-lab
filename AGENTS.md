@@ -18,6 +18,18 @@ Repo-local rules take precedence only for repo-specific behavior.
 - Do not add multi-region execution or additional real Linode mutation behavior
   until a later milestone explicitly asks for it.
 
+## Execution Model Boundary
+
+- Linode Image Lab is an ephemeral validation workflow tool, not durable
+  infrastructure ownership.
+- Configuration may provide execution defaults only.
+- Do not introduce desired-state management concepts.
+- Do not add state files, drift reconciliation, resource graphs, dependency
+  planning, or Terraform-like behavior.
+- Future multi-region support must remain execution fan-out for disposable
+  validation runs, not infrastructure ownership.
+- Keep cleanup and validation first-class in any execution path.
+
 ## Public-Safe Boundary
 
 - Treat every file as public.
