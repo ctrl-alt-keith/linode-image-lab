@@ -11,6 +11,8 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 
 ## Quick Start
 
+Requires Python 3.12 or newer.
+
 Set `LINODE_TOKEN` first; execute mode reads it from the environment.
 Plain dry-run commands do not need it.
 

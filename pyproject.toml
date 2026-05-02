@@ -7,7 +7,7 @@ name = "linode-image-lab"
 version = "0.1.0"
 description = "Public-safe Linode custom image capture and deploy workflow lab."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
