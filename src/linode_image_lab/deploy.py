@@ -39,6 +39,7 @@ class DeployOptions:
     mode: str = "deploy"
     component: str = "deploy"
     defer_cleanup: bool = False
+    label_suffix: str | None = None
 
 
 def deploy_plan(
@@ -120,7 +121,7 @@ def execute_deploy(
         region = options.regions[0]
         image_id = required_text(options.image_id)
         instance_type = required_text(options.instance_type)
-        instance_label = f"lil-{safe_label_suffix(manifest['run_id'])}-deploy"
+        instance_label = resource_label(manifest["run_id"], "deploy", suffix=options.label_suffix)
 
         append_step(manifest, "preflight_provider_inputs", mutates=False, status="running")
         run_client.preflight_region(region)
@@ -347,6 +348,14 @@ def required_int(value: object) -> int:
 def safe_label_suffix(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     return (normalized or "run")[:32]
+
+
+def resource_label(run_id: str, resource: str, *, suffix: str | None = None) -> str:
+    parts = ["lil", safe_label_suffix(run_id)]
+    if suffix:
+        parts.append(safe_label_suffix(suffix))
+    parts.append(resource)
+    return "-".join(parts)
 
 
 def safe_error_message(exc: Exception) -> str:

@@ -530,7 +530,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["regions"], ["us-east", "us-west"])
 
-    def test_multi_region_config_execute_fails_before_token_lookup(self) -> None:
+    def test_multi_region_config_execute_requires_token(self) -> None:
         config_path = self.write_config(
             """
             schema_version = 1
@@ -548,8 +548,7 @@ class CliTests(unittest.TestCase):
                 main(["--config", config_path, "capture-deploy", "--execute"])
 
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("exactly one non-empty --region", error.getvalue())
-        self.assertNotIn("LINODE_TOKEN", error.getvalue())
+        self.assertIn("LINODE_TOKEN", error.getvalue())
 
     def write_config(self, text: str) -> str:
         directory = tempfile.TemporaryDirectory()

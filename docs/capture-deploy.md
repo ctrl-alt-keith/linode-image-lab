@@ -1,8 +1,9 @@
 # Capture-Deploy Workflow
 
 This document describes the current capture/deploy workflow shape. M2 adds
-single-region capture execution, M3 adds single-region deploy execution, and M4
-adds single-region capture-deploy execution.
+single-region capture execution, M3 adds single-region deploy execution, M4
+adds single-region capture-deploy execution, and M5 adds sequential
+multi-region capture-deploy execution.
 
 ## Capture
 
@@ -94,7 +95,7 @@ dry-run manifest and performs no Linode action.
 
 `capture-deploy --execute` is the only mutating combined command. It requires:
 
-- exactly one `--region`,
+- at least one `--region`,
 - `--source-image`,
 - `--type`,
 - `LINODE_TOKEN`.
@@ -118,6 +119,24 @@ the capture and deploy phases, including read-only provider checks for region,
 type, and image availability. This keeps each phase independently safe and
 reusable, so combined manifests may show two `preflight_api_access` and
 `preflight_provider_inputs` steps.
+
+When multiple regions are provided, `capture-deploy --execute` runs the full
+single-region capture-deploy flow once per region, in the order supplied by the
+configuration or CLI. Execution is sequential only; there is no parallelism,
+cross-region dependency graph, scheduler, retry fan-out, or infrastructure
+reconciliation. Each region records its own capture, deploy, validation,
+cleanup, resources, and status under `results.<region>`.
+
+Multi-region execution continues after a region fails. Cleanup for the failed
+region is attempted before the next region runs, and later regions still get
+their own isolated flow. The top-level manifest reports:
+
+- `succeeded` when every region succeeds,
+- `partial` when at least one region succeeds and at least one fails,
+- `failed` when every region fails.
+
+The top-level `summary` lists succeeded and failed regions. If any region
+fails, the CLI still emits the combined manifest and exits non-zero.
 
 Live smoke command shape:
 
@@ -187,11 +206,16 @@ tags did not match, with a `reason` such as `requested`, `tag_mismatch`, or
 ## Manifest Structure
 
 Single-command execute manifests expose top-level `status`, `steps`,
-`resources`, `validation`, and `cleanup`. Capture-deploy keeps the same
-top-level fields and also nests `capture` and `deploy` sections. Top-level
-`resources` and `validation` summarize the whole run. Nested
+`resources`, `validation`, and `cleanup`. Single-region capture-deploy keeps
+the same top-level fields and also nests `capture` and `deploy` sections.
+Top-level `resources` and `validation` summarize the whole run. Nested
 `capture.resources`, `deploy.resources`, `capture.validation`, and
 `deploy.validation` are phase-specific slices of that same lifecycle.
+
+Multi-region capture-deploy execute manifests expose a top-level `status`,
+`regions`, `results`, and `summary`. Each value in `results` is the existing
+single-region capture-deploy execute manifest for that region, including
+`steps`, `resources`, `validation`, and `cleanup`.
 
 `validation` means provider/API-level checks only: input availability, resource
 state, requested region, required tags, disk presence for capture, and image
