@@ -87,7 +87,7 @@ def cleanup_plan(
     option = "--execute" if execute else "--discover"
     run_client = client or LinodeClient.from_env(command="cleanup", option=option)
     manifest["steps"] = []
-    manifest["cleanup"] = {"status": "running", "deleted": [], "preserved": []}
+    manifest["cleanup"] = {"status": "running", "deleted": [], "preserved": [], "failed": []}
 
     try:
         append_step(manifest, "preflight_api_access", mutates=False, status="running")
@@ -113,6 +113,7 @@ def cleanup_plan(
 
         append_step(manifest, "delete_expired_linodes", mutates=bool(manifest["cleanup_candidates"]), status="running")
         deleted: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
         comparison_time = (now or datetime.now(UTC)).astimezone(UTC)
         for item in assessments:
             if item["action"] != "delete":
@@ -132,15 +133,30 @@ def cleanup_plan(
             if current_assessment["action"] != "delete":
                 manifest["cleanup"]["preserved"].append(current_assessment["resource"])
                 continue
-            run_client.delete_instance(linode_id)
+            try:
+                run_client.delete_instance(linode_id)
+            except Exception:
+                failed_resource = dict(current_assessment["resource"])
+                failed_resource["reason"] = "delete_status_unknown"
+                failed.append(failed_resource)
+                continue
             deleted.append(current_assessment["resource"])
         manifest["cleanup"]["deleted"] = deleted
+        manifest["cleanup"]["failed"] = failed
         manifest["cleanup_candidates"] = []
+        manifest["discovery"] = {"status": "completed"}
+        if failed:
+            mark_running_step_failed(manifest, client=run_client)
+            manifest["cleanup"]["status"] = "failed"
+            manifest["status"] = "failed"
+            manifest["errors"] = ["cleanup delete status unknown for one or more resources"]
+            raise CleanupError("cleanup --execute failed for one or more deletions", manifest)
         manifest["cleanup"]["status"] = "completed"
         manifest["status"] = "succeeded"
-        manifest["discovery"] = {"status": "completed"}
         finish_step(manifest, "delete_expired_linodes", client=run_client)
         return manifest
+    except CleanupError:
+        raise
     except Exception as exc:
         mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
@@ -165,7 +181,7 @@ def base_cleanup_manifest(options: CleanupOptions) -> dict[str, Any]:
         "filters": {"run_id": options.run_id},
         "resources": [],
         "cleanup_candidates": [],
-        "cleanup": {"status": "not_started", "deleted": [], "preserved": []},
+        "cleanup": {"status": "not_started", "deleted": [], "preserved": [], "failed": []},
     }
 
 

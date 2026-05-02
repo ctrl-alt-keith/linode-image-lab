@@ -194,6 +194,14 @@ class CaptureValidationFailureClient(FakeLinodeClient):
         raise LinodePreflightError("capture source disk unavailable")
 
 
+class CaptureCleanupFailureClient(FakeLinodeClient):
+    def delete_instance(self, linode_id: int) -> dict[str, object]:
+        if linode_id in self.deploy_instance_ids:
+            return super().delete_instance(linode_id)
+        self.calls.append("delete_capture_source")
+        raise ValueError("provider response included private details")
+
+
 class CaptureDeployExecutionTests(unittest.TestCase):
     def test_dry_run_does_not_read_token_or_call_execution(self) -> None:
         with (
@@ -305,6 +313,31 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(client.deleted, [321, 322, 123])
         self.assertEqual(manifest["capture"]["cleanup"]["deleted"][0]["linode_id"], 123)
         self.assertEqual(manifest["capture"]["cleanup"]["preserved"][0]["reason"], "deliverable")
+
+    def test_execute_multi_region_capture_cleanup_failure_affects_aggregate_status(self) -> None:
+        client = CaptureCleanupFailureClient()
+
+        with self.assertRaises(CaptureDeployError) as raised:
+            capture_deploy_plan(
+                regions=["us-east", "us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "partial")
+        self.assertEqual(manifest["summary"]["succeeded"], ["us-east", "us-west"])
+        self.assertEqual(manifest["summary"]["failed"], [])
+        self.assertEqual(manifest["summary"]["cleanup"]["status"], "failed")
+        self.assertEqual(manifest["capture"]["cleanup"]["status"], "failed")
+        self.assertEqual(manifest["deploy_results"]["us-east"]["status"], "succeeded")
+        self.assertEqual(manifest["deploy_results"]["us-west"]["status"], "succeeded")
 
     def test_execute_multi_region_capture_failure_prevents_deploy_attempts(self) -> None:
         client = CaptureValidationFailureClient()

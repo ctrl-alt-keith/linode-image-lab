@@ -138,13 +138,16 @@ flow. After all deploy regions finish, the temporary capture-source Linode is
 cleaned up once and the custom image is preserved as the single deliverable.
 The top-level manifest reports:
 
-- `succeeded` when every requested deploy region succeeds,
-- `partial` when at least one deploy region succeeds and at least one fails,
+- `succeeded` when every requested deploy region succeeds and capture cleanup
+  completes,
+- `partial` when at least one deploy region succeeds and at least one fails, or
+  when deploys succeed but capture cleanup fails,
 - `failed` when capture fails or every deploy region fails.
 
 The top-level `summary` lists succeeded and failed regions. Deploy failures
 represent real provider/API errors, invalid inputs, or transient issues. If any
-region fails, the CLI still emits the combined manifest and exits non-zero.
+region fails, or if final capture cleanup fails, the CLI still emits the
+combined manifest and exits non-zero.
 
 Live smoke command shape:
 
@@ -208,11 +211,15 @@ required tag set. It does not delete custom images, untagged resources, or
 resources with malformed or unexpired TTL values.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
-and `preserved`. `deleted` lists temporary Linodes removed after required tags
-matched. `preserved` lists resources kept by request or kept because required
-tags did not match, with a `reason` such as `requested`, `tag_mismatch`, or
-`deliverable`. In capture-deploy, top-level cleanup is the combined summary;
-`capture.cleanup` and `deploy.cleanup` are the phase-specific results.
+`preserved`, and `failed`. `deleted` lists temporary Linodes removed after
+required tags matched. `preserved` lists resources kept by request or kept
+because required tags did not match, with a `reason` such as `requested`,
+`tag_mismatch`, or `deliverable`. Standalone cleanup re-fetches each candidate
+before one DELETE attempt; if that attempt fails, the resource is reported in
+`failed` with `reason=delete_status_unknown` because the provider-side state
+cannot be confirmed safely. In capture-deploy, top-level cleanup is the
+combined summary; `capture.cleanup` and `deploy.cleanup` are the phase-specific
+results.
 
 ## Manifest Structure
 

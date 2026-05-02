@@ -189,8 +189,8 @@ Cleanup status is narrow and literal. `deleted` means a temporary Linode was
 deleted after matching current-run tags. `preserved` means no deletion occurred
 for that resource because preservation was requested or tags did not match.
 `completed` is reserved for combined cleanup after the phase cleanup blocks
-finish. `failed` means cleanup did not complete. Preserved entries include a
-`reason`; the custom image uses `deliverable`.
+finish. `failed` means cleanup did not complete. Preserved and failed entries
+include a sanitized `reason`; the custom image uses `deliverable`.
 
 Standalone `cleanup` is dry-run by default. Plain `cleanup` emits a
 non-mutating manifest preview and never reads `LINODE_TOKEN` or calls Linode.
@@ -211,4 +211,7 @@ enforce it as a provider-side expiration policy.
 Standalone cleanup never deletes custom images, untagged resources, or broader
 account resources. Malformed TTL values, future TTL values, missing required
 tags, invalid tag values, and optional `--run-id` filter mismatches preserve
-the Linode and report a sanitized reason.
+the Linode and report a sanitized reason. Execute cleanup re-fetches each
+candidate before one DELETE attempt. A failed DELETE attempt is not retried
+blindly; it is reported as `reason=delete_status_unknown`, and later candidates
+are still evaluated.

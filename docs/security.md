@@ -100,12 +100,14 @@ optional `--run-id` filter. Preserved entries use sanitized reason strings and
 normal stdout redacts provider identifiers.
 
 Transient Linode API retries are limited to read-only API calls, polling reads,
-managed Linode discovery, and cleanup DELETE attempts for eligible tagged
-temporary Linodes. Create-instance, image-create, and shutdown requests are not
-retried automatically. HTTP 429 retries honor Linode's documented rate-limit
-headers before falling back to deterministic backoff. Retry errors and metadata
-use public-safe operation names, status categories, and delay sources rather
-than tokens or provider identifiers.
+and managed Linode discovery. Cleanup DELETE requests are single-attempt after
+candidate re-fetch because public provider docs do not document safe idempotent
+retry behavior after a lost DELETE response. Create-instance, image-create,
+shutdown, and cleanup DELETE requests are not retried automatically. HTTP 429
+retries for retry-enabled reads honor Linode's documented rate-limit headers
+before falling back to deterministic backoff. Retry errors and metadata use
+public-safe operation names, status categories, and delay sources rather than
+tokens or provider identifiers.
 
 Validation is limited to provider/API responses: input existence/access, image
 available status, resource state, requested region, required tags, and disk
