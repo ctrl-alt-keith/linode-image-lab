@@ -1,0 +1,13 @@
+name: Authoritative Source Check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  authoritative-source-check:
+    uses: ctrl-alt-keith/ai-workflow-playbook/.github/workflows/authoritative-source-check.yml@main
+    with:
+      scan_mode: changed
