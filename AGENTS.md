@@ -30,6 +30,17 @@ Repo-local rules take precedence only for repo-specific behavior.
   validation runs, not infrastructure ownership.
 - Keep cleanup and validation first-class in any execution path.
 
+## Provider Assumptions
+
+- Before changing behavior, docs, tests, or user-facing claims that depend on
+  Linode provider semantics, verify the assumption against public provider
+  documentation.
+- Examples include image region availability, API resource lifecycle, tagging
+  behavior, cleanup safety, rate limits, and error or status semantics.
+- Do not encode guessed provider limitations. If public docs are unclear, state
+  the uncertainty and keep behavior conservative.
+- When relevant, cite or summarize the verified source in PR notes or docs.
+
 ## Public-Safe Boundary
 
 - Treat every file as public.
