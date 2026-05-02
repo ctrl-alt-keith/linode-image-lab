@@ -150,13 +150,21 @@ required tags are present:
 - `component=<capture|deploy>`
 - `ttl=<timestamp>`
 
-Execute-mode cleanup is narrower than general cleanup. Capture only attempts to
-delete the current run's temporary capture-source Linode, deploy only attempts
-to delete the current run's temporary deploy Linode, and capture-deploy only
-attempts to delete those two temporary Linodes for the current combined run. In
-all cases, cleanup proceeds only when the resource has all required tags
-matching the current run. If tags are missing or do not match, cleanup preserves
-the resource and records `reason=tag_mismatch`.
+Execute-mode cleanup inside capture, deploy, and capture-deploy is narrower
+than standalone cleanup. Capture only attempts to delete the current run's
+temporary capture-source Linode, deploy only attempts to delete the current
+run's temporary deploy Linode, and capture-deploy only attempts to delete those
+two temporary Linodes for the current combined run. In all cases, cleanup
+proceeds only when the resource has all required tags matching the current run.
+If tags are missing or do not match, cleanup preserves the resource and records
+`reason=tag_mismatch`.
+
+Standalone `cleanup` is also dry-run by default. With `LINODE_TOKEN`, the dry
+run lists managed Linodes and reports expired eligible resources without
+deleting them. `cleanup --execute` requires `LINODE_TOKEN` and deletes only
+expired temporary Linodes with the complete required tag set. It does not delete
+custom images, untagged resources, or resources with malformed or unexpired TTL
+values.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
 and `preserved`. `deleted` lists temporary Linodes removed after required tags

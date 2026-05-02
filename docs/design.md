@@ -38,7 +38,8 @@ cleanup as a first-class outcome.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
   serialization.
 - `regions.py` owns one-or-many region parsing.
-- `cleanup.py` owns tag-based cleanup candidate selection.
+- `cleanup.py` owns tag-based cleanup candidate selection and standalone
+  cleanup execution.
 - `redaction.py` owns recursive output sanitization.
 - `linode_api.py` owns the mockable Linode client boundary.
 
@@ -155,3 +156,21 @@ for that resource because preservation was requested or tags did not match.
 `completed` is reserved for combined cleanup after the phase cleanup blocks
 finish. `failed` means cleanup did not complete. Preserved entries include a
 `reason`; the custom image uses `deliverable`.
+
+Standalone `cleanup` is dry-run by default. Without `LINODE_TOKEN`, it emits a
+non-mutating manifest preview without API discovery. With `LINODE_TOKEN`, dry
+run performs read-only managed Linode discovery and reports expired eligible
+Linodes in `cleanup_candidates` without deleting them. `cleanup --execute`
+requires `LINODE_TOKEN`, performs the same discovery, and deletes only expired
+Linodes carrying all required managed tags:
+
+- `project=linode-image-lab`
+- `run_id=...`
+- `mode=...`
+- `component=...`
+- `ttl=...`
+
+Standalone cleanup never deletes custom images, untagged resources, or broader
+account resources. Malformed TTL values, future TTL values, missing required
+tags, invalid tag values, and optional `--run-id` filter mismatches preserve
+the Linode and report a sanitized reason.

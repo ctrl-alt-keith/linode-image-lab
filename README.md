@@ -64,8 +64,11 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 
 ## Authentication
 
-`LINODE_TOKEN` is required only when `--execute` is used. Dry-run commands do
-not read the token, call Linode, or mutate resources.
+`LINODE_TOKEN` is required when `--execute` is used. Dry-run capture, deploy,
+and capture-deploy commands do not read the token, call Linode, or mutate
+resources. Dry-run `cleanup` can use `LINODE_TOKEN` for read-only discovery
+when the token is available; it still never deletes resources without
+`--execute`.
 
 Use any shell method that exports the variable:
 
@@ -107,14 +110,14 @@ must still come from the environment or approved environment injection.
 ## Behavior Clarifications
 
 - All commands are dry-run by default.
-- `--execute` enables real Linode API mutations for `capture`, `deploy`, and
-  `capture-deploy`.
+- `--execute` enables real Linode API mutations for `capture`, `deploy`,
+  `capture-deploy`, and `cleanup`.
 - Config values only fill omitted command options; CLI flags override config.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
 - Custom images are preserved as deliverables.
-- `cleanup` is independently runnable and currently previews tag-scoped cleanup
-  selection.
+- `cleanup` is independently runnable, dry-run by default, and can delete
+  expired tagged temporary Linodes only with `--execute`.
 - Normal stdout is redacted for public-safe review.
 
 ## What This Does
@@ -172,6 +175,21 @@ linode-image-lab capture-deploy \
   --execute
 ```
 
+Preview or execute tag-scoped cleanup:
+
+```sh
+linode-image-lab cleanup
+LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup
+LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup --execute
+```
+
+`cleanup` without `--execute` never deletes resources. When `LINODE_TOKEN` is
+available, it performs read-only Linode discovery and reports expired eligible
+Linodes in `cleanup_candidates`; without a token, it emits the non-mutating
+manifest shape only. `cleanup --execute` requires `LINODE_TOKEN`, lists managed
+Linodes, and deletes only expired Linodes carrying the complete required tag
+set. Use `--run-id` to restrict selection to one run.
+
 ## Required Tags
 
 Modeled resources use rediscoverable tags:
@@ -193,6 +211,11 @@ Cleanup status values are literal: `deleted` means a temporary Linode was
 deleted, `preserved` means a resource was kept or skipped for safety,
 `completed` means combined cleanup finished, and `failed` means cleanup did not
 complete.
+
+Standalone `cleanup --execute` does not delete custom images, untagged
+resources, or resources with missing, malformed, unexpired, or mismatched
+managed tags. Preserved entries include a sanitized `reason`, such as
+`ttl_not_expired`, `ttl_parse_failed`, or `missing_required_tags`.
 
 ## Independence and Intent
 

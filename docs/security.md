@@ -7,9 +7,11 @@ non-mutating; capture and deploy execution require explicit opt-in.
 
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
-- The CLI reads `LINODE_TOKEN` only for `capture --execute`,
-  `deploy --execute`, or `capture-deploy --execute`.
-- Dry-run commands do not read token values.
+- The CLI reads `LINODE_TOKEN` for `capture --execute`, `deploy --execute`,
+  `capture-deploy --execute`, and `cleanup --execute`.
+- `cleanup` without `--execute` may read `LINODE_TOKEN` only to perform
+  read-only discovery for a deletion preview. Other dry-run commands do not
+  read token values.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
@@ -32,8 +34,9 @@ requires `LINODE_TOKEN` from the environment or approved environment injection.
 
 ## Execute Permissions
 
-`capture --execute`, `deploy --execute`, and `capture-deploy --execute` need a
-personal access token or equivalent OAuth access that can:
+`capture --execute`, `deploy --execute`, `capture-deploy --execute`, and
+`cleanup --execute` need a personal access token or equivalent OAuth access
+that can:
 
 - read the current profile for preflight,
 - create, read, shut down, and delete temporary Linodes,
@@ -43,9 +46,9 @@ personal access token or equivalent OAuth access that can:
 In Linode scope terms, this generally means `linodes:read_write` and
 `images:read_write`, plus account permissions or grants that allow Linode
 creation and tagging. Deploy execution from an existing image does not create a
-custom image, but the same image read permissions are expected. If tags cannot
-be applied or later verified, execution fails safely because cleanup depends on
-rediscoverable tags.
+custom image, and standalone cleanup does not create or delete custom images.
+If tags cannot be applied or later verified, execution fails safely because
+cleanup depends on rediscoverable tags.
 
 ## Public-Safety Scan
 
@@ -64,9 +67,10 @@ loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `capture`, `deploy`, and `capture-deploy` are dry-run
-unless `--execute` is provided. `cleanup` currently selects candidates from
-provided data structures and does not call Linode.
+`plan` is dry-run only. `capture`, `deploy`, `capture-deploy`, and `cleanup`
+are dry-run unless `--execute` is provided. `cleanup` without `--execute` is
+non-mutating; when `LINODE_TOKEN` is available, it may call Linode only to list
+managed Linodes for a preview.
 
 `capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
 before mutation if required options or `LINODE_TOKEN` are missing. They perform
@@ -79,6 +83,13 @@ deletion attempts.
 component-specific tag: capture resources use `component=capture`, and deploy
 resources use `component=deploy`. The custom image is preserved by default.
 Temporary Linodes are deleted only when all required tags match the current run.
+
+Standalone `cleanup --execute` deletes only expired temporary Linodes with the
+complete managed tag set: `project`, `run_id`, `mode`, `component`, and `ttl`.
+It preserves custom images, untagged resources, resources with missing or
+mismatched tags, resources with malformed or unexpired TTL values, and resources
+outside an optional `--run-id` filter. Preserved entries use sanitized reason
+strings and normal stdout redacts provider identifiers.
 
 Validation is limited to provider/API responses: resource state, requested
 region, required tags, disk presence for capture, and image availability for

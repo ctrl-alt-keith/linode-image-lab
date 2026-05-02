@@ -293,6 +293,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("LINODE_TOKEN is required for deploy --execute", error.getvalue())
 
+    def test_cleanup_execute_requires_linode_token(self) -> None:
+        error = StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                main(["cleanup", "--execute"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("LINODE_TOKEN is required for cleanup --execute", error.getvalue())
+
     def test_multi_region_config_is_accepted_for_dry_run(self) -> None:
         config_path = self.write_config(
             """

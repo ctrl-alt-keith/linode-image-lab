@@ -6,7 +6,7 @@ import argparse
 import sys
 from typing import Any
 
-from .cleanup import select_cleanup_candidates
+from .cleanup import CleanupError, cleanup_plan
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
 from .config import ConfigError, command_defaults, load_config
@@ -90,9 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy validation Linode after execution.",
     )
 
-    cleanup = subparsers.add_parser("cleanup", help="Preview tag-scoped cleanup selection.")
+    cleanup = subparsers.add_parser("cleanup", help="Plan or execute tag-scoped cleanup.")
     add_config_arg(cleanup, dest="command_config")
-    cleanup.add_argument("--run-id", help="Optional run id to include in the cleanup preview.")
+    cleanup.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
+    cleanup.add_argument("--run-id", help="Optional run id filter for cleanup selection.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
     return parser
@@ -187,18 +188,11 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "cleanup":
-        manifest = create_manifest(
-            command="cleanup",
-            mode="capture-deploy",
-            regions=[],
+        return cleanup_plan(
             run_id=args.run_id,
             ttl=args.ttl,
-            dry_run=True,
-            status="placeholder",
+            execute=args.execute,
         )
-        manifest["message"] = "cleanup is independently runnable and non-mutating"
-        manifest["cleanup_candidates"] = select_cleanup_candidates([])
-        return manifest
 
     raise ValueError(f"unsupported command: {args.command}")
 
@@ -225,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         if exc.manifest is not None:
             sys.stdout.write(serialize_manifest(exc.manifest))
             sys.stderr.write("capture-deploy --execute failed\n")
+            return 1
+        parser.error(str(exc))
+    except CleanupError as exc:
+        if exc.manifest is not None:
+            sys.stdout.write(serialize_manifest(exc.manifest))
+            sys.stderr.write(f"{exc}\n")
             return 1
         parser.error(str(exc))
     except (ConfigError, ValueError) as exc:

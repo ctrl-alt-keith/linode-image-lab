@@ -5,7 +5,44 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from linode_image_lab.cleanup import select_cleanup_candidates
+from linode_image_lab.cleanup import cleanup_plan, select_cleanup_candidates
+from linode_image_lab.manifest import serialize_manifest
+
+
+NOW = datetime(2026, 5, 1, tzinfo=UTC)
+
+
+class FakeCleanupClient:
+    def __init__(self, resources: list[dict[str, object]]) -> None:
+        self.resources = resources
+        self.preflight_count = 0
+        self.deleted: list[int] = []
+
+    def preflight(self) -> None:
+        self.preflight_count += 1
+
+    def list_managed_linodes(self) -> list[dict[str, object]]:
+        return list(self.resources)
+
+    def delete_instance(self, linode_id: int) -> dict[str, object]:
+        self.deleted.append(linode_id)
+        return {"linode_id": linode_id, "deleted": True}
+
+
+def linode_resource(*, linode_id: int = 123, ttl: str = "2026-01-01T00:00:00Z") -> dict[str, object]:
+    return {
+        "linode_id": linode_id,
+        "label": "lil-run-test",
+        "region": "us-east",
+        "status": "running",
+        "tags": [
+            "project=linode-image-lab",
+            "run_id=run-test",
+            "mode=capture-deploy",
+            "component=capture",
+            f"ttl={ttl}",
+        ],
+    }
 
 
 class CleanupSelectionTests(unittest.TestCase):
@@ -16,10 +53,89 @@ class CleanupSelectionTests(unittest.TestCase):
 
         selected = select_cleanup_candidates(
             resources,
-            now=datetime(2026, 5, 1, tzinfo=UTC),
+            now=NOW,
         )
 
         self.assertEqual([resource["id"] for resource in selected], ["resource-expired"])
+
+    def test_dry_run_discovers_but_does_not_delete(self) -> None:
+        client = FakeCleanupClient([linode_resource()])
+
+        manifest = cleanup_plan(client=client, now=NOW)
+
+        self.assertTrue(manifest["dry_run"])
+        self.assertEqual(manifest["execution_mode"], "dry-run")
+        self.assertEqual(manifest["cleanup"]["status"], "previewed")
+        self.assertEqual(len(manifest["cleanup_candidates"]), 1)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(client.preflight_count, 0)
+
+    def test_execute_deletes_expired_tagged_linode(self) -> None:
+        client = FakeCleanupClient([linode_resource(linode_id=456)])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertFalse(manifest["dry_run"])
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertEqual(client.preflight_count, 1)
+        self.assertEqual(client.deleted, [456])
+        self.assertEqual(manifest["cleanup"]["deleted"][0]["reason"], "expired_ttl")
+
+    def test_unexpired_linode_is_preserved(self) -> None:
+        client = FakeCleanupClient([linode_resource(ttl="2030-01-01T00:00:00Z")])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "ttl_not_expired")
+
+    def test_malformed_ttl_is_preserved(self) -> None:
+        client = FakeCleanupClient([linode_resource(ttl="not-a-timestamp")])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "ttl_parse_failed")
+
+    def test_missing_required_tags_are_preserved(self) -> None:
+        client = FakeCleanupClient(
+            [
+                {
+                    "linode_id": 789,
+                    "tags": ["project=linode-image-lab", "run_id=run-test"],
+                }
+            ]
+        )
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "missing_required_tags")
+
+    def test_mismatched_managed_tags_are_preserved(self) -> None:
+        resource = linode_resource()
+        resource["tags"] = [
+            "project=linode-image-lab",
+            "run_id=run-test",
+            "mode=unexpected",
+            "component=capture",
+            "ttl=2026-01-01T00:00:00Z",
+        ]
+        client = FakeCleanupClient([resource])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
+
+    def test_provider_ids_are_redacted_in_serialized_manifest(self) -> None:
+        client = FakeCleanupClient([linode_resource(linode_id=987)])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+        exported = json.loads(serialize_manifest(manifest))
+
+        self.assertEqual(exported["cleanup"]["deleted"][0]["linode_id"], "[REDACTED]")
+        self.assertEqual(exported["resources"][0]["linode_id"], "[REDACTED]")
 
 
 if __name__ == "__main__":

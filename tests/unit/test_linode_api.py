@@ -204,6 +204,66 @@ class LinodeClientTests(unittest.TestCase):
         self.assertIsNone(getattr(requests[0], "data"))
         self.assertEqual(resource, {"linode_id": 123, "deleted": True})
 
+    def test_list_managed_linodes_maps_project_tagged_instances(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        responses = [
+            FakeHTTPResponse(
+                {
+                    "page": 1,
+                    "pages": 2,
+                    "data": [
+                        {
+                            "id": 123,
+                            "label": "lil-run-source",
+                            "region": "us-east",
+                            "status": "running",
+                            "tags": ["project=linode-image-lab"],
+                        },
+                        {
+                            "id": 999,
+                            "label": "unmanaged",
+                            "region": "us-east",
+                            "status": "running",
+                            "tags": ["project=other"],
+                        },
+                    ],
+                }
+            ),
+            FakeHTTPResponse(
+                {
+                    "page": 2,
+                    "pages": 2,
+                    "data": [
+                        {
+                            "id": 456,
+                            "label": "lil-run-deploy",
+                            "region": "us-west",
+                            "status": "offline",
+                            "tags": ["project=linode-image-lab"],
+                        }
+                    ],
+                }
+            ),
+        ]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return responses.pop(0)
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resources = client.list_managed_linodes()
+
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                f"{API_BASE_URL}/linode/instances?page=1&page_size=100",
+                f"{API_BASE_URL}/linode/instances?page=2&page_size=100",
+            ],
+        )
+        self.assertEqual([resource["linode_id"] for resource in resources], [123, 456])
+
     def test_wait_instance_ready_polls_until_running(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,
