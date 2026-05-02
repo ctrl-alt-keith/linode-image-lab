@@ -184,7 +184,7 @@ def execute_capture(
         def find_source_disk() -> None:
             nonlocal disk
             disks = run_client.list_disks(required_int(capture_source.get("linode_id")))
-            disk = first_disk(disks)
+            disk = select_capture_disk(disks)
 
         record_validation_check(manifest["validation"], "source_disk_found", find_source_disk)
         capture_source["disk_id"] = disk["disk_id"]
@@ -400,14 +400,41 @@ def has_required_tags(resource: dict[str, Any], required_tags: list[str]) -> boo
     return all(key in tags and tags[key] == expected[key] for key in REQUIRED_TAG_KEYS)
 
 
-def first_disk(disks: list[dict[str, Any]]) -> dict[str, Any]:
-    if not disks:
-        raise CaptureError("capture source has no disk to image")
-    disk = disks[0]
-    disk_id = disk.get("disk_id", disk.get("id"))
-    if disk_id is None:
-        raise CaptureError("capture source disk is missing an id")
+def select_capture_disk(disks: list[dict[str, Any]]) -> dict[str, Any]:
+    suitable = [disk for disk in disks if is_suitable_capture_disk(disk)]
+    if not suitable:
+        raise CaptureError("capture source has no suitable disk to image")
+    if len(suitable) > 1:
+        raise CaptureError("capture source has multiple suitable disks to image")
+    disk_id = disk_id_for(suitable[0])
+    if not isinstance(disk_id, int):
+        raise CaptureError("capture source suitable disk is missing an integer id")
     return {"disk_id": disk_id}
+
+
+def is_suitable_capture_disk(disk: dict[str, Any]) -> bool:
+    disk_id = disk_id_for(disk)
+    if not isinstance(disk_id, int):
+        return False
+    status = disk.get("status")
+    if status is not None and str(status).strip().lower() != "ready":
+        return False
+    if is_swap_disk(disk):
+        return False
+    return True
+
+
+def disk_id_for(disk: dict[str, Any]) -> object:
+    disk_id = disk.get("disk_id")
+    return disk.get("id") if disk_id is None else disk_id
+
+
+def is_swap_disk(disk: dict[str, Any]) -> bool:
+    filesystem = disk.get("filesystem")
+    if isinstance(filesystem, str) and filesystem.strip().lower() == "swap":
+        return True
+    label = disk.get("label")
+    return isinstance(label, str) and re.search(r"\bswap\b", label, re.IGNORECASE) is not None
 
 
 def merge_resource(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:

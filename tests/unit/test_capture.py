@@ -23,12 +23,13 @@ def validation_check(manifest: dict[str, object], name: str) -> dict[str, object
 
 
 class FakeLinodeClient:
-    def __init__(self, *, missing_create_tags: bool = False) -> None:
+    def __init__(self, *, missing_create_tags: bool = False, disks: list[dict[str, object]] | None = None) -> None:
         self.calls: list[str] = []
         self.create_tags: list[str] = []
         self.image_tags: list[str] = []
         self.deleted: list[int] = []
         self.missing_create_tags = missing_create_tags
+        self.disks = disks if disks is not None else [{"disk_id": 456}]
 
     def preflight(self) -> None:
         self.calls.append("preflight")
@@ -74,7 +75,7 @@ class FakeLinodeClient:
 
     def list_disks(self, linode_id: int) -> list[dict[str, object]]:
         self.calls.append("list_disks")
-        return [{"disk_id": 456}]
+        return self.disks
 
     def shutdown_instance(self, linode_id: int) -> dict[str, object]:
         self.calls.append("shutdown_instance")
@@ -264,6 +265,142 @@ class CaptureExecutionTests(unittest.TestCase):
                 {"name": "custom_image_required_tags_match", "status": "succeeded", "target": "custom_image"},
             ],
         )
+
+    def test_execute_uses_exactly_one_suitable_disk(self) -> None:
+        client = FakeLinodeClient(
+            disks=[
+                {"id": 111, "label": "swap", "filesystem": "swap", "status": "ready"},
+                {"id": 456, "label": "Debian 12 Disk", "filesystem": "ext4", "status": "ready"},
+            ],
+        )
+
+        manifest = capture_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            client=client,
+        )
+
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertEqual(manifest["capture_source"]["disk_id"], 456)
+        self.assertIn("capture_image", client.calls)
+
+    def test_execute_fails_safely_when_capture_source_has_zero_disks(self) -> None:
+        client = FakeLinodeClient(disks=[])
+
+        with self.assertRaises(CaptureError) as raised:
+            capture_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["errors"], ["capture source has no suitable disk to image"])
+        self.assertEqual(client.deleted, [123])
+        self.assertNotIn("shutdown_instance", client.calls)
+        self.assertNotIn("capture_image", client.calls)
+        self.assertEqual(
+            validation_check(manifest, "source_disk_found"),
+            {
+                "name": "source_disk_found",
+                "status": "failed",
+                "target": "capture_source",
+                "failure_reason": "capture source has no suitable disk to image",
+            },
+        )
+
+    def test_execute_fails_safely_when_capture_source_has_multiple_suitable_disks(self) -> None:
+        client = FakeLinodeClient(
+            disks=[
+                {"id": 456, "label": "root", "filesystem": "ext4", "status": "ready"},
+                {"id": 789, "label": "data", "filesystem": "ext4", "status": "ready"},
+            ],
+        )
+
+        with self.assertRaises(CaptureError) as raised:
+            capture_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["errors"], ["capture source has multiple suitable disks to image"])
+        self.assertEqual(client.deleted, [123])
+        self.assertNotIn("shutdown_instance", client.calls)
+        self.assertNotIn("capture_image", client.calls)
+        self.assertEqual(
+            validation_check(manifest, "source_disk_found"),
+            {
+                "name": "source_disk_found",
+                "status": "failed",
+                "target": "capture_source",
+                "failure_reason": "capture source has multiple suitable disks to image",
+            },
+        )
+
+    def test_execute_ignores_swap_and_non_ready_disks(self) -> None:
+        client = FakeLinodeClient(
+            disks=[
+                {"id": 111, "label": "Debian 12 Disk", "filesystem": "ext4", "status": "not ready"},
+                {"id": 222, "label": "Swap Image", "filesystem": "raw", "status": "ready"},
+                {"id": 456, "label": "root", "filesystem": "ext4", "status": "ready"},
+            ],
+        )
+
+        manifest = capture_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            client=client,
+        )
+
+        self.assertEqual(manifest["capture_source"]["disk_id"], 456)
+        self.assertEqual(manifest["validation"]["status"], "succeeded")
+
+    def test_execute_fails_when_only_disks_are_unsuitable(self) -> None:
+        client = FakeLinodeClient(
+            disks=[
+                {"id": 111, "label": "swap", "filesystem": "swap", "status": "ready"},
+                {"id": 222, "label": "root", "filesystem": "ext4", "status": "not ready"},
+                {"label": "missing id", "filesystem": "ext4", "status": "ready"},
+            ],
+        )
+
+        with self.assertRaises(CaptureError) as raised:
+            capture_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        self.assertEqual(raised.exception.manifest["errors"], ["capture source has no suitable disk to image"])
+        self.assertEqual(client.deleted, [123])
+        self.assertNotIn("capture_image", client.calls)
 
     def test_execute_applies_required_tags_to_created_resources(self) -> None:
         client = FakeLinodeClient()
