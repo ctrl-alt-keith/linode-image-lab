@@ -124,9 +124,10 @@ When multiple regions are provided, `capture-deploy --execute` captures one
 custom image in the first requested region, then deploys that same captured
 image sequentially to each requested region. Execution is sequential only;
 there is no parallelism, cross-region dependency graph, scheduler, retry
-fan-out, infrastructure reconciliation, image replication, or image copying.
-The single capture result is recorded under `capture`, and each deploy attempt
-is recorded under `deploy_results.<region>`.
+fan-out, or infrastructure reconciliation. Linode custom images are deployable
+across regions; the first deploy in a region may take longer while the provider
+handles image transfer. The single capture result is recorded under `capture`,
+and each deploy attempt is recorded under `deploy_results.<region>`.
 
 If capture fails, no deploy regions are attempted and the top-level status is
 `failed`. If capture succeeds, multi-region execution continues after a deploy
@@ -140,8 +141,9 @@ The top-level manifest reports:
 - `partial` when at least one deploy region succeeds and at least one fails,
 - `failed` when capture fails or every deploy region fails.
 
-The top-level `summary` lists succeeded and failed regions. If any region
-fails, the CLI still emits the combined manifest and exits non-zero.
+The top-level `summary` lists succeeded and failed regions. Deploy failures
+represent real provider/API errors, invalid inputs, or transient issues. If any
+region fails, the CLI still emits the combined manifest and exits non-zero.
 
 Live smoke command shape:
 
