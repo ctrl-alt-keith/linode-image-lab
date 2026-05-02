@@ -51,21 +51,7 @@ release-check: check-gh-env
 		echo "Error: VERSION must be X.Y.Z or vX.Y.Z." >&2; \
 		exit 1; \
 	fi
-	@awk -v version='$(RELEASE_VERSION)' '\
-		BEGIN { found = 0; printed = 0 } \
-		$$0 == "## " version { found = 1; next } \
-		found && /^## / { exit } \
-		found { print; if ($$0 !~ /^[[:space:]]*$$/) printed = 1 } \
-		END { \
-			if (!found) { \
-				printf "Error: CHANGELOG.md missing section ## %s.\n", version > "/dev/stderr"; \
-				exit 1; \
-			} \
-			if (!printed) { \
-				printf "Error: CHANGELOG.md section ## %s has no release notes.\n", version > "/dev/stderr"; \
-				exit 1; \
-			} \
-		}' CHANGELOG.md >/dev/null
+	@$(MAKE) --no-print-directory release-notes VERSION='$(RELEASE_VERSION)' >/dev/null
 	@if [ "$$(git branch --show-current)" != "main" ]; then \
 		echo "Error: release must run from main after the release PR is merged." >&2; \
 		exit 1; \
@@ -117,21 +103,7 @@ release-publish: release-check
 	@set -e; \
 	notes_file=$$(mktemp); \
 	trap 'rm -f "$$notes_file"' EXIT; \
-	awk -v version='$(RELEASE_VERSION)' '\
-		BEGIN { found = 0; printed = 0 } \
-		$$0 == "## " version { found = 1; next } \
-		found && /^## / { exit } \
-		found { print; if ($$0 !~ /^[[:space:]]*$$/) printed = 1 } \
-		END { \
-			if (!found) { \
-				printf "Error: CHANGELOG.md missing section ## %s.\n", version > "/dev/stderr"; \
-				exit 1; \
-			} \
-			if (!printed) { \
-				printf "Error: CHANGELOG.md section ## %s has no release notes.\n", version > "/dev/stderr"; \
-				exit 1; \
-			} \
-		}' CHANGELOG.md > "$$notes_file"; \
+	$(MAKE) --no-print-directory release-notes VERSION='$(RELEASE_VERSION)' > "$$notes_file"; \
 	git tag -a "$(RELEASE_TAG)" -m "Release $(RELEASE_TAG)"; \
 	git push origin "$(RELEASE_TAG)"; \
 	gh release create "$(RELEASE_TAG)" --title "$(RELEASE_TAG)" --notes-file "$$notes_file"; \
