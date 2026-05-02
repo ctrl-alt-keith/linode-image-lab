@@ -162,6 +162,8 @@ environment or approved environment injection.
 - All commands are dry-run by default.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`,
   `capture-deploy`, and `cleanup`.
+- Provider behavior assumptions are tracked in
+  [docs/provider-assumptions.md](docs/provider-assumptions.md).
 - Config values only fill omitted command options; CLI flags override config.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
