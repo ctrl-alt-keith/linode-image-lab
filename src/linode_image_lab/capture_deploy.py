@@ -406,6 +406,10 @@ def required_text(value: object) -> str:
 
 
 def safe_error_message(exc: Exception) -> str:
+    if isinstance(exc, (CaptureError, DeployError)) and exc.manifest is not None:
+        errors = exc.manifest.get("errors", [])
+        if errors:
+            return str(errors[0])
     if isinstance(exc, (CaptureDeployError, CaptureError, DeployError)):
         return str(exc)
     return exc.__class__.__name__

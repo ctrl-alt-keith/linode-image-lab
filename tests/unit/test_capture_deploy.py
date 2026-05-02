@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from linode_image_lab.capture_deploy import CaptureDeployError, capture_deploy_plan
+from linode_image_lab.linode_api import LinodePreflightError
 from linode_image_lab.manifest import serialize_manifest
 
 
@@ -32,6 +33,15 @@ class FakeLinodeClient:
 
     def preflight(self) -> None:
         self.calls.append("preflight")
+
+    def preflight_region(self, region: str) -> None:
+        self.calls.append("preflight_region")
+
+    def preflight_instance_type(self, instance_type: str) -> None:
+        self.calls.append("preflight_instance_type")
+
+    def preflight_image(self, image_id: str) -> None:
+        self.calls.append("preflight_image")
 
     def create_instance(
         self,
@@ -139,6 +149,13 @@ class ExplodingClient:
         raise AssertionError("dry-run must not call the client")
 
 
+class InvalidCapturedImageClient(FakeLinodeClient):
+    def preflight_image(self, image_id: str) -> None:
+        self.calls.append("preflight_image")
+        if image_id == "private/789":
+            raise LinodePreflightError("requested image is unavailable")
+
+
 class CaptureDeployExecutionTests(unittest.TestCase):
     def test_dry_run_does_not_read_token_or_call_execution(self) -> None:
         with (
@@ -210,6 +227,9 @@ class CaptureDeployExecutionTests(unittest.TestCase):
             client.calls,
             [
                 "preflight",
+                "preflight_region",
+                "preflight_instance_type",
+                "preflight_image",
                 "create_capture_source",
                 "wait_capture_source_ready",
                 "list_disks",
@@ -218,6 +238,9 @@ class CaptureDeployExecutionTests(unittest.TestCase):
                 "capture_image",
                 "wait_image_available",
                 "preflight",
+                "preflight_region",
+                "preflight_instance_type",
+                "preflight_image",
                 "create_deploy_instance",
                 "wait_deploy_instance_ready",
                 "delete_capture_source",
@@ -242,6 +265,26 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         )
         self.assertEqual(manifest["cleanup"]["status"], "completed")
         self.assertEqual(client.deleted, [123, 321])
+
+    def test_deploy_provider_preflight_fails_before_deploy_mutation(self) -> None:
+        client = InvalidCapturedImageClient()
+
+        with self.assertRaises(CaptureDeployError) as raised:
+            capture_deploy_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        self.assertNotIn("create_deploy_instance", client.calls)
+        self.assertIn("delete_capture_source", client.calls)
+        self.assertEqual(raised.exception.manifest["status"], "failed")
+        self.assertEqual(raised.exception.manifest["errors"], ["requested image is unavailable"])
+        self.assertEqual(raised.exception.manifest["deploy"]["resources"], [])
 
     def test_execute_applies_component_tags_to_created_resources(self) -> None:
         client = FakeLinodeClient()

@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from linode_image_lab.linode_api import LinodeApiError, LinodeClient, LinodeTokenError
+from linode_image_lab.linode_api import LinodeApiError, LinodeClient, LinodePreflightError, LinodeTokenError
 
 TOKEN_VALUE = "test-" + "token-value"
 API_BASE_URL = "https://api.example/v4"
@@ -71,6 +71,43 @@ class LinodeClientTests(unittest.TestCase):
         )
         self.assertEqual([request.get_header("Authorization") for request in requests], [f"Bearer {TOKEN_VALUE}"] * 2)
         self.assertEqual(responses, [])
+
+    def test_provider_preflight_helpers_use_read_only_resource_paths(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse({})
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            client.preflight_region("us-east")
+            client.preflight_instance_type("g6-nanode-1")
+            client.preflight_image("linode/debian12")
+
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET", "GET"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                f"{API_BASE_URL}/regions/us-east",
+                f"{API_BASE_URL}/linode/types/g6-nanode-1",
+                f"{API_BASE_URL}/images/linode%2Fdebian12",
+            ],
+        )
+
+    def test_provider_preflight_failure_uses_sanitized_message(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            side_effect=self.http_error(404, "missing private/789"),
+        ):
+            with self.assertRaises(LinodePreflightError) as raised:
+                client.preflight_image("private/789")
+
+        self.assertEqual(str(raised.exception), "requested image is unavailable")
+        self.assertNotIn("private/789", str(raised.exception))
+        self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
     def test_create_instance_sends_expected_payload_and_maps_response(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)

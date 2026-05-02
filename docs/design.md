@@ -98,13 +98,15 @@ a Linode type, and `LINODE_TOKEN`.
 The execute flow is intentionally linear:
 
 1. preflight the token with non-mutating API calls,
-2. create a tagged temporary capture-source Linode,
-3. wait for readiness,
-4. validate region, tags, and disk presence,
-5. shut down the source Linode,
-6. capture a custom image from the selected disk,
-7. wait for image availability,
-8. delete or preserve the source according to explicit flags.
+2. preflight the requested region, Linode type, and source image with
+   non-mutating API calls,
+3. create a tagged temporary capture-source Linode,
+4. wait for readiness,
+5. validate region, tags, and disk presence,
+6. shut down the source Linode,
+7. capture a custom image from the selected disk,
+8. wait for image availability,
+9. delete or preserve the source according to explicit flags.
 
 Capture validation is provider/API-level only. It verifies region, required
 tags, disk presence, image availability, and image tags from API responses.
@@ -118,10 +120,12 @@ custom image id via `--image-id`, a Linode type, and `LINODE_TOKEN`.
 The execute flow is intentionally linear:
 
 1. preflight the token with non-mutating API calls,
-2. create a tagged temporary deploy Linode from the custom image id,
-3. wait for provider/API-level running status,
-4. validate running status, requested region, and required tags,
-5. delete or preserve the deploy instance according to explicit flags.
+2. preflight the requested region, Linode type, and deploy image with
+   non-mutating API calls,
+3. create a tagged temporary deploy Linode from the custom image id,
+4. wait for provider/API-level running status,
+5. validate running status, requested region, and required tags,
+6. delete or preserve the deploy instance according to explicit flags.
 
 M3 does not perform SSH, cloud-init, service, or application readiness
 validation.
@@ -146,8 +150,9 @@ The execute flow reuses the capture and deploy internals:
 Capture-deploy cleanup is tag-scoped. It only deletes resources carrying all
 required tags for the current run, including the matching component tag.
 Because capture and deploy remain independently reusable, capture-deploy runs
-each phase's non-mutating API preflight. Seeing two `preflight_api_access`
-steps in a combined manifest is expected.
+each phase's non-mutating API preflight, including provider input checks.
+Seeing two `preflight_api_access` and `preflight_provider_inputs` steps in a
+combined manifest is expected.
 
 ## Cleanup Semantics
 

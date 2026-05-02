@@ -5,7 +5,8 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 - Plans capture, deploy, and capture-deploy runs before any API mutation.
 - Captures custom images from temporary Linode instances.
 - Deploys temporary validation instances from custom images.
-- Validates requested region, tags, resources, and running status at the API level.
+- Validates requested region, Linode type, image inputs, tags, resources, and
+  running status at the API level.
 - Cleans up temporary resources while preserving custom images as deliverables.
 - Emits redacted, public-safe manifests for review and automation.
 
@@ -148,6 +149,8 @@ environment or approved environment injection.
 - Config values only fill omitted command options; CLI flags override config.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
+- Execute runs verify the requested region, Linode type, and source or deploy
+  image with read-only Linode API calls before resource creation.
 - Custom images are preserved as deliverables.
 - `cleanup` is independently runnable, dry-run by default, and can delete
   expired tagged temporary Linodes only with `--execute`.
@@ -157,7 +160,8 @@ environment or approved environment injection.
 
 - Captures custom images from temporary Linode instances.
 - Deploys temporary validation instances.
-- Validates region, tags, resources, and running status at the API level.
+- Validates region, Linode type, image inputs, tags, resources, and running
+  status at the API level.
 - Cleans up temporary resources.
 
 ## What This Does Not Do
