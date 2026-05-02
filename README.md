@@ -138,15 +138,21 @@ WARNING: This will create and delete temporary Linodes
 Then it runs the known-good smoke config:
 
 ```sh
-linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --execute
+linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --region us-sea --execute
 ```
 
-Run it only when you are ready to create billable temporary Linodes and preserve
-one custom image deliverable:
+The default smoke region is `us-sea`. Run it only when you are ready to create
+billable temporary Linodes and preserve one custom image deliverable:
 
 ```sh
 export LINODE_TOKEN='<your-linode-api-token>'
 SMOKE_EXECUTE=1 make smoke
+```
+
+Override the region explicitly when needed:
+
+```sh
+SMOKE_EXECUTE=1 REGION=us-lax make smoke
 ```
 
 Expected output is the warning followed by a redacted JSON manifest. A successful

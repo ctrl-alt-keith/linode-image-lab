@@ -1,4 +1,5 @@
 PYTHON ?= python3
+REGION ?= us-sea
 export PYTHONPATH := src
 RELEASE_VERSION = $(patsubst v%,%,$(VERSION))
 RELEASE_TAG = v$(RELEASE_VERSION)
@@ -24,7 +25,7 @@ smoke:
 		exit 1; \
 	fi
 	@echo "WARNING: This will create and delete temporary Linodes"
-	linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --execute
+	linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --region "$(REGION)" --execute
 
 check-gh-env:
 	@command -v gh >/dev/null 2>&1 || { echo "Error: GitHub CLI (gh) is required but is not installed." >&2; exit 1; }
