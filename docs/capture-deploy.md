@@ -120,20 +120,25 @@ type, and image availability. This keeps each phase independently safe and
 reusable, so combined manifests may show two `preflight_api_access` and
 `preflight_provider_inputs` steps.
 
-When multiple regions are provided, `capture-deploy --execute` runs the full
-single-region capture-deploy flow once per region, in the order supplied by the
-configuration or CLI. Execution is sequential only; there is no parallelism,
-cross-region dependency graph, scheduler, retry fan-out, or infrastructure
-reconciliation. Each region records its own capture, deploy, validation,
-cleanup, resources, and status under `results.<region>`.
+When multiple regions are provided, `capture-deploy --execute` captures one
+custom image in the first requested region, then deploys that same captured
+image sequentially to each requested region. Execution is sequential only;
+there is no parallelism, cross-region dependency graph, scheduler, retry
+fan-out, infrastructure reconciliation, image replication, or image copying.
+The single capture result is recorded under `capture`, and each deploy attempt
+is recorded under `deploy_results.<region>`.
 
-Multi-region execution continues after a region fails. Cleanup for the failed
-region is attempted before the next region runs, and later regions still get
-their own isolated flow. The top-level manifest reports:
+If capture fails, no deploy regions are attempted and the top-level status is
+`failed`. If capture succeeds, multi-region execution continues after a deploy
+region fails. Cleanup for each temporary deploy Linode is handled by that
+region's deploy run, and later deploy regions still get their own isolated
+flow. After all deploy regions finish, the temporary capture-source Linode is
+cleaned up once and the custom image is preserved as the single deliverable.
+The top-level manifest reports:
 
-- `succeeded` when every region succeeds,
-- `partial` when at least one region succeeds and at least one fails,
-- `failed` when every region fails.
+- `succeeded` when every requested deploy region succeeds,
+- `partial` when at least one deploy region succeeds and at least one fails,
+- `failed` when capture fails or every deploy region fails.
 
 The top-level `summary` lists succeeded and failed regions. If any region
 fails, the CLI still emits the combined manifest and exits non-zero.
@@ -213,9 +218,12 @@ Top-level `resources` and `validation` summarize the whole run. Nested
 `deploy.validation` are phase-specific slices of that same lifecycle.
 
 Multi-region capture-deploy execute manifests expose a top-level `status`,
-`regions`, `results`, and `summary`. Each value in `results` is the existing
-single-region capture-deploy execute manifest for that region, including
-`steps`, `resources`, `validation`, and `cleanup`.
+`regions`, `capture`, `deploy_results`, and `summary`. `capture` is the single
+capture manifest from the first requested region. Each value in
+`deploy_results` is a deploy execute manifest for that requested region,
+including `steps`, `resources`, `validation`, and `cleanup`. The top-level
+multi-region manifest is aggregate-only and does not duplicate nested
+`resources`, `validation`, or `cleanup` fields.
 
 `validation` means provider/API-level checks only: input availability, resource
 state, requested region, required tags, disk presence for capture, and image
