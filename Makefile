@@ -3,7 +3,7 @@ export PYTHONPATH := src
 RELEASE_VERSION = $(patsubst v%,%,$(VERSION))
 RELEASE_TAG = v$(RELEASE_VERSION)
 
-.PHONY: check test security-check check-gh-env release-notes release-check release-publish
+.PHONY: check test security-check smoke check-gh-env release-notes release-check release-publish
 
 check: security-check test
 
@@ -12,6 +12,19 @@ test:
 
 security-check:
 	$(PYTHON) -m linode_image_lab.validation .
+
+smoke:
+	@if [ -z "$${LINODE_TOKEN:-}" ]; then \
+		echo "Error: LINODE_TOKEN is required for make smoke." >&2; \
+		exit 1; \
+	fi
+	@if [ "$(SMOKE_EXECUTE)" != "1" ]; then \
+		echo "Error: SMOKE_EXECUTE=1 is required for make smoke." >&2; \
+		echo "This target is manual-only and creates real Linode resources." >&2; \
+		exit 1; \
+	fi
+	@echo "WARNING: This will create and delete temporary Linodes"
+	linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --execute
 
 check-gh-env:
 	@command -v gh >/dev/null 2>&1 || { echo "Error: GitHub CLI (gh) is required but is not installed." >&2; exit 1; }
