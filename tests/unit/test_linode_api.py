@@ -473,6 +473,40 @@ class LinodeClientTests(unittest.TestCase):
         self.assertIsNone(getattr(requests[0], "data"))
         self.assertEqual(resource, {"linode_id": 123, "deleted": True})
 
+    def test_get_instance_uses_expected_path_and_maps_response(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": 123,
+                    "label": "lil-run-capture",
+                    "region": "us-east",
+                    "status": "running",
+                    "tags": ["project=linode-image-lab"],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.get_instance(123)
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "GET")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/linode/instances/123")
+        self.assertIsNone(getattr(requests[0], "data"))
+        self.assertEqual(
+            resource,
+            {
+                "linode_id": 123,
+                "label": "lil-run-capture",
+                "region": "us-east",
+                "status": "running",
+                "tags": ["project=linode-image-lab"],
+            },
+        )
+
     def test_list_managed_linodes_maps_project_tagged_instances(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         responses = [
