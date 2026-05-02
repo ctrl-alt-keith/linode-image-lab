@@ -9,9 +9,15 @@ from typing import Any
 from .cleanup import CleanupError, cleanup_plan
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
-from .config import ConfigError, command_defaults, load_config
+from .config import (
+    COMMAND_DEFAULT_FIELDS,
+    ConfigError,
+    command_defaults,
+    effective_command_defaults,
+    load_config,
+)
 from .deploy import DeployError, deploy_plan
-from .manifest import create_manifest, serialize_manifest
+from .manifest import PROJECT, create_manifest, serialize_manifest
 from .regions import parse_regions
 
 
@@ -38,6 +44,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="linode-image-lab")
     add_config_arg(parser, dest="global_config")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    config = subparsers.add_parser("config", help="Validate and inspect config defaults.")
+    config_subparsers = config.add_subparsers(dest="config_action", required=True)
+    config_validate = config_subparsers.add_parser(
+        "validate",
+        help="Validate a config file and show effective command defaults.",
+    )
+    add_config_arg(config_validate, dest="command_config")
+    config_validate.add_argument(
+        "--command",
+        dest="target_command",
+        choices=tuple(COMMAND_DEFAULT_FIELDS),
+        required=True,
+        help="Command whose effective defaults should be resolved.",
+    )
+    config_validate.add_argument(
+        "--region",
+        action="append",
+        help="Optional CLI region override to include in effective-defaults resolution.",
+    )
+    config_validate.add_argument("--ttl", help="Optional CLI TTL override to include in resolution.")
+    config_validate.add_argument(
+        "--source-image",
+        help="Optional CLI source image override to include in resolution.",
+    )
+    config_validate.add_argument("--image-id", help="Optional CLI image id override to include in resolution.")
+    config_validate.add_argument(
+        "--type",
+        dest="instance_type",
+        help="Optional CLI Linode type override to include in resolution.",
+    )
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_config_arg(plan, dest="command_config")
@@ -127,6 +164,63 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.instance_type = defaults["type"]
 
 
+def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    path = config_path(args)
+    if path is None:
+        raise ValueError("config validate requires --config PATH")
+
+    config = load_config(path)
+    target_command = args.target_command
+    cli_defaults = config_validation_cli_defaults(args)
+    resolution = effective_command_defaults(config, target_command, cli_defaults=cli_defaults)
+
+    return {
+        "schema_version": 1,
+        "project": PROJECT,
+        "command": "config",
+        "action": "validate",
+        "target_command": target_command,
+        "status": "valid",
+        "valid": True,
+        "dry_run": True,
+        "safety": {
+            "mutates": False,
+            "auth_lookup": "not_attempted",
+        },
+        **resolution,
+    }
+
+
+def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
+    target_command = args.target_command
+    allowed_fields = set(COMMAND_DEFAULT_FIELDS[target_command])
+    values: dict[str, Any] = {}
+
+    candidate_values = {
+        "regions": args.region,
+        "ttl": args.ttl,
+        "source_image": args.source_image,
+        "image_id": args.image_id,
+        "type": args.instance_type,
+    }
+    option_names = {
+        "regions": "--region",
+        "ttl": "--ttl",
+        "source_image": "--source-image",
+        "image_id": "--image-id",
+        "type": "--type",
+    }
+
+    for field, value in candidate_values.items():
+        if value is None:
+            continue
+        if field not in allowed_fields:
+            raise ValueError(f"{option_names[field]} is not supported for {target_command} config defaults")
+        values[field] = value
+
+    return values
+
+
 def config_path(args: argparse.Namespace) -> str | None:
     global_config = getattr(args, "global_config", None)
     command_config = getattr(args, "command_config", None)
@@ -204,8 +298,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        resolve_config_defaults(args)
-        manifest = command_manifest(args)
+        if args.command == "config":
+            manifest = config_validate_manifest(args)
+        else:
+            resolve_config_defaults(args)
+            manifest = command_manifest(args)
     except CaptureError as exc:
         if exc.manifest is not None:
             sys.stdout.write(serialize_manifest(exc.manifest))

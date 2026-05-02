@@ -217,6 +217,138 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["regions"], ["us-west"])
         self.assertEqual(payload["ttl"], "2031-01-01T00:00:00Z")
 
+    def test_config_validate_shows_effective_defaults_and_precedence(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-east"
+            ttl = "2030-01-01T00:00:00Z"
+
+            [capture]
+            regions = ["us-west"]
+            ttl = "2031-01-01T00:00:00Z"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "capture",
+                    "--region",
+                    "eu-central",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["valid"])
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["safety"], {"auth_lookup": "not_attempted", "mutates": False})
+        self.assertEqual(payload["precedence"], ["cli", "[capture]", "[defaults]"])
+        self.assertEqual(
+            payload["effective_defaults"],
+            {
+                "regions": ["eu-central"],
+                "source_image": "linode/alpine3.23",
+                "ttl": "2031-01-01T00:00:00Z",
+                "type": "g6-nanode-1",
+            },
+        )
+        self.assertEqual(
+            payload["sources"],
+            [
+                {"field": "regions", "source": "cli --region"},
+                {"field": "ttl", "source": "[capture].ttl"},
+                {"field": "source_image", "source": "[capture].source_image"},
+                {"field": "type", "source": "[capture].type"},
+            ],
+        )
+
+    def test_config_validate_never_reads_linode_token(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            redirect_stdout(output),
+        ):
+            code = main(["config", "validate", "--config", config_path, "--command", "deploy"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["image_id"], "[REDACTED]")
+        self.assertIn({"field": "image_id", "source": "[deploy].image_id"}, payload["sources"])
+
+    def test_config_validate_rejects_invalid_config_without_command_execution(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-east"
+            LINODE_TOKEN = "not-used"
+            """
+        )
+
+        error = StringIO()
+        with (
+            patch("linode_image_lab.cli.capture_plan", side_effect=AssertionError("command execution")),
+            redirect_stderr(error),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main(["config", "validate", "--config", config_path, "--command", "capture"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must not contain secrets", error.getvalue())
+
+    def test_config_validate_rejects_unsupported_cli_override_for_command(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [cleanup]
+            ttl = "2030-01-01T00:00:00Z"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "cleanup",
+                    "--region",
+                    "us-east",
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--region is not supported for cleanup config defaults", error.getvalue())
+
     def test_unknown_config_key_fails_clearly(self) -> None:
         config_path = self.write_config(
             """

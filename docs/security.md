@@ -12,6 +12,8 @@ non-mutating; capture and deploy execution require explicit opt-in.
 - Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
+- `config validate` validates and reports effective defaults without reading
+  token values, calling Linode, or mutating resources.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
 - Normal stdout and stderr must not print tokens, authorization headers, root
   passwords, SSH keys, cloud-init secrets, or provider resource identifiers.
@@ -30,6 +32,10 @@ keys, root passwords, cloud-init data, or user-data.
 Config loading and validation happen before token lookup. Execute mode and
 `cleanup --discover` still require `LINODE_TOKEN` from the environment or
 approved environment injection.
+
+The `config validate` report uses the same config safety checks and redacted
+serialization as other CLI output. It shows precedence as CLI values, then the
+selected command table, then `[defaults]`.
 
 ## Execute Permissions
 
