@@ -30,6 +30,7 @@ TABLE_FIELDS = {
 }
 COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
 PROHIBITED_KEYS = {
+    "discover",
     "execute",
     "image-label",
     "image_label",

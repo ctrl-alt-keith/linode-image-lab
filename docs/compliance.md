@@ -26,6 +26,9 @@ Before opening a PR:
 - run `make check`,
 - confirm fixtures are sanitized,
 - confirm dry-run commands remain non-mutating,
+- confirm plain `cleanup` does not read `LINODE_TOKEN` or call Linode,
+- confirm read-only cleanup discovery remains limited to explicit
+  `cleanup --discover`,
 - confirm real mutation remains limited to explicit `capture --execute`,
   `deploy --execute`, `capture-deploy --execute`, and `cleanup --execute`,
 - confirm cleanup only targets resources with complete matching tags,

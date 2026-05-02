@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .linode_api import TOKEN_ENV_NAME, LinodeClient, LinodeClientProtocol
+from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import PROJECT, REQUIRED_TAG_KEYS, VALID_COMPONENTS, VALID_MODES, tags_to_dict
 
 
@@ -23,6 +22,7 @@ class CleanupError(ValueError):
 class CleanupOptions:
     run_id: str | None = None
     ttl: str | None = None
+    discover: bool = False
     execute: bool = False
 
 
@@ -72,27 +72,27 @@ def cleanup_plan(
     *,
     run_id: str | None = None,
     ttl: str | None = None,
+    discover: bool = False,
     execute: bool = False,
     client: LinodeClientProtocol | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    options = CleanupOptions(run_id=run_id, ttl=ttl, execute=execute)
+    options = CleanupOptions(run_id=run_id, ttl=ttl, discover=discover, execute=execute)
     manifest = base_cleanup_manifest(options)
-    if not execute and client is None:
-        if TOKEN_ENV_NAME not in os.environ:
-            manifest["message"] = "cleanup is non-mutating; set LINODE_TOKEN to preview discovered Linodes"
-            manifest["discovery"] = {"status": "not_requested", "reason": "token_not_provided"}
-            return manifest
+    if not discover and not execute:
+        manifest["message"] = "cleanup is non-mutating; use --discover to list Linodes or --execute to delete expired Linodes"
+        manifest["discovery"] = {"status": "not_requested"}
+        return manifest
 
-    run_client = client or LinodeClient.from_env(command="cleanup")
+    option = "--execute" if execute else "--discover"
+    run_client = client or LinodeClient.from_env(command="cleanup", option=option)
     manifest["steps"] = []
     manifest["cleanup"] = {"status": "running", "deleted": [], "preserved": []}
 
     try:
-        if execute:
-            append_step(manifest, "preflight_api_access", mutates=False, status="running")
-            run_client.preflight()
-            finish_step(manifest, "preflight_api_access")
+        append_step(manifest, "preflight_api_access", mutates=False, status="running")
+        run_client.preflight()
+        finish_step(manifest, "preflight_api_access")
 
         append_step(manifest, "discover_managed_linodes", mutates=False, status="running")
         resources = run_client.list_managed_linodes()
@@ -105,7 +105,7 @@ def cleanup_plan(
             item["resource"] for item in assessments if item["action"] == "preserve"
         ]
 
-        if not execute:
+        if discover:
             manifest["cleanup"]["status"] = "previewed"
             manifest["status"] = "planned"
             manifest["discovery"] = {"status": "completed"}
@@ -135,7 +135,7 @@ def cleanup_plan(
         manifest["status"] = "failed"
         manifest["cleanup"]["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
-        message = "cleanup --execute failed" if execute else "cleanup dry-run failed"
+        message = "cleanup --execute failed" if execute else "cleanup --discover failed"
         raise CleanupError(message, manifest) from exc
 
 
@@ -149,13 +149,21 @@ def base_cleanup_manifest(options: CleanupOptions) -> dict[str, Any]:
         "regions": [],
         "ttl": options.ttl,
         "dry_run": not options.execute,
-        "execution_mode": "execute" if options.execute else "dry-run",
-        "status": "running" if options.execute else "planned",
+        "execution_mode": cleanup_execution_mode(options),
+        "status": "running" if options.execute or options.discover else "planned",
         "filters": {"run_id": options.run_id},
         "resources": [],
         "cleanup_candidates": [],
         "cleanup": {"status": "not_started", "deleted": [], "preserved": []},
     }
+
+
+def cleanup_execution_mode(options: CleanupOptions) -> str:
+    if options.execute:
+        return "execute"
+    if options.discover:
+        return "discover"
+    return "dry-run"
 
 
 def assess_cleanup(

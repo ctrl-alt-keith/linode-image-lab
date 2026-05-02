@@ -12,6 +12,7 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 ## Quick Start
 
 Set `LINODE_TOKEN` first; execute mode reads it from the environment.
+Plain dry-run commands do not need it.
 
 ```sh
 python3 -m venv .venv
@@ -64,11 +65,9 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 
 ## Authentication
 
-`LINODE_TOKEN` is required when `--execute` is used. Dry-run capture, deploy,
-and capture-deploy commands do not read the token, call Linode, or mutate
-resources. Dry-run `cleanup` can use `LINODE_TOKEN` for read-only discovery
-when the token is available; it still never deletes resources without
-`--execute`.
+`LINODE_TOKEN` is required when `--execute` is used and when `cleanup
+--discover` is used. Dry-run commands, including plain `cleanup`, do not read
+the token, call Linode, or mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -103,9 +102,10 @@ Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 on the command.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
-values, passwords, SSH keys, cloud-init data, `execute`, preservation flags, or
-run id fields. `--execute` must still be passed explicitly, and `LINODE_TOKEN`
-must still come from the environment or approved environment injection.
+values, passwords, SSH keys, cloud-init data, `execute`, `discover`,
+preservation flags, or run id fields. `--execute` or `cleanup --discover` must
+still be passed explicitly, and `LINODE_TOKEN` must still come from the
+environment or approved environment injection.
 
 ## Behavior Clarifications
 
@@ -179,16 +179,16 @@ Preview or execute tag-scoped cleanup:
 
 ```sh
 linode-image-lab cleanup
-LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup
+LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup --discover
 LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup --execute
 ```
 
-`cleanup` without `--execute` never deletes resources. When `LINODE_TOKEN` is
-available, it performs read-only Linode discovery and reports expired eligible
-Linodes in `cleanup_candidates`; without a token, it emits the non-mutating
-manifest shape only. `cleanup --execute` requires `LINODE_TOKEN`, lists managed
+Plain `cleanup` never reads `LINODE_TOKEN`, calls Linode, or deletes resources.
+`cleanup --discover` requires `LINODE_TOKEN`, performs read-only Linode
+discovery, and reports expired eligible Linodes in `cleanup_candidates` without
+deleting them. `cleanup --execute` requires `LINODE_TOKEN`, lists managed
 Linodes, and deletes only expired Linodes carrying the complete required tag
-set. Use `--run-id` to restrict selection to one run.
+set. Use `--run-id` to restrict discovery or deletion to one run.
 
 ## Required Tags
 

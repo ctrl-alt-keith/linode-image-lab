@@ -157,12 +157,12 @@ for that resource because preservation was requested or tags did not match.
 finish. `failed` means cleanup did not complete. Preserved entries include a
 `reason`; the custom image uses `deliverable`.
 
-Standalone `cleanup` is dry-run by default. Without `LINODE_TOKEN`, it emits a
-non-mutating manifest preview without API discovery. With `LINODE_TOKEN`, dry
-run performs read-only managed Linode discovery and reports expired eligible
-Linodes in `cleanup_candidates` without deleting them. `cleanup --execute`
-requires `LINODE_TOKEN`, performs the same discovery, and deletes only expired
-Linodes carrying all required managed tags:
+Standalone `cleanup` is dry-run by default. Plain `cleanup` emits a
+non-mutating manifest preview and never reads `LINODE_TOKEN` or calls Linode.
+`cleanup --discover` requires `LINODE_TOKEN`, performs read-only managed Linode
+discovery, and reports expired eligible Linodes in `cleanup_candidates` without
+deleting them. `cleanup --execute` requires `LINODE_TOKEN`, performs the same
+discovery, and deletes only expired Linodes carrying all required managed tags:
 
 - `project=linode-image-lab`
 - `run_id=...`

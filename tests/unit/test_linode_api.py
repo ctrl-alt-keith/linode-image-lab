@@ -47,6 +47,10 @@ class LinodeClientTests(unittest.TestCase):
         with self.assertRaisesRegex(LinodeTokenError, "LINODE_TOKEN"):
             LinodeClient.from_env({})
 
+    def test_from_env_missing_token_names_requested_option(self) -> None:
+        with self.assertRaisesRegex(LinodeTokenError, "cleanup --discover"):
+            LinodeClient.from_env({}, command="cleanup", option="--discover")
+
     def test_preflight_issues_profile_and_grants_requests(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, timeout_seconds=7)
         responses = [FakeHTTPResponse({}), FakeHTTPResponse(b"")]

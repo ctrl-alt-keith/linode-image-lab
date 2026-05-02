@@ -16,12 +16,14 @@ class FakeCleanupClient:
     def __init__(self, resources: list[dict[str, object]]) -> None:
         self.resources = resources
         self.preflight_count = 0
+        self.list_count = 0
         self.deleted: list[int] = []
 
     def preflight(self) -> None:
         self.preflight_count += 1
 
     def list_managed_linodes(self) -> list[dict[str, object]]:
+        self.list_count += 1
         return list(self.resources)
 
     def delete_instance(self, linode_id: int) -> dict[str, object]:
@@ -58,17 +60,31 @@ class CleanupSelectionTests(unittest.TestCase):
 
         self.assertEqual([resource["id"] for resource in selected], ["resource-expired"])
 
-    def test_dry_run_discovers_but_does_not_delete(self) -> None:
+    def test_plain_cleanup_does_not_discover_or_delete(self) -> None:
         client = FakeCleanupClient([linode_resource()])
 
         manifest = cleanup_plan(client=client, now=NOW)
 
         self.assertTrue(manifest["dry_run"])
         self.assertEqual(manifest["execution_mode"], "dry-run")
+        self.assertEqual(manifest["cleanup"]["status"], "not_started")
+        self.assertEqual(manifest["cleanup_candidates"], [])
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(client.preflight_count, 0)
+        self.assertEqual(client.list_count, 0)
+
+    def test_discover_lists_but_does_not_delete(self) -> None:
+        client = FakeCleanupClient([linode_resource()])
+
+        manifest = cleanup_plan(discover=True, client=client, now=NOW)
+
+        self.assertTrue(manifest["dry_run"])
+        self.assertEqual(manifest["execution_mode"], "discover")
         self.assertEqual(manifest["cleanup"]["status"], "previewed")
         self.assertEqual(len(manifest["cleanup_candidates"]), 1)
         self.assertEqual(client.deleted, [])
-        self.assertEqual(client.preflight_count, 0)
+        self.assertEqual(client.preflight_count, 1)
+        self.assertEqual(client.list_count, 1)
 
     def test_execute_deletes_expired_tagged_linode(self) -> None:
         client = FakeCleanupClient([linode_resource(linode_id=456)])

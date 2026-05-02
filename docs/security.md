@@ -8,10 +8,8 @@ non-mutating; capture and deploy execution require explicit opt-in.
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
 - The CLI reads `LINODE_TOKEN` for `capture --execute`, `deploy --execute`,
-  `capture-deploy --execute`, and `cleanup --execute`.
-- `cleanup` without `--execute` may read `LINODE_TOKEN` only to perform
-  read-only discovery for a deletion preview. Other dry-run commands do not
-  read token values.
+  `capture-deploy --execute`, `cleanup --discover`, and `cleanup --execute`.
+- Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
 - Redaction utilities sanitize sensitive keys and token-like text before output.
@@ -26,17 +24,18 @@ when they appear in a table that is not used by the selected command.
 
 Supported config values are limited to region defaults, TTL, source image,
 existing custom image id, and Linode type. Config cannot set `--execute`,
-preservation flags, run ids, image labels, tokens, passwords, SSH keys, root
-passwords, cloud-init data, or user-data.
+`--discover`, preservation flags, run ids, image labels, tokens, passwords, SSH
+keys, root passwords, cloud-init data, or user-data.
 
-Config loading and validation happen before token lookup. Execute mode still
-requires `LINODE_TOKEN` from the environment or approved environment injection.
+Config loading and validation happen before token lookup. Execute mode and
+`cleanup --discover` still require `LINODE_TOKEN` from the environment or
+approved environment injection.
 
 ## Execute Permissions
 
-`capture --execute`, `deploy --execute`, `capture-deploy --execute`, and
-`cleanup --execute` need a personal access token or equivalent OAuth access
-that can:
+`capture --execute`, `deploy --execute`, `capture-deploy --execute`, `cleanup
+--discover`, and `cleanup --execute` need a personal access token or equivalent
+OAuth access that can:
 
 - read the current profile for preflight,
 - create, read, shut down, and delete temporary Linodes,
@@ -68,9 +67,9 @@ loss prevention system.
 ## Mutation Safety
 
 `plan` is dry-run only. `capture`, `deploy`, `capture-deploy`, and `cleanup`
-are dry-run unless `--execute` is provided. `cleanup` without `--execute` is
-non-mutating; when `LINODE_TOKEN` is available, it may call Linode only to list
-managed Linodes for a preview.
+are dry-run unless `--execute` is provided. Plain `cleanup` is a local manifest
+preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
+--discover` is the explicit read-only provider discovery path.
 
 `capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
 before mutation if required options or `LINODE_TOKEN` are missing. They perform

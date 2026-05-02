@@ -90,9 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy validation Linode after execution.",
     )
 
-    cleanup = subparsers.add_parser("cleanup", help="Plan or execute tag-scoped cleanup.")
+    cleanup = subparsers.add_parser("cleanup", help="Plan, discover, or execute tag-scoped cleanup.")
     add_config_arg(cleanup, dest="command_config")
-    cleanup.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
+    cleanup_mode = cleanup.add_mutually_exclusive_group()
+    cleanup_mode.add_argument("--discover", action="store_true", help="Opt into read-only Linode discovery.")
+    cleanup_mode.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
     cleanup.add_argument("--run-id", help="Optional run id filter for cleanup selection.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
@@ -191,6 +193,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         return cleanup_plan(
             run_id=args.run_id,
             ttl=args.ttl,
+            discover=args.discover,
             execute=args.execute,
         )
 

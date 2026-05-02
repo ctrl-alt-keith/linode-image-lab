@@ -75,11 +75,17 @@ class LinodeClient:
     max_wait_seconds: float = 900
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None, *, command: str = "capture") -> "LinodeClient":
+    def from_env(
+        cls,
+        env: dict[str, str] | None = None,
+        *,
+        command: str = "capture",
+        option: str = "--execute",
+    ) -> "LinodeClient":
         values = env if env is not None else os.environ
         token = values.get(TOKEN_ENV_NAME)
         if not token:
-            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for {command} --execute")
+            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for {command} {option}")
         return cls(token=token)
 
     def preflight(self) -> None:

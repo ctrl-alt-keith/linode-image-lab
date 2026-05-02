@@ -273,6 +273,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("key is not supported: execute", error.getvalue())
 
+    def test_discover_in_config_is_rejected(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [cleanup]
+            discover = "true"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["--config", config_path, "cleanup"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("key is not supported: discover", error.getvalue())
+
     def test_config_never_satisfies_linode_token(self) -> None:
         config_path = self.write_config(
             """
@@ -301,6 +318,29 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("LINODE_TOKEN is required for cleanup --execute", error.getvalue())
+
+    def test_cleanup_discover_requires_linode_token(self) -> None:
+        error = StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                main(["cleanup", "--discover"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("LINODE_TOKEN is required for cleanup --discover", error.getvalue())
+
+    def test_cleanup_plain_does_not_require_linode_token(self) -> None:
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.cleanup.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            redirect_stdout(output),
+        ):
+            code = main(["cleanup"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["execution_mode"], "dry-run")
+        self.assertEqual(payload["discovery"]["status"], "not_requested")
 
     def test_multi_region_config_is_accepted_for_dry_run(self) -> None:
         config_path = self.write_config(

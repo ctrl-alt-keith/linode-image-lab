@@ -159,12 +159,13 @@ proceeds only when the resource has all required tags matching the current run.
 If tags are missing or do not match, cleanup preserves the resource and records
 `reason=tag_mismatch`.
 
-Standalone `cleanup` is also dry-run by default. With `LINODE_TOKEN`, the dry
-run lists managed Linodes and reports expired eligible resources without
-deleting them. `cleanup --execute` requires `LINODE_TOKEN` and deletes only
-expired temporary Linodes with the complete required tag set. It does not delete
-custom images, untagged resources, or resources with malformed or unexpired TTL
-values.
+Standalone `cleanup` is also dry-run by default. Plain `cleanup` emits a local
+manifest preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
+--discover` requires `LINODE_TOKEN`, lists managed Linodes, and reports expired
+eligible resources without deleting them. `cleanup --execute` requires
+`LINODE_TOKEN` and deletes only expired temporary Linodes with the complete
+required tag set. It does not delete custom images, untagged resources, or
+resources with malformed or unexpired TTL values.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
 and `preserved`. `deleted` lists temporary Linodes removed after required tags
