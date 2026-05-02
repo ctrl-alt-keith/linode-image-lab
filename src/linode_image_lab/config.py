@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
+from .regions import parse_regions
+
 
 class ConfigError(ValueError):
     """Raised when config cannot safely provide execution defaults."""
@@ -29,6 +31,20 @@ TABLE_FIELDS = {
     "cleanup": {"ttl"},
 }
 COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
+COMMAND_DEFAULT_FIELDS = {
+    "plan": ("regions", "ttl"),
+    "capture": ("regions", "ttl", "source_image", "type"),
+    "deploy": ("regions", "ttl", "image_id", "type"),
+    "capture-deploy": ("regions", "ttl", "source_image", "type"),
+    "cleanup": ("ttl",),
+}
+CLI_SOURCE_LABELS = {
+    "regions": "cli --region",
+    "ttl": "cli --ttl",
+    "source_image": "cli --source-image",
+    "image_id": "cli --image-id",
+    "type": "cli --type",
+}
 PROHIBITED_KEYS = {
     "discover",
     "execute",
@@ -141,3 +157,86 @@ def command_defaults(config: dict[str, Any], command: str) -> dict[str, Any]:
     if command in COMMAND_TABLES:
         values.update(config.get(command, {}))
     return values
+
+
+def effective_command_defaults(
+    config: dict[str, Any],
+    command: str,
+    *,
+    cli_defaults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return safe, source-labeled defaults for a command.
+
+    The result is suitable for non-mutating config inspection. Values are
+    resolved with the same precedence used by command execution:
+    CLI-provided values, then command tables, then [defaults].
+    """
+    if command not in COMMAND_DEFAULT_FIELDS:
+        raise ConfigError(f"unsupported command for config validation: {command}")
+
+    cli_values = cli_defaults or {}
+    effective_defaults: dict[str, Any] = {}
+    sources: list[dict[str, str]] = []
+
+    for field in COMMAND_DEFAULT_FIELDS[command]:
+        resolved = resolve_default_field(config, command, field, cli_values)
+        if resolved is None:
+            continue
+        value, source = resolved
+        effective_defaults[field] = value
+        sources.append({"field": field, "source": source})
+
+    return {
+        "precedence": precedence_labels(command),
+        "effective_defaults": effective_defaults,
+        "sources": sources,
+    }
+
+
+def precedence_labels(command: str) -> list[str]:
+    labels = ["cli"]
+    if command in COMMAND_TABLES:
+        labels.append(f"[{command}]")
+    labels.append("[defaults]")
+    return labels
+
+
+def resolve_default_field(
+    config: dict[str, Any],
+    command: str,
+    field: str,
+    cli_values: dict[str, Any],
+) -> tuple[Any, str] | None:
+    if field in cli_values:
+        return normalize_default_value(field, cli_values[field]), CLI_SOURCE_LABELS[field]
+
+    command_values = config.get(command, {}) if command in COMMAND_TABLES else {}
+    resolved = resolve_table_field(command_values, field, f"[{command}]")
+    if resolved is not None:
+        return resolved
+
+    return resolve_table_field(config.get("defaults", {}), field, "[defaults]")
+
+
+def resolve_table_field(table: dict[str, Any], field: str, label: str) -> tuple[Any, str] | None:
+    if field == "regions":
+        if "regions" in table:
+            return normalize_default_value(field, table["regions"]), f"{label}.regions"
+        if "region" in table:
+            return normalize_default_value(field, [table["region"]]), f"{label}.region"
+        return None
+
+    if field in table:
+        return table[field], f"{label}.{field}"
+    return None
+
+
+def normalize_default_value(field: str, value: Any) -> Any:
+    if field == "regions":
+        regions = parse_regions(value)
+        if not regions:
+            raise ConfigError(
+                "config validate requires at least one non-empty --region when --region is provided"
+            )
+        return regions
+    return value

@@ -73,6 +73,13 @@ defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`, and
 command-specific config takes precedence over `[defaults]`, and existing
 generated defaults remain last.
 
+`config validate --config PATH --command COMMAND` provides the non-mutating
+inspection path for config files. It validates the TOML schema and safety rules,
+then emits redacted JSON containing the selected command's `precedence`,
+`effective_defaults`, and `sources`. Supported CLI default flags passed to
+`config validate` are included only for precedence inspection; the command does
+not execute workflows, call Linode, or read `LINODE_TOKEN`.
+
 Supported config values are intentionally narrow:
 
 - `region` or `regions`,

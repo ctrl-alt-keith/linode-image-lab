@@ -128,12 +128,20 @@ defaults. Config values fill omitted CLI flags; explicit CLI flags always win.
 ```sh
 linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy
 linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --execute
+linode-image-lab config validate --config examples/config/capture-deploy-smoke.toml --command capture-deploy
 ```
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, and `type`, depending
 on the command.
+
+`config validate` parses the TOML file, applies the same safety checks as
+command execution, and emits a non-mutating JSON report with `precedence`,
+`effective_defaults`, and `sources`. Precedence is explicit CLI values first,
+then the selected command table, then `[defaults]`. You can pass supported CLI
+default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
+`--type` to preview how they override the config for the selected command.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, SSH keys, cloud-init data, `execute`, `discover`,
