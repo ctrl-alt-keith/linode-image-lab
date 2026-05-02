@@ -15,6 +15,8 @@ from .manifest import PROJECT, tags_to_dict
 
 TOKEN_ENV_NAME = "LINODE_TOKEN"
 DEFAULT_API_BASE_URL = "https://api.linode.com/v4"
+DEFAULT_RETRY_BACKOFF_SECONDS = (0.5, 1.0)
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class LinodeApiError(ValueError):
@@ -83,6 +85,9 @@ class LinodeClient:
     timeout_seconds: float = 30
     poll_interval_seconds: float = 5
     max_wait_seconds: float = 900
+    max_retry_attempts: int = 3
+    retry_backoff_seconds: tuple[float, ...] = DEFAULT_RETRY_BACKOFF_SECONDS
+    retry_events: list[dict[str, Any]] = field(default_factory=list, repr=False, compare=False)
 
     @classmethod
     def from_env(
@@ -99,8 +104,8 @@ class LinodeClient:
         return cls(token=token)
 
     def preflight(self) -> None:
-        self._request("GET", "/profile")
-        self._request("GET", "/profile/grants", allow_empty=True)
+        self._request("GET", "/profile", retry=True, operation="preflight_profile")
+        self._request("GET", "/profile/grants", allow_empty=True, retry=True, operation="preflight_grants")
 
     def preflight_region(self, region: str) -> None:
         escaped = quote(region, safe="")
@@ -140,7 +145,7 @@ class LinodeClient:
         return self._wait_for_instance_status(linode_id, {"running"})
 
     def list_disks(self, linode_id: int) -> list[dict[str, Any]]:
-        response = self._request("GET", f"/linode/instances/{linode_id}/disks")
+        response = self._request("GET", f"/linode/instances/{linode_id}/disks", retry=True, operation="list_disks")
         disks = response.get("data", []) if isinstance(response, dict) else []
         return [disk for disk in disks if isinstance(disk, dict)]
 
@@ -174,7 +179,7 @@ class LinodeClient:
         escaped = quote(image_id, safe="")
 
         def current() -> dict[str, Any]:
-            response = self._request("GET", f"/images/{escaped}")
+            response = self._request("GET", f"/images/{escaped}", retry=True, operation="poll_image")
             return self._image_resource(response)
 
         return self._wait_until(current, lambda resource: resource.get("status") == "available")
@@ -184,7 +189,7 @@ class LinodeClient:
         page = 1
         while True:
             query = urlencode({"page": page, "page_size": 100})
-            response = self._request("GET", f"/linode/instances?{query}")
+            response = self._request("GET", f"/linode/instances?{query}", retry=True, operation="list_managed_linodes")
             data = response.get("data", []) if isinstance(response, dict) else []
             for item in data:
                 if not isinstance(item, dict):
@@ -200,12 +205,12 @@ class LinodeClient:
             page += 1
 
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
-        self._request("DELETE", f"/linode/instances/{linode_id}")
+        self._request("DELETE", f"/linode/instances/{linode_id}", retry=True, operation="delete_instance")
         return {"linode_id": linode_id, "deleted": True}
 
     def _preflight_resource(self, path: str, unavailable_message: str) -> None:
         try:
-            self._request("GET", path)
+            self._request("GET", path, retry=True, operation="preflight_resource")
         except LinodeTokenError:
             raise
         except LinodeApiError as exc:
@@ -213,7 +218,7 @@ class LinodeClient:
 
     def _wait_for_instance_status(self, linode_id: int, statuses: set[str]) -> dict[str, Any]:
         def current() -> dict[str, Any]:
-            response = self._request("GET", f"/linode/instances/{linode_id}")
+            response = self._request("GET", f"/linode/instances/{linode_id}", retry=True, operation="poll_instance")
             return self._instance_resource(response)
 
         return self._wait_until(current, lambda resource: str(resource.get("status")) in statuses)
@@ -239,28 +244,53 @@ class LinodeClient:
         payload: dict[str, Any] | None = None,
         *,
         allow_empty: bool = False,
+        retry: bool = False,
+        operation: str | None = None,
     ) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self.api_base_url}{path}",
-            data=body,
-            method=method,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
-        )
+        attempts = self._retry_attempt_limit(retry)
+        for attempt in range(1, attempts + 1):
+            request = Request(
+                f"{self.api_base_url}{path}",
+                data=body,
+                method=method,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                },
+            )
 
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                text = response.read().decode("utf-8")
-        except HTTPError as exc:
-            if exc.code in {401, 403}:
-                raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API") from exc
-            raise LinodeApiError(f"Linode API request failed with status {exc.code}") from exc
-        except OSError as exc:
-            raise LinodeApiError("Linode API request failed") from exc
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    text = response.read().decode("utf-8")
+                break
+            except HTTPError as exc:
+                if exc.code in {401, 403}:
+                    raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API") from exc
+                if self._should_retry_status(exc.code, attempt=attempt, attempts=attempts):
+                    self._record_retry_event(
+                        method=method,
+                        operation=operation,
+                        attempt=attempt,
+                        attempts=attempts,
+                        reason=f"status_{exc.code}",
+                    )
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise LinodeApiError(self._failure_message(f"Linode API request failed with status {exc.code}", attempt)) from exc
+            except OSError as exc:
+                if attempt < attempts:
+                    self._record_retry_event(
+                        method=method,
+                        operation=operation,
+                        attempt=attempt,
+                        attempts=attempts,
+                        reason=exc.__class__.__name__,
+                    )
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise LinodeApiError(self._failure_message("Linode API request failed", attempt)) from exc
 
         if not text:
             return {} if allow_empty else {}
@@ -268,6 +298,53 @@ class LinodeClient:
         if isinstance(parsed, dict):
             return parsed
         raise LinodeApiError("Linode API returned an unexpected response")
+
+    def consume_retry_events(self) -> list[dict[str, Any]]:
+        events = [dict(event) for event in self.retry_events]
+        self.retry_events.clear()
+        return events
+
+    def _retry_attempt_limit(self, retry: bool) -> int:
+        if not retry:
+            return 1
+        return max(1, self.max_retry_attempts)
+
+    @staticmethod
+    def _should_retry_status(status: int, *, attempt: int, attempts: int) -> bool:
+        return status in RETRYABLE_STATUS_CODES and attempt < attempts
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        if not self.retry_backoff_seconds:
+            return
+        delay = self.retry_backoff_seconds[min(attempt - 1, len(self.retry_backoff_seconds) - 1)]
+        if delay > 0:
+            time.sleep(delay)
+
+    def _record_retry_event(
+        self,
+        *,
+        method: str,
+        operation: str | None,
+        attempt: int,
+        attempts: int,
+        reason: str,
+    ) -> None:
+        self.retry_events.append(
+            {
+                "operation": operation or "linode_api_request",
+                "method": method,
+                "attempt": attempt,
+                "next_attempt": attempt + 1,
+                "max_attempts": attempts,
+                "reason": reason,
+            }
+        )
+
+    @staticmethod
+    def _failure_message(message: str, attempt: int) -> str:
+        if attempt <= 1:
+            return message
+        return f"{message} after {attempt} attempts"
 
     @staticmethod
     def _instance_resource(response: dict[str, Any]) -> dict[str, Any]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 from urllib.error import HTTPError
 
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient, LinodePreflightError, LinodeTokenError
@@ -96,7 +96,7 @@ class LinodeClientTests(unittest.TestCase):
         )
 
     def test_provider_preflight_failure_uses_sanitized_message(self) -> None:
-        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, retry_backoff_seconds=())
 
         with patch(
             "linode_image_lab.linode_api.urlopen",
@@ -108,6 +108,96 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "requested image is unavailable")
         self.assertNotIn("private/789", str(raised.exception))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
+
+    def test_read_retries_transient_http_failures_with_deterministic_backoff(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=3,
+            retry_backoff_seconds=(1.0, 2.0),
+        )
+        responses: list[FakeHTTPResponse | HTTPError] = [
+            self.http_error(429, "rate limited"),
+            self.http_error(500, "server failed"),
+            FakeHTTPResponse({"data": [{"id": 456, "label": "root"}]}),
+        ]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            response = responses.pop(0)
+            if isinstance(response, HTTPError):
+                raise response
+            return response
+
+        with (
+            patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen),
+            patch("linode_image_lab.linode_api.time.sleep") as sleep,
+        ):
+            disks = client.list_disks(123)
+
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET", "GET"])
+        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/linode/instances/123/disks"] * 3)
+        self.assertEqual(disks, [{"id": 456, "label": "root"}])
+        self.assertEqual(sleep.call_args_list, [call(1.0), call(2.0)])
+        self.assertEqual(
+            client.consume_retry_events(),
+            [
+                {
+                    "operation": "list_disks",
+                    "method": "GET",
+                    "attempt": 1,
+                    "next_attempt": 2,
+                    "max_attempts": 3,
+                    "reason": "status_429",
+                },
+                {
+                    "operation": "list_disks",
+                    "method": "GET",
+                    "attempt": 2,
+                    "next_attempt": 3,
+                    "max_attempts": 3,
+                    "reason": "status_500",
+                },
+            ],
+        )
+
+    def test_delete_instance_retries_transient_network_failure(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=2,
+            retry_backoff_seconds=(),
+        )
+        responses: list[FakeHTTPResponse | OSError] = [OSError("network unavailable"), FakeHTTPResponse({})]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            response = responses.pop(0)
+            if isinstance(response, OSError):
+                raise response
+            return response
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.delete_instance(123)
+
+        self.assertEqual([request.get_method() for request in requests], ["DELETE", "DELETE"])
+        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/linode/instances/123"] * 2)
+        self.assertEqual(resource, {"linode_id": 123, "deleted": True})
+        self.assertEqual(
+            client.consume_retry_events(),
+            [
+                {
+                    "operation": "delete_instance",
+                    "method": "DELETE",
+                    "attempt": 1,
+                    "next_attempt": 2,
+                    "max_attempts": 2,
+                    "reason": "OSError",
+                }
+            ],
+        )
 
     def test_create_instance_sends_expected_payload_and_maps_response(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
@@ -162,6 +252,35 @@ class LinodeClientTests(unittest.TestCase):
                 "tags": ["project=linode-image-lab"],
             },
         )
+
+    def test_create_instance_does_not_retry_transient_failure(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=3,
+            retry_backoff_seconds=(),
+        )
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            raise self.http_error(500, "server failed")
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(LinodeApiError) as raised:
+                client.create_instance(
+                    region="us-east",
+                    source_image="linode/debian12",
+                    instance_type="g6-nanode-1",
+                    label="lil-run-source",
+                    tags=["project=linode-image-lab"],
+                    root_password="generated-" + "root-pass",
+                )
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "POST")
+        self.assertEqual(str(raised.exception), "Linode API request failed with status 500")
+        self.assertEqual(client.consume_retry_events(), [])
 
     def test_capture_image_sends_expected_payload_and_maps_response(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
@@ -363,7 +482,7 @@ class LinodeClientTests(unittest.TestCase):
                         client.preflight()
 
     def test_non_auth_failure_maps_to_api_error_without_token_value(self) -> None:
-        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, retry_backoff_seconds=())
 
         with patch(
             "linode_image_lab.linode_api.urlopen",
@@ -374,17 +493,17 @@ class LinodeClientTests(unittest.TestCase):
 
         self.assertNotIsInstance(raised.exception, LinodeTokenError)
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
-        self.assertEqual(str(raised.exception), "Linode API request failed with status 500")
+        self.assertEqual(str(raised.exception), "Linode API request failed with status 500 after 3 attempts")
 
     def test_network_failure_maps_to_api_error_without_token_value(self) -> None:
-        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, retry_backoff_seconds=())
 
         with patch("linode_image_lab.linode_api.urlopen", side_effect=OSError("network unavailable")):
             with self.assertRaises(LinodeApiError) as raised:
                 client.preflight()
 
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
-        self.assertEqual(str(raised.exception), "Linode API request failed")
+        self.assertEqual(str(raised.exception), "Linode API request failed after 3 attempts")
 
 
 if __name__ == "__main__":

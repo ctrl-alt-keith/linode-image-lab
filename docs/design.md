@@ -43,6 +43,18 @@ cleanup as a first-class outcome.
 - `redaction.py` owns recursive output sanitization.
 - `linode_api.py` owns the mockable Linode client boundary.
 
+## Linode API Retry Boundary
+
+The Linode API client retries only safe operation classes: non-mutating GET
+preflight reads, polling GET reads, list/read validation calls, managed Linode
+discovery, and cleanup DELETE attempts for already-selected tagged temporary
+Linodes. Retries are bounded, use deterministic backoff without jitter, and
+record public-safe retry event metadata without tokens or provider identifiers.
+
+Create-instance, image-create, shutdown, and other mutation requests remain
+single-attempt so transient failures cannot create duplicate resources or repeat
+unsafe state transitions.
+
 ## Manifest Foundation
 
 Manifests are plain JSON-compatible dictionaries. They include schema version,

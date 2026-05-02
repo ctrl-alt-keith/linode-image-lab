@@ -114,7 +114,7 @@ def execute_deploy(
     try:
         append_step(manifest, "preflight_api_access", mutates=False, status="running")
         run_client.preflight()
-        finish_step(manifest, "preflight_api_access")
+        finish_step(manifest, "preflight_api_access", client=run_client)
 
         tags = list(manifest["tags"])
         region = options.regions[0]
@@ -126,7 +126,7 @@ def execute_deploy(
         run_client.preflight_region(region)
         run_client.preflight_instance_type(instance_type)
         run_client.preflight_image(image_id)
-        finish_step(manifest, "preflight_provider_inputs")
+        finish_step(manifest, "preflight_provider_inputs", client=run_client)
 
         append_step(manifest, "create_deploy_instance", mutates=True, status="running")
         deploy_instance = run_client.create_instance(
@@ -140,7 +140,7 @@ def execute_deploy(
         deploy_instance["resource_type"] = "linode"
         manifest["deploy_instance"] = dict(deploy_instance)
         manifest["resources"].append(dict(deploy_instance))
-        finish_step(manifest, "create_deploy_instance")
+        finish_step(manifest, "create_deploy_instance", client=run_client)
 
         append_step(manifest, "wait_deploy_instance_ready", mutates=False, status="running")
         deploy_instance = merge_resource(
@@ -149,7 +149,7 @@ def execute_deploy(
         )
         manifest["deploy_instance"] = dict(deploy_instance)
         manifest["resources"][0] = dict(deploy_instance)
-        finish_step(manifest, "wait_deploy_instance_ready")
+        finish_step(manifest, "wait_deploy_instance_ready", client=run_client)
 
         append_step(manifest, "validate_deploy_instance_api", mutates=False, status="running")
         manifest["validation"] = start_validation(DEPLOY_VALIDATION_CHECKS)
@@ -169,7 +169,7 @@ def execute_deploy(
             lambda: validate_required_tags(deploy_instance, required_tags=tags),
         )
         finish_validation(manifest["validation"])
-        finish_step(manifest, "validate_deploy_instance_api")
+        finish_step(manifest, "validate_deploy_instance_api", client=run_client)
 
         if options.defer_cleanup:
             manifest["cleanup"] = {"status": "deferred", "deleted": [], "preserved": []}
@@ -184,7 +184,7 @@ def execute_deploy(
         manifest["status"] = "succeeded"
         return manifest
     except Exception as exc:
-        mark_running_step_failed(manifest)
+        mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
         if deploy_instance is not None and not cleanup_started(manifest):
@@ -197,7 +197,7 @@ def execute_deploy(
                     required_tags=list(manifest["tags"]),
                 )
             except Exception:
-                mark_running_step_failed(manifest)
+                mark_running_step_failed(manifest, client=run_client)
                 manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
         if manifest.get("validation", {}).get("status") == "running":
             manifest["validation"]["status"] = "failed"
@@ -248,7 +248,7 @@ def cleanup_deploy_instance(
             {"resource_type": "linode", "linode_id": deploy_instance.get("linode_id"), "reason": "tag_mismatch"}
         )
     manifest["cleanup"] = cleanup
-    finish_step(manifest, "cleanup_deploy_instance")
+    finish_step(manifest, "cleanup_deploy_instance", client=client)
 
 
 def append_step(
@@ -265,18 +265,29 @@ def append_step(
     manifest["steps"].append(step)
 
 
-def finish_step(manifest: dict[str, Any], name: str) -> None:
+def finish_step(manifest: dict[str, Any], name: str, *, client: object | None = None) -> None:
     for step in reversed(manifest["steps"]):
         if step["name"] == name:
+            attach_retry_events(step, client)
             step["status"] = "succeeded"
             return
 
 
-def mark_running_step_failed(manifest: dict[str, Any]) -> None:
+def mark_running_step_failed(manifest: dict[str, Any], *, client: object | None = None) -> None:
     for step in reversed(manifest.get("steps", [])):
         if step.get("status") == "running":
+            attach_retry_events(step, client)
             step["status"] = "failed"
             return
+
+
+def attach_retry_events(step: dict[str, Any], client: object | None) -> None:
+    consume = getattr(client, "consume_retry_events", None)
+    if not callable(consume):
+        return
+    retry_events = consume()
+    if retry_events:
+        step["api_retries"] = retry_events
 
 
 def cleanup_started(manifest: dict[str, Any]) -> bool:

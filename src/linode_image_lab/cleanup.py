@@ -92,12 +92,12 @@ def cleanup_plan(
     try:
         append_step(manifest, "preflight_api_access", mutates=False, status="running")
         run_client.preflight()
-        finish_step(manifest, "preflight_api_access")
+        finish_step(manifest, "preflight_api_access", client=run_client)
 
         append_step(manifest, "discover_managed_linodes", mutates=False, status="running")
         resources = run_client.list_managed_linodes()
         manifest["resources"] = [resource_summary(resource) for resource in resources]
-        finish_step(manifest, "discover_managed_linodes")
+        finish_step(manifest, "discover_managed_linodes", client=run_client)
 
         assessments = assess_cleanup(resources, run_id=run_id, now=now)
         manifest["cleanup_candidates"] = [item["resource"] for item in assessments if item["action"] == "delete"]
@@ -128,10 +128,10 @@ def cleanup_plan(
         manifest["cleanup"]["status"] = "completed"
         manifest["status"] = "succeeded"
         manifest["discovery"] = {"status": "completed"}
-        finish_step(manifest, "delete_expired_linodes")
+        finish_step(manifest, "delete_expired_linodes", client=run_client)
         return manifest
     except Exception as exc:
-        mark_running_step_failed(manifest)
+        mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
         manifest["cleanup"]["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
@@ -227,18 +227,29 @@ def append_step(
     manifest["steps"].append({"name": name, "mutates": mutates, "status": status})
 
 
-def finish_step(manifest: dict[str, Any], name: str) -> None:
+def finish_step(manifest: dict[str, Any], name: str, *, client: object | None = None) -> None:
     for step in reversed(manifest["steps"]):
         if step["name"] == name:
+            attach_retry_events(step, client)
             step["status"] = "succeeded"
             return
 
 
-def mark_running_step_failed(manifest: dict[str, Any]) -> None:
+def mark_running_step_failed(manifest: dict[str, Any], *, client: object | None = None) -> None:
     for step in reversed(manifest.get("steps", [])):
         if step.get("status") == "running":
+            attach_retry_events(step, client)
             step["status"] = "failed"
             return
+
+
+def attach_retry_events(step: dict[str, Any], client: object | None) -> None:
+    consume = getattr(client, "consume_retry_events", None)
+    if not callable(consume):
+        return
+    retry_events = consume()
+    if retry_events:
+        step["api_retries"] = retry_events
 
 
 def safe_error_message(exc: Exception) -> str:
