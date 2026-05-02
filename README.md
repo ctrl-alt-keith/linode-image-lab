@@ -30,6 +30,15 @@ API, cleans up the temporary instances, and preserves the custom image.
 
 ## Installation
 
+Install the released `v0.1.0` tag directly from GitHub:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install git+https://github.com/ctrl-alt-keith/linode-image-lab.git@v0.1.0
+linode-image-lab --help
+```
+
 Run from source:
 
 ```sh
