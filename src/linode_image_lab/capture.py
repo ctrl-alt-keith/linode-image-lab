@@ -9,6 +9,15 @@ from typing import Any
 
 from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import REQUIRED_TAG_KEYS, create_manifest, tags_to_dict
+from .validation_results import finish_validation, record_validation_check, start_validation
+
+CAPTURE_VALIDATION_CHECKS = (
+    ("source_region_matches", "capture_source"),
+    ("source_required_tags_match", "capture_source"),
+    ("source_disk_found", "capture_source"),
+    ("custom_image_available", "custom_image"),
+    ("custom_image_required_tags_match", "custom_image"),
+)
 
 
 class CaptureError(ValueError):
@@ -142,19 +151,33 @@ def execute_capture(
         finish_step(manifest, "wait_capture_source_ready")
 
         append_step(manifest, "validate_capture_source_api", mutates=False, status="running")
-        manifest["validation"] = {
-            "status": "running",
-            "checks": [
-                "source_region_matches",
-                "source_required_tags_match",
-                "source_disk_found",
-                "custom_image_available",
-                "custom_image_required_tags_match",
-            ],
-        }
-        validate_created_resource(capture_source, required_tags=tags, region=region)
-        disks = run_client.list_disks(required_int(capture_source.get("linode_id")))
-        disk = first_disk(disks)
+        manifest["validation"] = start_validation(CAPTURE_VALIDATION_CHECKS)
+        record_validation_check(
+            manifest["validation"],
+            "source_region_matches",
+            lambda: validate_resource_region(
+                capture_source,
+                region=region,
+                message="created capture source is not in the requested region",
+            ),
+        )
+        record_validation_check(
+            manifest["validation"],
+            "source_required_tags_match",
+            lambda: validate_required_tags(
+                capture_source,
+                required_tags=tags,
+                message="created resource is missing required capture tags",
+            ),
+        )
+        disk: dict[str, Any] = {}
+
+        def find_source_disk() -> None:
+            nonlocal disk
+            disks = run_client.list_disks(required_int(capture_source.get("linode_id")))
+            disk = first_disk(disks)
+
+        record_validation_check(manifest["validation"], "source_disk_found", find_source_disk)
         capture_source["disk_id"] = disk["disk_id"]
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"][0] = dict(capture_source)
@@ -187,23 +210,27 @@ def execute_capture(
         finish_step(manifest, "create_custom_image")
 
         append_step(manifest, "wait_custom_image_available", mutates=False, status="running")
-        custom_image = merge_resource(
-            custom_image,
-            run_client.wait_image_available(required_text(custom_image.get("image_id"))),
+
+        def wait_for_custom_image() -> None:
+            nonlocal custom_image
+            custom_image = merge_resource(
+                custom_image,
+                run_client.wait_image_available(required_text(custom_image.get("image_id"))),
+            )
+
+        record_validation_check(manifest["validation"], "custom_image_available", wait_for_custom_image)
+        record_validation_check(
+            manifest["validation"],
+            "custom_image_required_tags_match",
+            lambda: validate_required_tags(
+                custom_image,
+                required_tags=tags,
+                message="created resource is missing required capture tags",
+            ),
         )
-        validate_created_resource(custom_image, required_tags=tags)
         manifest["custom_image"] = dict(custom_image)
         manifest["resources"][1] = dict(custom_image)
-        manifest["validation"] = {
-            "status": "succeeded",
-            "checks": [
-                "source_region_matches",
-                "source_required_tags_match",
-                "source_disk_found",
-                "custom_image_available",
-                "custom_image_required_tags_match",
-            ],
-        }
+        finish_validation(manifest["validation"])
         finish_step(manifest, "wait_custom_image_available")
 
         if options.defer_cleanup:
@@ -324,10 +351,27 @@ def validate_created_resource(
     required_tags: list[str],
     region: str | None = None,
 ) -> None:
-    if region is not None and resource.get("region") != region:
-        raise CaptureError("created capture source is not in the requested region")
+    if region is not None:
+        validate_resource_region(
+            resource,
+            region=region,
+            message="created capture source is not in the requested region",
+        )
+    validate_required_tags(
+        resource,
+        required_tags=required_tags,
+        message="created resource is missing required capture tags",
+    )
+
+
+def validate_resource_region(resource: dict[str, Any], *, region: str, message: str) -> None:
+    if resource.get("region") != region:
+        raise CaptureError(message)
+
+
+def validate_required_tags(resource: dict[str, Any], *, required_tags: list[str], message: str) -> None:
     if not has_required_tags(resource, required_tags):
-        raise CaptureError("created resource is missing required capture tags")
+        raise CaptureError(message)
 
 
 def has_required_tags(resource: dict[str, Any], required_tags: list[str]) -> bool:

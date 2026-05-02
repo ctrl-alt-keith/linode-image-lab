@@ -9,6 +9,13 @@ from typing import Any
 
 from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import REQUIRED_TAG_KEYS, create_manifest, tags_to_dict
+from .validation_results import finish_validation, record_validation_check, start_validation
+
+DEPLOY_VALIDATION_CHECKS = (
+    ("instance_running", "deploy_instance"),
+    ("region_matches", "deploy_instance"),
+    ("required_tags_match", "deploy_instance"),
+)
 
 
 class DeployError(ValueError):
@@ -137,23 +144,23 @@ def execute_deploy(
         finish_step(manifest, "wait_deploy_instance_ready")
 
         append_step(manifest, "validate_deploy_instance_api", mutates=False, status="running")
-        manifest["validation"] = {
-            "status": "running",
-            "checks": [
-                "instance_running",
-                "region_matches",
-                "required_tags_match",
-            ],
-        }
-        validate_deploy_instance(deploy_instance, required_tags=tags, region=region)
-        manifest["validation"] = {
-            "status": "succeeded",
-            "checks": [
-                "instance_running",
-                "region_matches",
-                "required_tags_match",
-            ],
-        }
+        manifest["validation"] = start_validation(DEPLOY_VALIDATION_CHECKS)
+        record_validation_check(
+            manifest["validation"],
+            "region_matches",
+            lambda: validate_instance_region(deploy_instance, region),
+        )
+        record_validation_check(
+            manifest["validation"],
+            "instance_running",
+            lambda: validate_instance_running(deploy_instance),
+        )
+        record_validation_check(
+            manifest["validation"],
+            "required_tags_match",
+            lambda: validate_required_tags(deploy_instance, required_tags=tags),
+        )
+        finish_validation(manifest["validation"])
         finish_step(manifest, "validate_deploy_instance_api")
 
         if options.defer_cleanup:
@@ -274,10 +281,22 @@ def validate_deploy_instance(
     required_tags: list[str],
     region: str,
 ) -> None:
+    validate_instance_region(resource, region)
+    validate_instance_running(resource)
+    validate_required_tags(resource, required_tags=required_tags)
+
+
+def validate_instance_region(resource: dict[str, Any], region: str) -> None:
     if resource.get("region") != region:
         raise DeployError("created deploy instance is not in the requested region")
+
+
+def validate_instance_running(resource: dict[str, Any]) -> None:
     if resource.get("status") != "running":
         raise DeployError("created deploy instance is not running")
+
+
+def validate_required_tags(resource: dict[str, Any], *, required_tags: list[str]) -> None:
     if not has_required_tags(resource, required_tags):
         raise DeployError("created resource is missing required deploy tags")
 

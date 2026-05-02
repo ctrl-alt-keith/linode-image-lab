@@ -10,6 +10,18 @@ from linode_image_lab.linode_api import LinodeTokenError
 from linode_image_lab.manifest import serialize_manifest
 
 
+def validation_check(manifest: dict[str, object], name: str) -> dict[str, object]:
+    validation = manifest["validation"]
+    assert isinstance(validation, dict)
+    checks = validation["checks"]
+    assert isinstance(checks, list)
+    for check in checks:
+        assert isinstance(check, dict)
+        if check.get("name") == name:
+            return check
+    raise AssertionError(f"missing validation check: {name}")
+
+
 class FakeLinodeClient:
     def __init__(self, *, missing_create_tags: bool = False, status: str = "running") -> None:
         self.calls: list[str] = []
@@ -194,6 +206,14 @@ class DeployExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "succeeded")
         self.assertEqual(manifest["deploy_instance"]["linode_id"], 321)
         self.assertEqual(manifest["validation"]["status"], "succeeded")
+        self.assertEqual(
+            manifest["validation"]["checks"],
+            [
+                {"name": "instance_running", "status": "succeeded", "target": "deploy_instance"},
+                {"name": "region_matches", "status": "succeeded", "target": "deploy_instance"},
+                {"name": "required_tags_match", "status": "succeeded", "target": "deploy_instance"},
+            ],
+        )
         self.assertEqual(manifest["cleanup"]["status"], "deleted")
 
     def test_execute_applies_required_tags_to_created_resource(self) -> None:
@@ -251,6 +271,16 @@ class DeployExecutionTests(unittest.TestCase):
         self.assertIsNotNone(raised.exception.manifest)
         self.assertEqual(raised.exception.manifest["cleanup"]["status"], "preserved")
         self.assertEqual(raised.exception.manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
+        self.assertEqual(raised.exception.manifest["validation"]["status"], "failed")
+        self.assertEqual(
+            validation_check(raised.exception.manifest, "required_tags_match"),
+            {
+                "name": "required_tags_match",
+                "status": "failed",
+                "target": "deploy_instance",
+                "failure_reason": "created resource is missing required deploy tags",
+            },
+        )
 
     def test_partial_failure_deletes_tagged_resource_by_default(self) -> None:
         client = FakeLinodeClient(status="offline")
@@ -269,6 +299,15 @@ class DeployExecutionTests(unittest.TestCase):
         self.assertEqual(client.deleted, [321])
         self.assertIsNotNone(raised.exception.manifest)
         self.assertEqual(raised.exception.manifest["cleanup"]["status"], "deleted")
+        self.assertEqual(
+            validation_check(raised.exception.manifest, "instance_running"),
+            {
+                "name": "instance_running",
+                "status": "failed",
+                "target": "deploy_instance",
+                "failure_reason": "created deploy instance is not running",
+            },
+        )
 
     def test_serialized_execute_manifest_redacts_provider_ids(self) -> None:
         manifest = deploy_plan(
