@@ -13,10 +13,19 @@ NOW = datetime(2026, 5, 1, tzinfo=UTC)
 
 
 class FakeCleanupClient:
-    def __init__(self, resources: list[dict[str, object]]) -> None:
+    def __init__(
+        self,
+        resources: list[dict[str, object]],
+        *,
+        refreshed_resources: dict[int, dict[str, object]] | None = None,
+        refetch_failure: bool = False,
+    ) -> None:
         self.resources = resources
+        self.refreshed_resources = refreshed_resources or {}
+        self.refetch_failure = refetch_failure
         self.preflight_count = 0
         self.list_count = 0
+        self.get_count = 0
         self.deleted: list[int] = []
 
     def preflight(self) -> None:
@@ -25,6 +34,17 @@ class FakeCleanupClient:
     def list_managed_linodes(self) -> list[dict[str, object]]:
         self.list_count += 1
         return list(self.resources)
+
+    def get_instance(self, linode_id: int) -> dict[str, object]:
+        self.get_count += 1
+        if self.refetch_failure:
+            raise ValueError("provider response included private details")
+        if linode_id in self.refreshed_resources:
+            return self.refreshed_resources[linode_id]
+        for resource in self.resources:
+            if resource.get("linode_id") == linode_id:
+                return dict(resource)
+        raise ValueError("missing resource")
 
     def delete_instance(self, linode_id: int) -> dict[str, object]:
         self.deleted.append(linode_id)
@@ -94,8 +114,50 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertFalse(manifest["dry_run"])
         self.assertEqual(manifest["status"], "succeeded")
         self.assertEqual(client.preflight_count, 1)
+        self.assertEqual(client.get_count, 1)
         self.assertEqual(client.deleted, [456])
         self.assertEqual(manifest["cleanup"]["deleted"][0]["reason"], "expired_ttl")
+
+    def test_execute_preserves_candidate_that_becomes_unexpired_before_delete(self) -> None:
+        initial = linode_resource(linode_id=456, ttl="2026-01-01T00:00:00Z")
+        refreshed = linode_resource(linode_id=456, ttl="2030-01-01T00:00:00Z")
+        client = FakeCleanupClient([initial], refreshed_resources={456: refreshed})
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.get_count, 1)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "ttl_not_expired")
+
+    def test_execute_preserves_candidate_that_loses_required_tag_before_delete(self) -> None:
+        initial = linode_resource(linode_id=456)
+        refreshed = linode_resource(linode_id=456)
+        refreshed["tags"] = [
+            "project=linode-image-lab",
+            "run_id=run-test",
+            "mode=capture-deploy",
+            "ttl=2026-01-01T00:00:00Z",
+        ]
+        client = FakeCleanupClient([initial], refreshed_resources={456: refreshed})
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.get_count, 1)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "missing_required_tags")
+
+    def test_execute_preserves_candidate_when_refetch_fails(self) -> None:
+        client = FakeCleanupClient([linode_resource(linode_id=456)], refetch_failure=True)
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.get_count, 1)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_failed")
+        self.assertNotIn("provider response", json.dumps(manifest["cleanup"]["preserved"]))
 
     def test_unexpired_linode_is_preserved(self) -> None:
         client = FakeCleanupClient([linode_resource(ttl="2030-01-01T00:00:00Z")])

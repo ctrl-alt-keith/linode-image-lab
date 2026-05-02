@@ -73,6 +73,8 @@ class LinodeClientProtocol(Protocol):
 
     def list_managed_linodes(self) -> list[dict[str, Any]]: ...
 
+    def get_instance(self, linode_id: int) -> dict[str, Any]: ...
+
     def delete_instance(self, linode_id: int) -> dict[str, Any]: ...
 
 
@@ -203,6 +205,10 @@ class LinodeClient:
             if not isinstance(pages, int) or page >= pages:
                 return resources
             page += 1
+
+    def get_instance(self, linode_id: int) -> dict[str, Any]:
+        response = self._request("GET", f"/linode/instances/{linode_id}", retry=True, operation="get_instance")
+        return self._instance_resource(response)
 
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
         self._request("DELETE", f"/linode/instances/{linode_id}", retry=True, operation="delete_instance")

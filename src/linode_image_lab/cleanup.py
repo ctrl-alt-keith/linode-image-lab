@@ -113,6 +113,7 @@ def cleanup_plan(
 
         append_step(manifest, "delete_expired_linodes", mutates=bool(manifest["cleanup_candidates"]), status="running")
         deleted: list[dict[str, Any]] = []
+        comparison_time = (now or datetime.now(UTC)).astimezone(UTC)
         for item in assessments:
             if item["action"] != "delete":
                 continue
@@ -121,8 +122,18 @@ def cleanup_plan(
                 item["resource"]["reason"] = "missing_provider_id"
                 manifest["cleanup"]["preserved"].append(item["resource"])
                 continue
+            try:
+                current_resource = run_client.get_instance(linode_id)
+            except Exception:
+                item["resource"]["reason"] = "refetch_failed"
+                manifest["cleanup"]["preserved"].append(item["resource"])
+                continue
+            current_assessment = assess_resource(current_resource, run_id=run_id, now=comparison_time)
+            if current_assessment["action"] != "delete":
+                manifest["cleanup"]["preserved"].append(current_assessment["resource"])
+                continue
             run_client.delete_instance(linode_id)
-            deleted.append(item["resource"])
+            deleted.append(current_assessment["resource"])
         manifest["cleanup"]["deleted"] = deleted
         manifest["cleanup_candidates"] = []
         manifest["cleanup"]["status"] = "completed"
