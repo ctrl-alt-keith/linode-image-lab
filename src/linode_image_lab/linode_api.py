@@ -8,8 +8,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+
+from .manifest import PROJECT, tags_to_dict
 
 TOKEN_ENV_NAME = "LINODE_TOKEN"
 DEFAULT_API_BASE_URL = "https://api.linode.com/v4"
@@ -57,6 +59,8 @@ class LinodeClientProtocol(Protocol):
 
     def wait_image_available(self, image_id: str) -> dict[str, Any]: ...
 
+    def list_managed_linodes(self) -> list[dict[str, Any]]: ...
+
     def delete_instance(self, linode_id: int) -> dict[str, Any]: ...
 
 
@@ -71,11 +75,17 @@ class LinodeClient:
     max_wait_seconds: float = 900
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None, *, command: str = "capture") -> "LinodeClient":
+    def from_env(
+        cls,
+        env: dict[str, str] | None = None,
+        *,
+        command: str = "capture",
+        option: str = "--execute",
+    ) -> "LinodeClient":
         values = env if env is not None else os.environ
         token = values.get(TOKEN_ENV_NAME)
         if not token:
-            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for {command} --execute")
+            raise LinodeTokenError(f"{TOKEN_ENV_NAME} is required for {command} {option}")
         return cls(token=token)
 
     def preflight(self) -> None:
@@ -146,6 +156,26 @@ class LinodeClient:
             return self._image_resource(response)
 
         return self._wait_until(current, lambda resource: resource.get("status") == "available")
+
+    def list_managed_linodes(self) -> list[dict[str, Any]]:
+        resources: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = urlencode({"page": page, "page_size": 100})
+            response = self._request("GET", f"/linode/instances?{query}")
+            data = response.get("data", []) if isinstance(response, dict) else []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                resource = self._instance_resource(item)
+                tags = tags_to_dict(resource.get("tags", []))
+                if tags.get("project") == PROJECT:
+                    resources.append(resource)
+
+            pages = response.get("pages", page) if isinstance(response, dict) else page
+            if not isinstance(pages, int) or page >= pages:
+                return resources
+            page += 1
 
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
         self._request("DELETE", f"/linode/instances/{linode_id}")
