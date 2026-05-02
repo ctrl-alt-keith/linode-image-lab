@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Require Python 3.12 or newer.
 - Add config-backed execution defaults and `config validate` reports with
