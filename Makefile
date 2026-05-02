@@ -80,6 +80,15 @@ release-check: check-gh-env
 		echo "Error: local main must match origin/main. Run 'git pull --ff-only origin main' and retry." >&2; \
 		exit 1; \
 	fi
+	@echo "Running validation: make check"
+	@if $(MAKE) check; then \
+		echo "Validation passed: make check completed successfully."; \
+	else \
+		status=$$?; \
+		echo "Validation failed: make check exited $$status." >&2; \
+		echo "Error: release blocked until canonical validation passes." >&2; \
+		exit $$status; \
+	fi
 	@if git rev-parse --verify --quiet "refs/tags/$(RELEASE_TAG)" >/dev/null; then \
 		echo "Error: local tag $(RELEASE_TAG) already exists." >&2; \
 		exit 1; \
