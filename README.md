@@ -140,8 +140,9 @@ on the command.
 `--region` flags or `regions = [...]` config. It captures one custom image in
 the first requested region, then deploys that captured image sequentially to
 each requested region. Linode custom images are deployable across regions; the
-first deploy in a region may take longer while the provider handles image
-transfer. Standalone `capture --execute` and `deploy --execute` remain
+public docs do not specify cross-region deploy latency. Operators should expect
+farther-region deploys may take longer, but the tool does not depend on that
+timing. Standalone `capture --execute` and `deploy --execute` remain
 single-region only.
 
 `config validate` parses the TOML file, applies the same safety checks as
@@ -184,7 +185,8 @@ environment or approved environment injection.
 
 - SSH, cloud-init, service, or application-level validation.
 - Manage long-lived infrastructure.
-- Multi-region orchestration yet.
+- General-purpose multi-region orchestration outside sequential
+  `capture-deploy --execute` validation runs.
 
 ## Commands
 
@@ -252,6 +254,9 @@ Modeled resources use rediscoverable tags:
 - `mode=<capture|deploy|capture-deploy>`
 - `component=<capture|deploy>`
 - `ttl=<timestamp>`
+
+`ttl` is a project-internal cleanup tag used by this tool. Linode does not
+enforce it as a provider-side expiration policy.
 
 ## Manifest Output
 

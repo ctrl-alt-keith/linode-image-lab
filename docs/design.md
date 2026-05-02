@@ -9,24 +9,25 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Create sanitized manifest previews for dry-run planning.
 - Define a stable tag contract for resource rediscovery.
 - Make cleanup selection testable without cloud access.
-- Allow single-region capture, deploy, and capture-deploy execution only after
-  explicit opt-in.
+- Allow capture, deploy, and capture-deploy execution only after explicit
+  opt-in; capture-deploy may fan out sequentially across requested regions.
 
 ## Non-Goals
 
 - No implicit Linode API mutations.
-- No multi-region execution, GitHub Actions mutation, or external scheduler
-  integration.
+- No GitHub Actions mutation, external scheduler integration, or
+  general-purpose multi-region orchestration outside sequential
+  capture-deploy validation runs.
 - No infrastructure ownership or planning model.
 - CI exists to run `make check`.
 
 ## Execution Model Boundary
 
-Future configuration and future multi-region support are execution defaults for
-disposable validation runs. They must not turn the tool into infrastructure
-ownership. Runs remain ephemeral validation workflows with explicit mutation
-entrypoints, provider/API-level validation, tagged temporary resources, and
-cleanup as a first-class outcome.
+Configuration and multi-region support are execution defaults for disposable
+validation runs. They must not turn the tool into infrastructure ownership.
+Runs remain ephemeral validation workflows with explicit mutation entrypoints,
+provider/API-level validation, tagged temporary resources, and cleanup as a
+first-class outcome.
 
 ## Components
 
@@ -104,9 +105,9 @@ Supported config values are intentionally narrow:
 passwords, SSH keys, root passwords, and cloud-init or user-data fields are not
 configurable. Unknown keys and secret-like keys fail before command execution.
 
-Multi-region config is accepted for dry-run manifests. Execute mode still
-requires exactly one effective region and fails before token lookup when config
-or CLI values resolve to multiple regions.
+Multi-region config is accepted for dry-run manifests. Execute mode remains
+single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
+multiple regions and runs one capture followed by sequential deploy attempts.
 
 ## Capture Execution Boundary
 
@@ -117,7 +118,7 @@ a Linode type, and `LINODE_TOKEN`.
 The execute flow is intentionally linear:
 
 1. preflight the token with non-mutating API calls,
-2. preflight the requested region, Linode type, and source image with
+2. preflight the requested region, Linode type, and available source image with
    non-mutating API calls,
 3. create a tagged temporary capture-source Linode,
 4. wait for readiness,
@@ -139,7 +140,7 @@ custom image id via `--image-id`, a Linode type, and `LINODE_TOKEN`.
 The execute flow is intentionally linear:
 
 1. preflight the token with non-mutating API calls,
-2. preflight the requested region, Linode type, and deploy image with
+2. preflight the requested region, Linode type, and available deploy image with
    non-mutating API calls,
 3. create a tagged temporary deploy Linode from the custom image id,
 4. wait for provider/API-level running status,
@@ -152,8 +153,8 @@ validation.
 ## Capture-Deploy Execution Boundary
 
 `capture-deploy` without `--execute` remains non-mutating and does not read
-`LINODE_TOKEN`. `capture-deploy --execute` requires exactly one region, a source
-image, a Linode type, and `LINODE_TOKEN`.
+`LINODE_TOKEN`. `capture-deploy --execute` requires at least one region, a
+source image, a Linode type, and `LINODE_TOKEN`.
 
 The execute flow reuses the capture and deploy internals:
 
@@ -172,6 +173,12 @@ Because capture and deploy remain independently reusable, capture-deploy runs
 each phase's non-mutating API preflight, including provider input checks.
 Seeing two `preflight_api_access` and `preflight_provider_inputs` steps in a
 combined manifest is expected.
+
+With multiple requested regions, capture-deploy captures one custom image in
+the first region and then deploys it sequentially to each requested region.
+Linode custom images are deployable across regions; public docs do not specify
+cross-region deploy latency. Operators should expect farther-region deploys may
+take longer, but the tool does not depend on that timing.
 
 ## Cleanup Semantics
 
@@ -194,6 +201,9 @@ discovery, and deletes only expired Linodes carrying all required managed tags:
 - `mode=...`
 - `component=...`
 - `ttl=...`
+
+`ttl` is a project-internal cleanup tag used by this tool. Linode does not
+enforce it as a provider-side expiration policy.
 
 Standalone cleanup never deletes custom images, untagged resources, or broader
 account resources. Malformed TTL values, future TTL values, missing required

@@ -92,10 +92,12 @@ Temporary Linodes are deleted only when all required tags match the current run.
 
 Standalone `cleanup --execute` deletes only expired temporary Linodes with the
 complete managed tag set: `project`, `run_id`, `mode`, `component`, and `ttl`.
-It preserves custom images, untagged resources, resources with missing or
-mismatched tags, resources with malformed or unexpired TTL values, and resources
-outside an optional `--run-id` filter. Preserved entries use sanitized reason
-strings and normal stdout redacts provider identifiers.
+The `ttl` value is a project-internal cleanup tag used by this tool; Linode
+does not enforce it as a provider-side expiration policy. Cleanup preserves
+custom images, untagged resources, resources with missing or mismatched tags,
+resources with malformed or unexpired TTL values, and resources outside an
+optional `--run-id` filter. Preserved entries use sanitized reason strings and
+normal stdout redacts provider identifiers.
 
 Transient Linode API retries are limited to read-only API calls, polling reads,
 managed Linode discovery, and cleanup DELETE attempts for eligible tagged
@@ -103,7 +105,7 @@ temporary Linodes. Create-instance, image-create, and shutdown requests are not
 retried automatically. Retry errors and metadata use public-safe operation names
 and status categories rather than tokens or provider identifiers.
 
-Validation is limited to provider/API responses: input availability, resource
-state, requested region, required tags, disk presence for capture, and image
-availability for capture. It does not perform SSH, cloud-init, service, or
+Validation is limited to provider/API responses: input existence/access, image
+available status, resource state, requested region, required tags, and disk
+presence for capture. It does not perform SSH, cloud-init, service, or
 application readiness checks.

@@ -78,6 +78,8 @@ class LinodeClientTests(unittest.TestCase):
 
         def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
             requests.append(request)
+            if request.full_url.endswith("/images/linode%2Fdebian12"):
+                return FakeHTTPResponse({"status": "available"})
             return FakeHTTPResponse({})
 
         with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
@@ -106,6 +108,20 @@ class LinodeClientTests(unittest.TestCase):
                 client.preflight_image("private/789")
 
         self.assertEqual(str(raised.exception), "requested image is unavailable")
+        self.assertNotIn("private/789", str(raised.exception))
+        self.assertNotIn(TOKEN_VALUE, str(raised.exception))
+
+    def test_provider_preflight_image_requires_available_status(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse({"id": "private/789", "status": "creating"}),
+        ):
+            with self.assertRaises(LinodePreflightError) as raised:
+                client.preflight_image("private/789")
+
+        self.assertEqual(str(raised.exception), "requested image is not available")
         self.assertNotIn("private/789", str(raised.exception))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
@@ -468,18 +484,31 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual(resource["status"], "running")
         self.assertEqual(responses, [])
 
-    def test_auth_failures_map_to_token_error(self) -> None:
+    def test_unauthorized_auth_failure_names_invalid_or_expired_token(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
 
-        for status in (401, 403):
-            with self.subTest(status=status):
-                error = self.http_error(status, "auth failed")
-                with patch(
-                    "linode_image_lab.linode_api.urlopen",
-                    side_effect=error,
-                ):
-                    with self.assertRaises(LinodeTokenError):
-                        client.preflight()
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            side_effect=self.http_error(401, "auth failed"),
+        ):
+            with self.assertRaises(LinodeTokenError) as raised:
+                client.preflight()
+
+        self.assertEqual(str(raised.exception), "LINODE_TOKEN is invalid, expired, or rejected by the Linode API")
+        self.assertNotIn(TOKEN_VALUE, str(raised.exception))
+
+    def test_forbidden_auth_failure_names_missing_permissions_or_scopes(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            side_effect=self.http_error(403, "auth failed"),
+        ):
+            with self.assertRaises(LinodeTokenError) as raised:
+                client.preflight()
+
+        self.assertEqual(str(raised.exception), "LINODE_TOKEN lacks required Linode permissions or scopes")
+        self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
     def test_non_auth_failure_maps_to_api_error_without_token_value(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, retry_backoff_seconds=())
