@@ -9,10 +9,46 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from linode_image_lab.cli import main
+from linode_image_lab.cli import build_parser, main
 
 
 class CliTests(unittest.TestCase):
+    def test_version_prints_package_version_and_exits(self) -> None:
+        output = StringIO()
+        with patch("linode_image_lab.cli.version", return_value="9.8.7") as package_version:
+            with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                main(["--version"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(output.getvalue(), "9.8.7\n")
+        package_version.assert_called_once_with("linode-image-lab")
+
+    def test_version_ignores_following_subcommand(self) -> None:
+        output = StringIO()
+        with patch("linode_image_lab.cli.version", return_value="9.8.7"):
+            with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                main(["--version", "plan"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(output.getvalue(), "9.8.7\n")
+
+    def test_version_after_subcommand_prints_package_version_and_exits(self) -> None:
+        for command in ("plan", "capture", "deploy", "capture-deploy", "cleanup"):
+            with self.subTest(command=command):
+                output = StringIO()
+                with patch("linode_image_lab.cli.version", return_value="9.8.7"):
+                    with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                        main([command, "--version"])
+
+                self.assertEqual(raised.exception.code, 0)
+                self.assertEqual(output.getvalue(), "9.8.7\n")
+
+    def test_help_output_includes_version_flag(self) -> None:
+        with patch("linode_image_lab.cli.version", return_value="9.8.7"):
+            help_output = build_parser().format_help()
+
+        self.assertIn("--version", help_output)
+
     def test_plan_emits_sanitized_dry_run_preview(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
