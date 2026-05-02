@@ -34,14 +34,16 @@ API, cleans up the temporary instances, and preserves the custom image.
 
 ## Installation
 
-Install the released `v0.2.0` tag directly from GitHub:
+Install a released tag directly from GitHub:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install git+https://github.com/ctrl-alt-keith/linode-image-lab.git@v0.2.0
+python3 -m pip install git+https://github.com/ctrl-alt-keith/linode-image-lab.git@vX.Y.Z
 linode-image-lab --help
 ```
+
+Replace `vX.Y.Z` with the desired release tag.
 
 ## Release Recovery
 
@@ -335,6 +337,17 @@ managed tags. It re-fetches each candidate before a single DELETE attempt.
 Preserved and failed entries include a sanitized `reason`, such as
 `ttl_not_expired`, `ttl_parse_failed`, `missing_required_tags`, or
 `delete_status_unknown`.
+
+## Known Limitations
+
+- Disk selection: Capture currently requires exactly one suitable disk
+  (non-swap, ready). Multi-disk sources are not supported.
+- Cross-region deploy latency: Linode supports cross-region image deploy, but
+  latency is not specified by provider docs.
+- Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
+  project policy, not a provider guarantee.
+- Cleanup semantics: DELETE operations are single-attempt after re-fetch;
+  ambiguous failures are reported rather than retried.
 
 ## Independence and Intent
 
