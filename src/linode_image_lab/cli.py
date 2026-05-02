@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tomllib
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any
 
 from .cleanup import CleanupError, cleanup_plan
@@ -13,6 +16,17 @@ from .config import ConfigError, command_defaults, load_config
 from .deploy import DeployError, deploy_plan
 from .manifest import create_manifest, serialize_manifest
 from .regions import parse_regions
+
+PACKAGE_NAME = "linode-image-lab"
+
+
+def package_version() -> str:
+    try:
+        return version(PACKAGE_NAME)
+    except PackageNotFoundError:
+        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        return str(pyproject["project"]["version"])
 
 
 def add_config_arg(parser: argparse.ArgumentParser, *, dest: str) -> None:
@@ -34,12 +48,24 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
     parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
 
+def add_version_arg(parser: argparse.ArgumentParser, version_text: str) -> None:
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=version_text,
+        help="Print the installed package version and exit.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
+    version_text = package_version()
     parser = argparse.ArgumentParser(prog="linode-image-lab")
+    add_version_arg(parser, version_text)
     add_config_arg(parser, dest="global_config")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
+    add_version_arg(plan, version_text)
     add_config_arg(plan, dest="command_config")
     add_region_args(plan, required=True)
     plan.add_argument(
@@ -50,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     capture = subparsers.add_parser("capture", help="Plan or execute a single-region capture.")
+    add_version_arg(capture, version_text)
     add_config_arg(capture, dest="command_config")
     add_region_args(capture, required=True)
     capture.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
@@ -63,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     deploy = subparsers.add_parser("deploy", help="Plan or execute a single-region deploy.")
+    add_version_arg(deploy, version_text)
     add_config_arg(deploy, dest="command_config")
     add_region_args(deploy, required=True)
     deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
@@ -75,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     capture_deploy = subparsers.add_parser("capture-deploy", help="Plan or execute capture plus deploy validation.")
+    add_version_arg(capture_deploy, version_text)
     add_config_arg(capture_deploy, dest="command_config")
     add_region_args(capture_deploy, required=True)
     capture_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
@@ -91,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     cleanup = subparsers.add_parser("cleanup", help="Plan, discover, or execute tag-scoped cleanup.")
+    add_version_arg(cleanup, version_text)
     add_config_arg(cleanup, dest="command_config")
     cleanup_mode = cleanup.add_mutually_exclusive_group()
     cleanup_mode.add_argument("--discover", action="store_true", help="Opt into read-only Linode discovery.")
