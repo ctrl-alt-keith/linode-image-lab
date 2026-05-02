@@ -47,17 +47,18 @@ first-class outcome.
 ## Linode API Retry Boundary
 
 The Linode API client retries only safe operation classes: non-mutating GET
-preflight reads, polling GET reads, list/read validation calls, managed Linode
-discovery, and cleanup DELETE attempts for already-selected tagged temporary
-Linodes. Retries are bounded, use deterministic backoff without jitter, and
-record public-safe retry event metadata without tokens or provider identifiers.
+preflight reads, polling GET reads, list/read validation calls, and managed
+Linode discovery. Retries are bounded, use deterministic backoff without
+jitter, and record public-safe retry event metadata without tokens or provider
+identifiers.
 For HTTP 429 rate-limit responses, the client honors Linode's documented
 `Retry-After` header when valid, then falls back to `X-RateLimit-Reset` when it
 can be parsed, before using the deterministic backoff.
 
-Create-instance, image-create, shutdown, and other mutation requests remain
-single-attempt so transient failures cannot create duplicate resources or repeat
-unsafe state transitions.
+Create-instance, image-create, shutdown, cleanup DELETE, and other mutation
+requests remain single-attempt so transient failures cannot create duplicate
+resources, repeat unsafe state transitions, or obscure ambiguous delete
+outcomes.
 
 ## Manifest Foundation
 
