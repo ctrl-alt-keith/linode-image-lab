@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from linode_image_lab.capture import CaptureError, capture_plan
-from linode_image_lab.linode_api import LinodeTokenError
+from linode_image_lab.linode_api import LinodePreflightError, LinodeTokenError
 from linode_image_lab.manifest import serialize_manifest
 
 
@@ -32,6 +32,15 @@ class FakeLinodeClient:
 
     def preflight(self) -> None:
         self.calls.append("preflight")
+
+    def preflight_region(self, region: str) -> None:
+        self.calls.append("preflight_region")
+
+    def preflight_instance_type(self, instance_type: str) -> None:
+        self.calls.append("preflight_instance_type")
+
+    def preflight_image(self, image_id: str) -> None:
+        self.calls.append("preflight_image")
 
     def create_instance(
         self,
@@ -123,6 +132,12 @@ class InvalidTokenClient(FakeLinodeClient):
         raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API")
 
 
+class InvalidSourceImageClient(FakeLinodeClient):
+    def preflight_image(self, image_id: str) -> None:
+        self.calls.append("preflight_image")
+        raise LinodePreflightError("requested image is unavailable")
+
+
 class CaptureExecutionTests(unittest.TestCase):
     def test_dry_run_does_not_read_token_or_call_client(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -177,6 +192,33 @@ class CaptureExecutionTests(unittest.TestCase):
         self.assertEqual(client.calls, ["preflight"])
         self.assertEqual(raised.exception.manifest["status"], "failed")
 
+    def test_provider_preflight_fails_before_mutation(self) -> None:
+        client = InvalidSourceImageClient()
+
+        with self.assertRaises(CaptureError) as raised:
+            capture_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="private/invalid-source-image",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        self.assertEqual(
+            client.calls,
+            [
+                "preflight",
+                "preflight_region",
+                "preflight_instance_type",
+                "preflight_image",
+            ],
+        )
+        self.assertEqual(raised.exception.manifest["status"], "failed")
+        self.assertEqual(raised.exception.manifest["errors"], ["requested image is unavailable"])
+        self.assertEqual(raised.exception.manifest["resources"], [])
+
     def test_execute_with_fake_client_records_expected_call_order(self) -> None:
         client = FakeLinodeClient()
 
@@ -194,6 +236,9 @@ class CaptureExecutionTests(unittest.TestCase):
             client.calls,
             [
                 "preflight",
+                "preflight_region",
+                "preflight_instance_type",
+                "preflight_image",
                 "create_instance",
                 "wait_instance_ready",
                 "list_disks",

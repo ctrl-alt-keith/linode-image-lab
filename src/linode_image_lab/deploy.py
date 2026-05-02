@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Any
 
-from .linode_api import LinodeClient, LinodeClientProtocol
+from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import REQUIRED_TAG_KEYS, create_manifest, tags_to_dict
 from .validation_results import finish_validation, record_validation_check, start_validation
 
@@ -118,13 +118,21 @@ def execute_deploy(
 
         tags = list(manifest["tags"])
         region = options.regions[0]
+        image_id = required_text(options.image_id)
+        instance_type = required_text(options.instance_type)
         instance_label = f"lil-{safe_label_suffix(manifest['run_id'])}-deploy"
+
+        append_step(manifest, "preflight_provider_inputs", mutates=False, status="running")
+        run_client.preflight_region(region)
+        run_client.preflight_instance_type(instance_type)
+        run_client.preflight_image(image_id)
+        finish_step(manifest, "preflight_provider_inputs")
 
         append_step(manifest, "create_deploy_instance", mutates=True, status="running")
         deploy_instance = run_client.create_instance(
             region=region,
-            source_image=required_text(options.image_id),
-            instance_type=required_text(options.instance_type),
+            source_image=image_id,
+            instance_type=instance_type,
             label=instance_label,
             tags=tags,
             root_password=secrets.token_urlsafe(32),
@@ -331,6 +339,6 @@ def safe_label_suffix(value: str) -> str:
 
 
 def safe_error_message(exc: Exception) -> str:
-    if isinstance(exc, DeployError):
+    if isinstance(exc, (DeployError, LinodePreflightError)):
         return str(exc)
     return exc.__class__.__name__

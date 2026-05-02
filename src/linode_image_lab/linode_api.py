@@ -25,8 +25,18 @@ class LinodeTokenError(LinodeApiError):
     """Raised when execute mode lacks a usable Linode token."""
 
 
+class LinodePreflightError(LinodeApiError):
+    """Raised when read-only provider input checks fail."""
+
+
 class LinodeClientProtocol(Protocol):
     def preflight(self) -> None: ...
+
+    def preflight_region(self, region: str) -> None: ...
+
+    def preflight_instance_type(self, instance_type: str) -> None: ...
+
+    def preflight_image(self, image_id: str) -> None: ...
 
     def create_instance(
         self,
@@ -91,6 +101,18 @@ class LinodeClient:
     def preflight(self) -> None:
         self._request("GET", "/profile")
         self._request("GET", "/profile/grants", allow_empty=True)
+
+    def preflight_region(self, region: str) -> None:
+        escaped = quote(region, safe="")
+        self._preflight_resource(f"/regions/{escaped}", "requested region is unavailable")
+
+    def preflight_instance_type(self, instance_type: str) -> None:
+        escaped = quote(instance_type, safe="")
+        self._preflight_resource(f"/linode/types/{escaped}", "requested Linode type is unavailable")
+
+    def preflight_image(self, image_id: str) -> None:
+        escaped = quote(image_id, safe="")
+        self._preflight_resource(f"/images/{escaped}", "requested image is unavailable")
 
     def create_instance(
         self,
@@ -180,6 +202,14 @@ class LinodeClient:
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
         self._request("DELETE", f"/linode/instances/{linode_id}")
         return {"linode_id": linode_id, "deleted": True}
+
+    def _preflight_resource(self, path: str, unavailable_message: str) -> None:
+        try:
+            self._request("GET", path)
+        except LinodeTokenError:
+            raise
+        except LinodeApiError as exc:
+            raise LinodePreflightError(unavailable_message) from exc
 
     def _wait_for_instance_status(self, linode_id: int, statuses: set[str]) -> dict[str, Any]:
         def current() -> dict[str, Any]:

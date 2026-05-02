@@ -21,13 +21,15 @@ resources and may incur account charges until cleanup completes. It requires:
 Execution steps:
 
 1. preflight token access without mutating resources,
-2. create a temporary capture-source Linode from the source image,
-3. wait until the source is ready,
-4. validate provider/API-level region, required tags, and disk presence,
-5. power off the source,
-6. create a custom image from the selected disk,
-7. wait until the provider reports the image is available,
-8. delete the temporary source unless `--preserve-source` is set.
+2. verify the requested region, Linode type, and source image with read-only
+   API calls,
+3. create a temporary capture-source Linode from the source image,
+4. wait until the source is ready,
+5. validate provider/API-level region, required tags, and disk presence,
+6. power off the source,
+7. create a custom image from the selected disk,
+8. wait until the provider reports the image is available,
+9. delete the temporary source unless `--preserve-source` is set.
 
 The custom image is preserved by default because it is the capture deliverable.
 Capture validation stops at provider/API data; it does not perform SSH,
@@ -50,10 +52,12 @@ account charges until cleanup completes. It requires:
 Execution steps:
 
 1. preflight token access without mutating resources,
-2. create a temporary deploy Linode from the custom image id,
-3. wait until the provider reports the instance is running,
-4. validate provider/API-level running status, requested region, and required tags,
-5. delete the temporary instance unless `--preserve-instance` is set.
+2. verify the requested region, Linode type, and deploy image with read-only API
+   calls,
+3. create a temporary deploy Linode from the custom image id,
+4. wait until the provider reports the instance is running,
+5. validate provider/API-level running status, requested region, and required tags,
+6. delete the temporary instance unless `--preserve-instance` is set.
 
 The deploy instance is deleted by default because deploy execution is a quick
 validation path, not a long-lived server creation flow.
@@ -110,8 +114,10 @@ redacts provider identifiers, so the image id is not exposed in serialized
 manifests.
 
 Capture-deploy intentionally runs the non-mutating API preflight inside both
-the capture and deploy phases. This keeps each phase independently safe and
-reusable, so combined manifests may show two `preflight_api_access` steps.
+the capture and deploy phases, including read-only provider checks for region,
+type, and image availability. This keeps each phase independently safe and
+reusable, so combined manifests may show two `preflight_api_access` and
+`preflight_provider_inputs` steps.
 
 Live smoke command shape:
 
@@ -183,10 +189,10 @@ top-level fields and also nests `capture` and `deploy` sections. Top-level
 `capture.resources`, `deploy.resources`, `capture.validation`, and
 `deploy.validation` are phase-specific slices of that same lifecycle.
 
-`validation` means provider/API-level checks only: resource state, requested
-region, required tags, disk presence for capture, and image availability for
-capture. It does not include SSH, app health, service readiness, or cloud-init
-completion checks.
+`validation` means provider/API-level checks only: input availability, resource
+state, requested region, required tags, disk presence for capture, and image
+availability for capture. It does not include SSH, app health, service
+readiness, or cloud-init completion checks.
 
 Validation checks are structured as stable objects with `name`, `status`, and a
 symbolic `target`. Failed checks include a sanitized `failure_reason`; provider

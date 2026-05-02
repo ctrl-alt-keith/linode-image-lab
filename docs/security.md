@@ -38,6 +38,7 @@ approved environment injection.
 OAuth access that can:
 
 - read the current profile for preflight,
+- read regions, Linode types, and images for input preflight,
 - create, read, shut down, and delete temporary Linodes,
 - create and read custom images,
 - apply tags to created resources.
@@ -73,10 +74,10 @@ preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
 
 `capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
 before mutation if required options or `LINODE_TOKEN` are missing. They perform
-non-mutating token preflight before creating resources. Partial-failure cleanup
-only targets resources whose required tags exactly match the current run.
-Tag mismatches are represented as preserved resources in manifests, not as
-deletion attempts.
+non-mutating token preflight and read-only region, type, and image input
+preflight before creating resources. Partial-failure cleanup only targets
+resources whose required tags exactly match the current run. Tag mismatches are
+represented as preserved resources in manifests, not as deletion attempts.
 
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
@@ -90,7 +91,7 @@ mismatched tags, resources with malformed or unexpired TTL values, and resources
 outside an optional `--run-id` filter. Preserved entries use sanitized reason
 strings and normal stdout redacts provider identifiers.
 
-Validation is limited to provider/API responses: resource state, requested
-region, required tags, disk presence for capture, and image availability for
-capture. It does not perform SSH, cloud-init, service, or application readiness
-checks.
+Validation is limited to provider/API responses: input availability, resource
+state, requested region, required tags, disk presence for capture, and image
+availability for capture. It does not perform SSH, cloud-init, service, or
+application readiness checks.
