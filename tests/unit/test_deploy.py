@@ -111,7 +111,7 @@ class ExplodingClient:
 class InvalidTokenClient(FakeLinodeClient):
     def preflight(self) -> None:
         self.calls.append("preflight")
-        raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API")
+        raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API")
 
 
 class InvalidProviderInputClient(FakeLinodeClient):

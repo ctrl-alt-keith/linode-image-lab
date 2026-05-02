@@ -125,9 +125,10 @@ custom image in the first requested region, then deploys that same captured
 image sequentially to each requested region. Execution is sequential only;
 there is no parallelism, cross-region dependency graph, scheduler, retry
 fan-out, or infrastructure reconciliation. Linode custom images are deployable
-across regions; the first deploy in a region may take longer while the provider
-handles image transfer. The single capture result is recorded under `capture`,
-and each deploy attempt is recorded under `deploy_results.<region>`.
+across regions; public docs do not specify cross-region deploy latency.
+Operators should expect farther-region deploys may take longer, but the tool
+does not depend on that timing. The single capture result is recorded under
+`capture`, and each deploy attempt is recorded under `deploy_results.<region>`.
 
 If capture fails, no deploy regions are attempted and the top-level status is
 `failed`. If capture succeeds, multi-region execution continues after a deploy
@@ -186,6 +187,9 @@ required tags are present:
 - `component=<capture|deploy>`
 - `ttl=<timestamp>`
 
+`ttl` is a project-internal cleanup tag used by this tool. Linode does not
+enforce it as a provider-side expiration policy.
+
 Execute-mode cleanup inside capture, deploy, and capture-deploy is narrower
 than standalone cleanup. Capture only attempts to delete the current run's
 temporary capture-source Linode, deploy only attempts to delete the current
@@ -227,9 +231,9 @@ including `steps`, `resources`, `validation`, and `cleanup`. The top-level
 multi-region manifest is aggregate-only and does not duplicate nested
 `resources`, `validation`, or `cleanup` fields.
 
-`validation` means provider/API-level checks only: input availability, resource
-state, requested region, required tags, disk presence for capture, and image
-availability for capture. It does not include SSH, app health, service
+`validation` means provider/API-level checks only: input existence/access,
+image available status, resource state, requested region, required tags, and
+disk presence for capture. It does not include SSH, app health, service
 readiness, or cloud-init completion checks.
 
 Validation checks are structured as stable objects with `name`, `status`, and a

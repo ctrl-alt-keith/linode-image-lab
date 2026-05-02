@@ -117,7 +117,14 @@ class LinodeClient:
 
     def preflight_image(self, image_id: str) -> None:
         escaped = quote(image_id, safe="")
-        self._preflight_resource(f"/images/{escaped}", "requested image is unavailable")
+        try:
+            response = self._request("GET", f"/images/{escaped}", retry=True, operation="preflight_resource")
+        except LinodeTokenError:
+            raise
+        except LinodeApiError as exc:
+            raise LinodePreflightError("requested image is unavailable") from exc
+        if response.get("status") != "available":
+            raise LinodePreflightError("requested image is not available")
 
     def create_instance(
         self,
@@ -266,8 +273,10 @@ class LinodeClient:
                     text = response.read().decode("utf-8")
                 break
             except HTTPError as exc:
-                if exc.code in {401, 403}:
-                    raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API") from exc
+                if exc.code == 401:
+                    raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API") from exc
+                if exc.code == 403:
+                    raise LinodeTokenError("LINODE_TOKEN lacks required Linode permissions or scopes") from exc
                 if self._should_retry_status(exc.code, attempt=attempt, attempts=attempts):
                     self._record_retry_event(
                         method=method,

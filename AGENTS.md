@@ -15,8 +15,10 @@ Repo-local rules take precedence only for repo-specific behavior.
   `deploy --execute`; default behavior remains non-mutating.
 - M4 permits explicit single-region capture-deploy execution only through
   `capture-deploy --execute`; default behavior remains non-mutating.
-- Do not add multi-region execution or additional real Linode mutation behavior
-  until a later milestone explicitly asks for it.
+- M5 permits explicit sequential multi-region capture-deploy execution only
+  through `capture-deploy --execute`; default behavior remains non-mutating.
+- Do not add additional real Linode mutation behavior until a later milestone
+  explicitly asks for it.
 
 ## Execution Model Boundary
 
