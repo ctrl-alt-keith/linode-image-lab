@@ -171,11 +171,17 @@ def execute_multi_region_capture_deploy(
 
     cleanup_deferred_capture(run_client, capture_manifest)
     manifest["capture"] = capture_manifest
+    cleanup_failed = cleanup_status(capture_manifest) == "failed"
+    if cleanup_failed:
+        manifest["summary"]["cleanup"] = cleanup_summary(capture_manifest)
     manifest["status"] = aggregate_status(
         succeeded=manifest["summary"]["succeeded"],
         failed=manifest["summary"]["failed"],
+        cleanup_failed=cleanup_failed,
     )
     if manifest["status"] != "succeeded":
+        if cleanup_failed and not manifest["summary"]["failed"]:
+            raise CaptureDeployError("capture-deploy --execute cleanup failed", manifest)
         raise CaptureDeployError("capture-deploy --execute failed for one or more regions", manifest)
     return manifest
 
@@ -340,11 +346,13 @@ def validate_single_region_execute_options(options: CaptureDeployOptions) -> Non
     validate_execute_options(options)
 
 
-def aggregate_status(*, succeeded: list[str], failed: list[str]) -> str:
+def aggregate_status(*, succeeded: list[str], failed: list[str], cleanup_failed: bool = False) -> str:
     if succeeded and failed:
         return "partial"
     if failed:
         return "failed"
+    if cleanup_failed:
+        return "partial"
     return "succeeded"
 
 
@@ -578,12 +586,15 @@ def combined_cleanup(
 ) -> dict[str, Any]:
     deleted: list[dict[str, Any]] = []
     preserved: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     capture_cleanup = cleanup_block(capture_manifest)
     deploy_cleanup = cleanup_block(deploy_manifest)
     deleted.extend(capture_cleanup.get("deleted", []))
     deleted.extend(deploy_cleanup.get("deleted", []))
     preserved.extend(capture_cleanup.get("preserved", []))
     preserved.extend(deploy_cleanup.get("preserved", []))
+    failed.extend(capture_cleanup.get("failed", []))
+    failed.extend(deploy_cleanup.get("failed", []))
 
     if capture_manifest is not None and capture_manifest.get("custom_image"):
         custom_image = dict(capture_manifest["custom_image"])
@@ -604,6 +615,7 @@ def combined_cleanup(
         "status": status,
         "deleted": deleted,
         "preserved": preserved,
+        "failed": failed,
         "capture": capture_cleanup,
         "deploy": deploy_cleanup,
     }
@@ -617,6 +629,16 @@ def cleanup_block(manifest: dict[str, Any] | None) -> dict[str, Any]:
 
 def cleanup_status(manifest: dict[str, Any]) -> str:
     return str(manifest.get("cleanup", {}).get("status", "not_started"))
+
+
+def cleanup_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    cleanup = cleanup_block(manifest)
+    return {
+        "status": cleanup.get("status", "not_started"),
+        "deleted": len(cleanup.get("deleted", [])),
+        "preserved": len(cleanup.get("preserved", [])),
+        "failed": len(cleanup.get("failed", [])),
+    }
 
 
 def append_step(manifest: dict[str, Any], name: str, *, mutates: bool, status: str) -> None:

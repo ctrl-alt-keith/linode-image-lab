@@ -220,7 +220,7 @@ class LinodeClient:
         return self._instance_resource(response)
 
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
-        self._request("DELETE", f"/linode/instances/{linode_id}", retry=True, operation="delete_instance")
+        self._request("DELETE", f"/linode/instances/{linode_id}", retry=False, operation="delete_instance")
         return {"linode_id": linode_id, "deleted": True}
 
     def _preflight_resource(self, path: str, unavailable_message: str) -> None:

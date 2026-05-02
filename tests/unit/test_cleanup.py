@@ -5,7 +5,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from linode_image_lab.cleanup import cleanup_plan, select_cleanup_candidates
+from linode_image_lab.cleanup import CleanupError, cleanup_plan, select_cleanup_candidates
 from linode_image_lab.manifest import serialize_manifest
 
 
@@ -19,10 +19,12 @@ class FakeCleanupClient:
         *,
         refreshed_resources: dict[int, dict[str, object]] | None = None,
         refetch_failure: bool = False,
+        delete_failures: set[int] | None = None,
     ) -> None:
         self.resources = resources
         self.refreshed_resources = refreshed_resources or {}
         self.refetch_failure = refetch_failure
+        self.delete_failures = delete_failures or set()
         self.preflight_count = 0
         self.list_count = 0
         self.get_count = 0
@@ -48,6 +50,8 @@ class FakeCleanupClient:
 
     def delete_instance(self, linode_id: int) -> dict[str, object]:
         self.deleted.append(linode_id)
+        if linode_id in self.delete_failures:
+            raise ValueError("provider response included private details")
         return {"linode_id": linode_id, "deleted": True}
 
 
@@ -117,6 +121,28 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(client.get_count, 1)
         self.assertEqual(client.deleted, [456])
         self.assertEqual(manifest["cleanup"]["deleted"][0]["reason"], "expired_ttl")
+        self.assertEqual(manifest["cleanup"]["failed"], [])
+
+    def test_execute_reports_delete_failure_and_continues_later_candidates(self) -> None:
+        client = FakeCleanupClient(
+            [linode_resource(linode_id=456), linode_resource(linode_id=789)],
+            delete_failures={456},
+        )
+
+        with self.assertRaises(CleanupError) as raised:
+            cleanup_plan(execute=True, client=client, now=NOW)
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(client.deleted, [456, 789])
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["cleanup"]["status"], "failed")
+        self.assertEqual([item["linode_id"] for item in manifest["cleanup"]["deleted"]], [789])
+        self.assertEqual([item["linode_id"] for item in manifest["cleanup"]["failed"]], [456])
+        self.assertEqual(manifest["cleanup"]["failed"][0]["reason"], "delete_status_unknown")
+        self.assertNotIn("provider response", json.dumps(manifest["cleanup"]["failed"]))
+        self.assertEqual(manifest["steps"][-1]["status"], "failed")
 
     def test_execute_preserves_candidate_that_becomes_unexpired_before_delete(self) -> None:
         initial = linode_resource(linode_id=456, ttl="2026-01-01T00:00:00Z")

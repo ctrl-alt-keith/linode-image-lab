@@ -271,42 +271,27 @@ class LinodeClientTests(unittest.TestCase):
             ],
         )
 
-    def test_delete_instance_retries_transient_network_failure(self) -> None:
+    def test_delete_instance_does_not_retry_transient_network_failure(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,
             api_base_url=API_BASE_URL,
             max_retry_attempts=2,
             retry_backoff_seconds=(),
         )
-        responses: list[FakeHTTPResponse | OSError] = [OSError("network unavailable"), FakeHTTPResponse({})]
         requests: list[object] = []
 
         def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
             requests.append(request)
-            response = responses.pop(0)
-            if isinstance(response, OSError):
-                raise response
-            return response
+            raise OSError("network unavailable")
 
         with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
-            resource = client.delete_instance(123)
+            with self.assertRaises(LinodeApiError) as raised:
+                client.delete_instance(123)
 
-        self.assertEqual([request.get_method() for request in requests], ["DELETE", "DELETE"])
-        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/linode/instances/123"] * 2)
-        self.assertEqual(resource, {"linode_id": 123, "deleted": True})
-        self.assertEqual(
-            client.consume_retry_events(),
-            [
-                {
-                    "operation": "delete_instance",
-                    "method": "DELETE",
-                    "attempt": 1,
-                    "next_attempt": 2,
-                    "max_attempts": 2,
-                    "reason": "OSError",
-                }
-            ],
-        )
+        self.assertEqual(str(raised.exception), "Linode API request failed")
+        self.assertEqual([request.get_method() for request in requests], ["DELETE"])
+        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/linode/instances/123"])
+        self.assertEqual(client.consume_retry_events(), [])
 
     def test_create_instance_sends_expected_payload_and_maps_response(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)

@@ -315,13 +315,14 @@ The nested `capture` value is the single capture manifest, and each
 `deploy_results.<region>` value is the deploy manifest for that requested
 region.
 
-Multi-region status is `succeeded` when every requested deploy region succeeds,
-`partial` when some deploy regions fail, and `failed` when capture fails or
-every deploy region fails. A failed deploy region does not block cleanup for
+Multi-region status is `succeeded` when every requested deploy region succeeds
+and capture cleanup completes, `partial` when some deploy regions fail or
+capture cleanup fails after successful deploys, and `failed` when capture fails
+or every deploy region fails. A failed deploy region does not block cleanup for
 that region or execution of later deploy regions. Partial failures indicate
-real provider/API errors, invalid inputs, or transient issues. Validation checks
-are objects with `name`, `status`, and a symbolic `target`; failed checks
-include a sanitized `failure_reason`.
+real provider/API errors, invalid inputs, transient issues, or unresolved
+cleanup. Validation checks are objects with `name`, `status`, and a symbolic
+`target`; failed checks include a sanitized `failure_reason`.
 
 Cleanup status values are literal: `deleted` means a temporary Linode was
 deleted, `preserved` means a resource was kept or skipped for safety,
@@ -330,8 +331,10 @@ complete.
 
 Standalone `cleanup --execute` does not delete custom images, untagged
 resources, or resources with missing, malformed, unexpired, or mismatched
-managed tags. Preserved entries include a sanitized `reason`, such as
-`ttl_not_expired`, `ttl_parse_failed`, or `missing_required_tags`.
+managed tags. It re-fetches each candidate before a single DELETE attempt.
+Preserved and failed entries include a sanitized `reason`, such as
+`ttl_not_expired`, `ttl_parse_failed`, `missing_required_tags`, or
+`delete_status_unknown`.
 
 ## Independence and Intent
 
