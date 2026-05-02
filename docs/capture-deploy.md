@@ -179,10 +179,15 @@ tags did not match, with a `reason` such as `requested`, `tag_mismatch`, or
 Single-command execute manifests expose top-level `status`, `steps`,
 `resources`, `validation`, and `cleanup`. Capture-deploy keeps the same
 top-level fields and also nests `capture` and `deploy` sections. Top-level
-`resources` is the combined list for the whole run. Nested `capture.resources`
-and `deploy.resources` are phase-specific slices of that same lifecycle.
+`resources` and `validation` summarize the whole run. Nested
+`capture.resources`, `deploy.resources`, `capture.validation`, and
+`deploy.validation` are phase-specific slices of that same lifecycle.
 
 `validation` means provider/API-level checks only: resource state, requested
 region, required tags, disk presence for capture, and image availability for
 capture. It does not include SSH, app health, service readiness, or cloud-init
 completion checks.
+
+Validation checks are structured as stable objects with `name`, `status`, and a
+symbolic `target`. Failed checks include a sanitized `failure_reason`; provider
+resource identifiers are redacted during serialization.

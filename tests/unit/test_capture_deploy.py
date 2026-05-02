@@ -9,6 +9,18 @@ from linode_image_lab.capture_deploy import CaptureDeployError, capture_deploy_p
 from linode_image_lab.manifest import serialize_manifest
 
 
+def validation_check(manifest: dict[str, object], name: str, target: str) -> dict[str, object]:
+    validation = manifest["validation"]
+    assert isinstance(validation, dict)
+    checks = validation["checks"]
+    assert isinstance(checks, list)
+    for check in checks:
+        assert isinstance(check, dict)
+        if check.get("name") == name and check.get("target") == target:
+            return check
+    raise AssertionError(f"missing validation check: {name} target={target}")
+
+
 class FakeLinodeClient:
     def __init__(self, *, missing_deploy_tags: bool = False) -> None:
         self.calls: list[str] = []
@@ -217,6 +229,17 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["capture"]["validation"]["status"], "succeeded")
         self.assertEqual(manifest["deploy"]["deploy_source"]["image_id"], "private/789")
         self.assertEqual(manifest["validation"]["status"], "succeeded")
+        self.assertEqual(manifest["capture"]["validation"]["checks"][0]["target"], "capture_source")
+        self.assertEqual(manifest["deploy"]["validation"]["checks"][0]["target"], "deploy_instance")
+        self.assertEqual(len(manifest["validation"]["checks"]), 8)
+        self.assertEqual(
+            validation_check(manifest, "custom_image_available", "capture.custom_image"),
+            {"name": "custom_image_available", "status": "succeeded", "target": "capture.custom_image"},
+        )
+        self.assertEqual(
+            validation_check(manifest, "required_tags_match", "deploy.deploy_instance"),
+            {"name": "required_tags_match", "status": "succeeded", "target": "deploy.deploy_instance"},
+        )
         self.assertEqual(manifest["cleanup"]["status"], "completed")
         self.assertEqual(client.deleted, [123, 321])
 
@@ -275,6 +298,16 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertIsNotNone(raised.exception.manifest)
         self.assertEqual(raised.exception.manifest["deploy"]["cleanup"]["status"], "preserved")
         self.assertEqual(raised.exception.manifest["deploy"]["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
+        self.assertEqual(raised.exception.manifest["validation"]["status"], "failed")
+        self.assertEqual(
+            validation_check(raised.exception.manifest, "required_tags_match", "deploy.deploy_instance"),
+            {
+                "name": "required_tags_match",
+                "status": "failed",
+                "target": "deploy.deploy_instance",
+                "failure_reason": "created resource is missing required deploy tags",
+            },
+        )
 
     def test_serialized_execute_manifest_redacts_provider_ids(self) -> None:
         manifest = capture_deploy_plan(

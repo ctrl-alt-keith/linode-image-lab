@@ -206,8 +206,10 @@ Modeled resources use rediscoverable tags:
 
 Execute manifests use consistent top-level `status`, `steps`, `resources`,
 `validation`, and `cleanup` fields. For `capture-deploy`, top-level `resources`
-and `cleanup` summarize the combined run, while nested `capture` and `deploy`
-blocks show phase-specific details.
+`validation`, and `cleanup` summarize the combined run, while nested `capture`
+and `deploy` blocks show phase-specific details. Validation checks are objects
+with `name`, `status`, and a symbolic `target`; failed checks include a
+sanitized `failure_reason`.
 
 Cleanup status values are literal: `deleted` means a temporary Linode was
 deleted, `preserved` means a resource was kept or skipped for safety,

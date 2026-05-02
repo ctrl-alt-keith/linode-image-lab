@@ -19,6 +19,7 @@ from .deploy import (
 )
 from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import create_manifest, generate_tags
+from .validation_results import combined_validation
 
 
 class CaptureDeployError(ValueError):
@@ -155,7 +156,10 @@ def execute_capture_deploy(
         sync_manifest(manifest, capture_manifest=capture_manifest, deploy_manifest=deploy_manifest)
 
         append_step(manifest, "record_deploy_validation", mutates=False, status="running")
-        manifest["validation"] = dict(deploy_manifest.get("validation", {}))
+        manifest["validation"] = combined_validation(
+            capture_validation=capture_manifest.get("validation", {}),
+            deploy_validation=deploy_manifest.get("validation", {}),
+        )
         finish_step(manifest, "record_deploy_validation")
 
         append_step(manifest, "cleanup_temporary_resources", mutates=True, status="running")
@@ -311,7 +315,11 @@ def sync_manifest(
             "validation": deploy_manifest.get("validation", {}),
             "cleanup": deploy_manifest.get("cleanup", {}),
         }
-        manifest["validation"] = dict(deploy_manifest.get("validation", manifest["validation"]))
+
+    manifest["validation"] = combined_validation(
+        capture_validation=capture_manifest.get("validation", {}) if capture_manifest is not None else None,
+        deploy_validation=deploy_manifest.get("validation", {}) if deploy_manifest is not None else None,
+    )
 
     resources: list[dict[str, Any]] = []
     if capture_manifest is not None:

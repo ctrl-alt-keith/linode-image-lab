@@ -57,11 +57,12 @@ execution adds `execution_mode`, ordered `steps`, `resources`, `deploy_source`,
 execution adds top-level `execution_mode`, `steps`, `resources`, `capture`,
 `deploy`, `validation`, and `cleanup` fields. Top-level `resources` is the
 combined resource list; nested `capture.resources` and `deploy.resources` are
-phase-specific views. Top-level `cleanup` is the combined cleanup summary;
-nested cleanup blocks preserve phase-specific status. Internal manifests may
-carry provider resource identifiers required for cleanup and debugging. Normal
-stdout uses sanitized serialization, which redacts provider identifiers before
-printing.
+phase-specific views. Top-level `validation` and `cleanup` are combined
+summaries; nested validation and cleanup blocks preserve phase-specific status.
+Validation checks record `name`, `status`, a symbolic `target`, and a sanitized
+`failure_reason` when a check fails. Internal manifests may carry provider
+resource identifiers required for cleanup and debugging. Normal stdout uses
+sanitized serialization, which redacts provider identifiers before printing.
 
 ## Config Defaults
 
@@ -136,7 +137,7 @@ The execute flow reuses the capture and deploy internals:
 1. run capture with `mode=capture-deploy` and `component=capture`,
 2. pass the internal custom image id to deploy without exposing it in stdout,
 3. run deploy with `mode=capture-deploy` and `component=deploy`,
-4. surface deploy's provider/API-level validation result,
+4. surface the combined provider/API-level validation summary,
 5. delete the temporary capture-source Linode when its current-run tags match,
 6. delete or preserve the temporary deploy Linode according to
    `--preserve-instance`,
