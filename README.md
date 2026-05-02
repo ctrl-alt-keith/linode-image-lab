@@ -136,6 +136,14 @@ Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `region` or `regions`, `ttl`, `source_image`, `image_id`, and `type`, depending
 on the command.
 
+`capture-deploy --execute` accepts multiple regions through repeated
+`--region` flags or `regions = [...]` config. It captures one custom image in
+the first requested region, then deploys that captured image sequentially to
+each requested region. Linode custom images are deployable across regions; the
+first deploy in a region may take longer while the provider handles image
+transfer. Standalone `capture --execute` and `deploy --execute` remain
+single-region only.
+
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
 `effective_defaults`, and `sources`. Precedence is explicit CLI values first,
@@ -248,11 +256,22 @@ Modeled resources use rediscoverable tags:
 ## Manifest Output
 
 Execute manifests use consistent top-level `status`, `steps`, `resources`,
-`validation`, and `cleanup` fields. For `capture-deploy`, top-level `resources`
-`validation`, and `cleanup` summarize the combined run, while nested `capture`
-and `deploy` blocks show phase-specific details. Validation checks are objects
-with `name`, `status`, and a symbolic `target`; failed checks include a
-sanitized `failure_reason`.
+`validation`, and `cleanup` fields. For single-region `capture-deploy`,
+top-level `resources`, `validation`, and `cleanup` summarize the combined run,
+while nested `capture` and `deploy` blocks show phase-specific details.
+Multi-region `capture-deploy --execute` emits one combined manifest with
+top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
+The nested `capture` value is the single capture manifest, and each
+`deploy_results.<region>` value is the deploy manifest for that requested
+region.
+
+Multi-region status is `succeeded` when every requested deploy region succeeds,
+`partial` when some deploy regions fail, and `failed` when capture fails or
+every deploy region fails. A failed deploy region does not block cleanup for
+that region or execution of later deploy regions. Partial failures indicate
+real provider/API errors, invalid inputs, or transient issues. Validation checks
+are objects with `name`, `status`, and a symbolic `target`; failed checks
+include a sanitized `failure_reason`.
 
 Cleanup status values are literal: `deleted` means a temporary Linode was
 deleted, `preserved` means a resource was kept or skipped for safety,

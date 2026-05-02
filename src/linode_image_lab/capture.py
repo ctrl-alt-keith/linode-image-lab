@@ -42,6 +42,7 @@ class CaptureOptions:
     mode: str = "capture"
     component: str = "capture"
     defer_cleanup: bool = False
+    label_suffix: str | None = None
 
 
 def capture_plan(
@@ -126,8 +127,8 @@ def execute_capture(
         region = options.regions[0]
         source_image = required_text(options.source_image)
         instance_type = required_text(options.instance_type)
-        source_label = f"lil-{safe_label_suffix(manifest['run_id'])}-source"
-        image_label = options.image_label or f"lil-{safe_label_suffix(manifest['run_id'])}-image"
+        source_label = resource_label(manifest["run_id"], "source", suffix=options.label_suffix)
+        image_label = options.image_label or resource_label(manifest["run_id"], "image", suffix=options.label_suffix)
 
         append_step(manifest, "preflight_provider_inputs", mutates=False, status="running")
         run_client.preflight_region(region)
@@ -430,6 +431,14 @@ def required_int(value: object) -> int:
 def safe_label_suffix(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     return (normalized or "run")[:32]
+
+
+def resource_label(run_id: str, resource: str, *, suffix: str | None = None) -> str:
+    parts = ["lil", safe_label_suffix(run_id)]
+    if suffix:
+        parts.append(safe_label_suffix(suffix))
+    parts.append(resource)
+    return "-".join(parts)
 
 
 def safe_error_message(exc: Exception) -> str:

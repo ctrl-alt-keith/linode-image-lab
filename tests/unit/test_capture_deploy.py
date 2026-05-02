@@ -30,11 +30,20 @@ class FakeLinodeClient:
         self.image_tags: list[str] = []
         self.deleted: list[int] = []
         self.missing_deploy_tags = missing_deploy_tags
+        self.current_region = "us-east"
+        self.capture_count = 0
+        self.deploy_count = 0
+        self.created_regions: list[str] = []
+        self.deploy_source_images: list[str] = []
+        self.instance_regions: dict[int, str] = {}
+        self.instance_tags: dict[int, list[str]] = {}
+        self.deploy_instance_ids: set[int] = set()
 
     def preflight(self) -> None:
         self.calls.append("preflight")
 
     def preflight_region(self, region: str) -> None:
+        self.current_region = region
         self.calls.append("preflight_region")
 
     def preflight_instance_type(self, instance_type: str) -> None:
@@ -54,20 +63,32 @@ class FakeLinodeClient:
         root_password: str,
     ) -> dict[str, object]:
         if source_image == "private/789":
+            linode_id = 321 + self.deploy_count
+            self.deploy_count += 1
             self.calls.append("create_deploy_instance")
+            self.deploy_source_images.append(source_image)
             self.deploy_tags = tags
+            self.created_regions.append(region)
+            self.instance_regions[linode_id] = region
+            self.instance_tags[linode_id] = [] if self.missing_deploy_tags else tags
+            self.deploy_instance_ids.add(linode_id)
             return {
-                "linode_id": 321,
+                "linode_id": linode_id,
                 "label": label,
                 "region": region,
                 "status": "provisioning",
                 "tags": [] if self.missing_deploy_tags else tags,
             }
 
+        linode_id = 123 + self.capture_count
+        self.capture_count += 1
         self.calls.append("create_capture_source")
         self.capture_tags = tags
+        self.created_regions.append(region)
+        self.instance_regions[linode_id] = region
+        self.instance_tags[linode_id] = tags
         return {
-            "linode_id": 123,
+            "linode_id": linode_id,
             "label": label,
             "region": region,
             "status": "provisioning",
@@ -75,21 +96,21 @@ class FakeLinodeClient:
         }
 
     def wait_instance_ready(self, linode_id: int) -> dict[str, object]:
-        if linode_id == 321:
+        if linode_id in self.deploy_instance_ids:
             self.calls.append("wait_deploy_instance_ready")
             return {
                 "linode_id": linode_id,
-                "region": "us-east",
+                "region": self.instance_regions[linode_id],
                 "status": "running",
-                "tags": [] if self.missing_deploy_tags else self.deploy_tags,
+                "tags": self.instance_tags[linode_id],
             }
 
         self.calls.append("wait_capture_source_ready")
         return {
             "linode_id": linode_id,
-            "region": "us-east",
+            "region": self.instance_regions[linode_id],
             "status": "running",
-            "tags": self.capture_tags,
+            "tags": self.instance_tags[linode_id],
         }
 
     def list_disks(self, linode_id: int) -> list[dict[str, object]]:
@@ -104,9 +125,9 @@ class FakeLinodeClient:
         self.calls.append("wait_capture_source_offline")
         return {
             "linode_id": linode_id,
-            "region": "us-east",
+            "region": self.instance_regions[linode_id],
             "status": "offline",
-            "tags": self.capture_tags,
+            "tags": self.instance_tags[linode_id],
         }
 
     def capture_image(
@@ -136,10 +157,10 @@ class FakeLinodeClient:
         }
 
     def delete_instance(self, linode_id: int) -> dict[str, object]:
-        if linode_id == 123:
-            self.calls.append("delete_capture_source")
-        else:
+        if linode_id in self.deploy_instance_ids:
             self.calls.append("delete_deploy_instance")
+        else:
+            self.calls.append("delete_capture_source")
         self.deleted.append(linode_id)
         return {"linode_id": linode_id, "deleted": True}
 
@@ -154,6 +175,23 @@ class InvalidCapturedImageClient(FakeLinodeClient):
         self.calls.append("preflight_image")
         if image_id == "private/789":
             raise LinodePreflightError("requested image is unavailable")
+
+
+class RegionDeployPreflightFailureClient(FakeLinodeClient):
+    def __init__(self, failing_regions: set[str]) -> None:
+        super().__init__()
+        self.failing_regions = failing_regions
+
+    def preflight_image(self, image_id: str) -> None:
+        self.calls.append("preflight_image")
+        if image_id == "private/789" and self.current_region in self.failing_regions:
+            raise LinodePreflightError(f"deploy image unavailable in {self.current_region}")
+
+
+class CaptureValidationFailureClient(FakeLinodeClient):
+    def list_disks(self, linode_id: int) -> list[dict[str, object]]:
+        self.calls.append("list_disks")
+        raise LinodePreflightError("capture source disk unavailable")
 
 
 class CaptureDeployExecutionTests(unittest.TestCase):
@@ -198,8 +236,80 @@ class CaptureDeployExecutionTests(unittest.TestCase):
                     instance_type="g6-nanode-1",
                 )
 
-    def test_execute_requires_single_region(self) -> None:
-        with self.assertRaisesRegex(CaptureDeployError, "exactly one non-empty --region"):
+    def test_dry_run_multi_region_remains_non_mutating(self) -> None:
+        manifest = capture_deploy_plan(
+            regions=["us-east", "us-west"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            client=ExplodingClient(),
+        )
+
+        self.assertTrue(manifest["dry_run"])
+        self.assertEqual(manifest["execution_mode"], "dry-run")
+        self.assertEqual(manifest["regions"], ["us-east", "us-west"])
+        self.assertEqual(
+            [(action["action"], action["region"]) for action in manifest["planned_actions"]],
+            [("capture", "us-east"), ("deploy", "us-east"), ("capture", "us-west"), ("deploy", "us-west")],
+        )
+
+    def test_execute_multi_region_all_succeed_records_aggregate_manifest(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = capture_deploy_plan(
+            regions=["us-east", "us-west"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            client=client,
+        )
+
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertEqual(manifest["regions"], ["us-east", "us-west"])
+        self.assertEqual(
+            manifest["summary"],
+            {
+                "capture_region": "us-east",
+                "deploy_regions": ["us-east", "us-west"],
+                "succeeded": ["us-east", "us-west"],
+                "failed": [],
+            },
+        )
+        self.assertEqual(set(manifest["deploy_results"]), {"us-east", "us-west"})
+        self.assertEqual(manifest["capture"]["regions"], ["us-east"])
+        self.assertEqual(manifest["deploy_results"]["us-east"]["regions"], ["us-east"])
+        self.assertEqual(manifest["deploy_results"]["us-west"]["regions"], ["us-west"])
+        self.assertEqual(manifest["deploy_results"]["us-east"]["deploy_source"]["image_id"], "private/789")
+        self.assertEqual(manifest["deploy_results"]["us-west"]["deploy_source"]["image_id"], "private/789")
+        self.assertNotIn("resources", manifest)
+        self.assertNotIn("cleanup", manifest)
+        self.assertNotIn("validation", manifest)
+
+    def test_execute_multi_region_captures_once_then_deploys_to_each_region(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = capture_deploy_plan(
+            regions=["us-east", "us-west"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            client=client,
+        )
+
+        self.assertEqual(client.calls.count("capture_image"), 1)
+        self.assertEqual(client.deploy_source_images, ["private/789", "private/789"])
+        self.assertEqual(client.created_regions, ["us-east", "us-east", "us-west"])
+        self.assertEqual(client.deleted, [321, 322, 123])
+        self.assertEqual(manifest["capture"]["cleanup"]["deleted"][0]["linode_id"], 123)
+        self.assertEqual(manifest["capture"]["cleanup"]["preserved"][0]["reason"], "deliverable")
+
+    def test_execute_multi_region_capture_failure_prevents_deploy_attempts(self) -> None:
+        client = CaptureValidationFailureClient()
+
+        with self.assertRaises(CaptureDeployError) as raised:
             capture_deploy_plan(
                 regions=["us-east", "us-west"],
                 run_id="run-test",
@@ -207,8 +317,82 @@ class CaptureDeployExecutionTests(unittest.TestCase):
                 execute=True,
                 source_image="linode/debian12",
                 instance_type="g6-nanode-1",
-                client=FakeLinodeClient(),
+                client=client,
             )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["capture"]["status"], "failed")
+        self.assertEqual(manifest["deploy_results"], {})
+        self.assertNotIn("create_deploy_instance", client.calls)
+        self.assertEqual(client.deleted, [123])
+
+    def test_execute_multi_region_partial_success_returns_partial_manifest(self) -> None:
+        client = RegionDeployPreflightFailureClient({"us-west"})
+
+        with self.assertRaises(CaptureDeployError) as raised:
+            capture_deploy_plan(
+                regions=["us-east", "us-west", "us-lax"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "partial")
+        self.assertEqual(
+            manifest["summary"],
+            {
+                "capture_region": "us-east",
+                "deploy_regions": ["us-east", "us-west", "us-lax"],
+                "succeeded": ["us-east", "us-lax"],
+                "failed": ["us-west"],
+            },
+        )
+        self.assertEqual(manifest["deploy_results"]["us-east"]["status"], "succeeded")
+        self.assertEqual(manifest["deploy_results"]["us-west"]["status"], "failed")
+        self.assertEqual(manifest["deploy_results"]["us-lax"]["status"], "succeeded")
+        self.assertEqual(client.created_regions, ["us-east", "us-east", "us-lax"])
+        self.assertEqual(client.deleted, [321, 322, 123])
+
+    def test_execute_multi_region_all_fail_records_failed_manifest(self) -> None:
+        client = RegionDeployPreflightFailureClient({"us-east", "us-west"})
+
+        with self.assertRaises(CaptureDeployError) as raised:
+            capture_deploy_plan(
+                regions=["us-east", "us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(
+            manifest["summary"],
+            {
+                "capture_region": "us-east",
+                "deploy_regions": ["us-east", "us-west"],
+                "succeeded": [],
+                "failed": ["us-east", "us-west"],
+            },
+        )
+        self.assertEqual(manifest["deploy_results"]["us-east"]["status"], "failed")
+        self.assertEqual(manifest["deploy_results"]["us-west"]["status"], "failed")
+        self.assertEqual(client.created_regions, ["us-east"])
+        self.assertEqual(client.deleted, [123])
 
     def test_execute_with_fake_client_records_capture_deploy_cleanup_order(self) -> None:
         client = FakeLinodeClient()
@@ -370,6 +554,28 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(exported["deploy"]["deploy_source"]["image_id"], "[REDACTED]")
         self.assertEqual(exported["deploy"]["deploy_instance"]["linode_id"], "[REDACTED]")
         self.assertEqual(exported["cleanup"]["preserved"][0]["image_id"], "[REDACTED]")
+
+    def test_serialized_multi_region_execute_manifest_redacts_provider_ids(self) -> None:
+        manifest = capture_deploy_plan(
+            regions=["us-east", "us-west"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            client=FakeLinodeClient(),
+        )
+
+        exported = json.loads(serialize_manifest(manifest))
+
+        self.assertEqual(exported["capture"]["capture_source"]["linode_id"], "[REDACTED]")
+        self.assertEqual(exported["capture"]["custom_image"]["image_id"], "[REDACTED]")
+        self.assertEqual(exported["capture"]["cleanup"]["deleted"][0]["linode_id"], "[REDACTED]")
+        self.assertEqual(exported["capture"]["cleanup"]["preserved"][0]["image_id"], "[REDACTED]")
+        self.assertEqual(exported["deploy_results"]["us-east"]["deploy_source"]["image_id"], "[REDACTED]")
+        self.assertEqual(exported["deploy_results"]["us-east"]["deploy_instance"]["linode_id"], "[REDACTED]")
+        self.assertEqual(exported["deploy_results"]["us-west"]["deploy_source"]["image_id"], "[REDACTED]")
+        self.assertEqual(exported["deploy_results"]["us-west"]["deploy_instance"]["linode_id"], "[REDACTED]")
 
 
 if __name__ == "__main__":

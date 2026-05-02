@@ -89,6 +89,137 @@ def execute_capture_deploy(
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
     validate_execute_options(options)
+    if len(options.regions) > 1:
+        return execute_multi_region_capture_deploy(options, client=client)
+    return execute_single_region_capture_deploy(options, client=client)
+
+
+def execute_multi_region_capture_deploy(
+    options: CaptureDeployOptions,
+    *,
+    client: LinodeClientProtocol | None = None,
+) -> dict[str, Any]:
+    manifest = multi_region_manifest(options)
+    run_client = client or LinodeClient.from_env(command="capture-deploy")
+    capture_region = options.regions[0]
+
+    try:
+        capture_manifest = execute_capture(
+            CaptureOptions(
+                regions=[capture_region],
+                run_id=manifest["run_id"],
+                ttl=manifest["ttl"],
+                execute=True,
+                source_image=required_text(options.source_image),
+                instance_type=required_text(options.instance_type),
+                preserve_source=False,
+                command="capture-deploy",
+                mode="capture-deploy",
+                component="capture",
+                defer_cleanup=True,
+                label_suffix=capture_region,
+            ),
+            client=run_client,
+        )
+    except CaptureError as exc:
+        manifest["capture"] = exc.manifest or failed_capture_manifest(
+            region=capture_region,
+            run_id=manifest["run_id"],
+            ttl=manifest["ttl"],
+            exc=exc,
+        )
+        manifest["status"] = "failed"
+        raise CaptureDeployError("capture-deploy --execute capture failed", manifest) from exc
+
+    manifest["capture"] = capture_manifest
+    image_id = required_text(capture_manifest.get("custom_image", {}).get("image_id"))
+
+    for region in manifest["summary"]["deploy_regions"]:
+        deploy_manifest: dict[str, Any]
+        try:
+            deploy_manifest = execute_deploy(
+                DeployOptions(
+                    regions=[region],
+                    run_id=manifest["run_id"],
+                    ttl=manifest["ttl"],
+                    execute=True,
+                    image_id=image_id,
+                    instance_type=options.instance_type,
+                    preserve_instance=options.preserve_instance,
+                    command="capture-deploy",
+                    mode="capture-deploy",
+                    component="deploy",
+                    defer_cleanup=False,
+                    label_suffix=region,
+                ),
+                client=run_client,
+            )
+        except DeployError as exc:
+            deploy_manifest = exc.manifest or failed_deploy_manifest(
+                region=region,
+                run_id=manifest["run_id"],
+                ttl=manifest["ttl"],
+                image_id=image_id,
+                exc=exc,
+            )
+
+        manifest["deploy_results"][region] = deploy_manifest
+        if deploy_manifest.get("status") == "succeeded":
+            manifest["summary"]["succeeded"].append(region)
+        else:
+            manifest["summary"]["failed"].append(region)
+
+    cleanup_deferred_capture(run_client, capture_manifest)
+    manifest["capture"] = capture_manifest
+    manifest["status"] = aggregate_status(
+        succeeded=manifest["summary"]["succeeded"],
+        failed=manifest["summary"]["failed"],
+    )
+    if manifest["status"] != "succeeded":
+        raise CaptureDeployError("capture-deploy --execute failed for one or more regions", manifest)
+    return manifest
+
+
+def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
+    base = create_manifest(
+        command="capture-deploy",
+        mode="capture-deploy",
+        component="capture",
+        regions=options.regions,
+        run_id=options.run_id,
+        ttl=options.ttl,
+        dry_run=False,
+        status="running",
+    )
+    return {
+        "schema_version": base["schema_version"],
+        "project": base["project"],
+        "command": base["command"],
+        "mode": base["mode"],
+        "regions": base["regions"],
+        "run_id": base["run_id"],
+        "ttl": base["ttl"],
+        "dry_run": base["dry_run"],
+        "execution_mode": "execute",
+        "status": base["status"],
+        "capture": {},
+        "deploy_results": {},
+        "summary": {
+            "capture_region": options.regions[0],
+            "deploy_regions": list(options.regions),
+            "succeeded": [],
+            "failed": [],
+        },
+    }
+
+
+def execute_single_region_capture_deploy(
+    options: CaptureDeployOptions,
+    *,
+    client: LinodeClientProtocol | None = None,
+    label_suffix: str | None = None,
+) -> dict[str, Any]:
+    validate_single_region_execute_options(options)
     manifest = create_manifest(
         command="capture-deploy",
         mode="capture-deploy",
@@ -127,6 +258,7 @@ def execute_capture_deploy(
                 mode="capture-deploy",
                 component="capture",
                 defer_cleanup=True,
+                label_suffix=label_suffix,
             ),
             client=run_client,
         )
@@ -149,6 +281,7 @@ def execute_capture_deploy(
                 mode="capture-deploy",
                 component="deploy",
                 defer_cleanup=True,
+                label_suffix=label_suffix,
             ),
             client=run_client,
         )
@@ -193,12 +326,117 @@ def execute_capture_deploy(
 
 
 def validate_execute_options(options: CaptureDeployOptions) -> None:
-    if len(options.regions) != 1:
-        raise CaptureDeployError("capture-deploy --execute requires exactly one non-empty --region")
+    if not options.regions:
+        raise CaptureDeployError("capture-deploy --execute requires at least one non-empty --region")
     if not options.source_image:
         raise CaptureDeployError("capture-deploy --execute requires --source-image for the temporary capture Linode")
     if not options.instance_type:
         raise CaptureDeployError("capture-deploy --execute requires --type for temporary capture and deploy Linodes")
+
+
+def validate_single_region_execute_options(options: CaptureDeployOptions) -> None:
+    if len(options.regions) != 1:
+        raise CaptureDeployError("capture-deploy single-region execution requires exactly one non-empty --region")
+    validate_execute_options(options)
+
+
+def aggregate_status(*, succeeded: list[str], failed: list[str]) -> str:
+    if succeeded and failed:
+        return "partial"
+    if failed:
+        return "failed"
+    return "succeeded"
+
+
+def cleanup_deferred_capture(client: LinodeClientProtocol, capture_manifest: dict[str, Any]) -> None:
+    if cleanup_status(capture_manifest) != "deferred":
+        return
+    try:
+        cleanup_capture_source(
+            capture_manifest,
+            client,
+            capture_source=capture_manifest["capture_source"],
+            preserve_source=False,
+            required_tags=list(capture_manifest["tags"]),
+        )
+    except Exception:
+        capture_manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
+        return
+    record_custom_image_deliverable(capture_manifest)
+
+
+def record_custom_image_deliverable(capture_manifest: dict[str, Any]) -> None:
+    custom_image = capture_manifest.get("custom_image")
+    if not custom_image:
+        return
+    cleanup = capture_manifest.setdefault("cleanup", {"status": "not_started", "deleted": [], "preserved": []})
+    preserved = cleanup.setdefault("preserved", [])
+    if any(item.get("reason") == "deliverable" for item in preserved):
+        return
+    deliverable = dict(custom_image)
+    deliverable["reason"] = "deliverable"
+    preserved.append(deliverable)
+
+
+def failed_capture_manifest(
+    *,
+    region: str,
+    run_id: str,
+    ttl: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    manifest = create_manifest(
+        command="capture-deploy",
+        mode="capture-deploy",
+        component="capture",
+        regions=[region],
+        run_id=run_id,
+        ttl=ttl,
+        dry_run=False,
+        status="failed",
+    )
+    manifest["execution_mode"] = "execute"
+    manifest["steps"] = []
+    manifest["resources"] = []
+    manifest["capture_source"] = {}
+    manifest["custom_image"] = {}
+    manifest["validation"] = {"status": "not_started", "checks": []}
+    manifest["cleanup"] = {"status": "not_started", "deleted": [], "preserved": []}
+    for action in manifest["planned_actions"]:
+        action["mutates"] = True
+    manifest["errors"] = [safe_error_message(exc)]
+    return manifest
+
+
+def failed_deploy_manifest(
+    *,
+    region: str,
+    run_id: str,
+    ttl: str,
+    image_id: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    manifest = create_manifest(
+        command="capture-deploy",
+        mode="capture-deploy",
+        component="deploy",
+        regions=[region],
+        run_id=run_id,
+        ttl=ttl,
+        dry_run=False,
+        status="failed",
+    )
+    manifest["execution_mode"] = "execute"
+    manifest["steps"] = []
+    manifest["resources"] = []
+    manifest["deploy_source"] = {"image_id": image_id}
+    manifest["deploy_instance"] = {}
+    manifest["validation"] = {"status": "not_started", "checks": []}
+    manifest["cleanup"] = {"status": "not_started", "deleted": [], "preserved": []}
+    for action in manifest["planned_actions"]:
+        action["mutates"] = True
+    manifest["errors"] = [safe_error_message(exc)]
+    return manifest
 
 
 def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> None:
