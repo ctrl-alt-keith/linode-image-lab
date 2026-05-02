@@ -120,7 +120,7 @@ def execute_capture(
     try:
         append_step(manifest, "preflight_api_access", mutates=False, status="running")
         run_client.preflight()
-        finish_step(manifest, "preflight_api_access")
+        finish_step(manifest, "preflight_api_access", client=run_client)
 
         tags = list(manifest["tags"])
         region = options.regions[0]
@@ -133,7 +133,7 @@ def execute_capture(
         run_client.preflight_region(region)
         run_client.preflight_instance_type(instance_type)
         run_client.preflight_image(source_image)
-        finish_step(manifest, "preflight_provider_inputs")
+        finish_step(manifest, "preflight_provider_inputs", client=run_client)
 
         append_step(manifest, "create_capture_source", mutates=True, status="running")
         capture_source = run_client.create_instance(
@@ -147,7 +147,7 @@ def execute_capture(
         capture_source["resource_type"] = "linode"
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"].append(dict(capture_source))
-        finish_step(manifest, "create_capture_source")
+        finish_step(manifest, "create_capture_source", client=run_client)
 
         append_step(manifest, "wait_capture_source_ready", mutates=False, status="running")
         capture_source = merge_resource(
@@ -156,7 +156,7 @@ def execute_capture(
         )
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"][0] = dict(capture_source)
-        finish_step(manifest, "wait_capture_source_ready")
+        finish_step(manifest, "wait_capture_source_ready", client=run_client)
 
         append_step(manifest, "validate_capture_source_api", mutates=False, status="running")
         manifest["validation"] = start_validation(CAPTURE_VALIDATION_CHECKS)
@@ -189,11 +189,11 @@ def execute_capture(
         capture_source["disk_id"] = disk["disk_id"]
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"][0] = dict(capture_source)
-        finish_step(manifest, "validate_capture_source_api")
+        finish_step(manifest, "validate_capture_source_api", client=run_client)
 
         append_step(manifest, "shutdown_capture_source", mutates=True, status="running")
         run_client.shutdown_instance(required_int(capture_source.get("linode_id")))
-        finish_step(manifest, "shutdown_capture_source")
+        finish_step(manifest, "shutdown_capture_source", client=run_client)
 
         append_step(manifest, "wait_capture_source_offline", mutates=False, status="running")
         capture_source = merge_resource(
@@ -202,7 +202,7 @@ def execute_capture(
         )
         manifest["capture_source"] = dict(capture_source)
         manifest["resources"][0] = dict(capture_source)
-        finish_step(manifest, "wait_capture_source_offline")
+        finish_step(manifest, "wait_capture_source_offline", client=run_client)
 
         append_step(manifest, "create_custom_image", mutates=True, status="running")
         custom_image = run_client.capture_image(
@@ -215,7 +215,7 @@ def execute_capture(
         custom_image["resource_type"] = "image"
         manifest["custom_image"] = dict(custom_image)
         manifest["resources"].append(dict(custom_image))
-        finish_step(manifest, "create_custom_image")
+        finish_step(manifest, "create_custom_image", client=run_client)
 
         append_step(manifest, "wait_custom_image_available", mutates=False, status="running")
 
@@ -239,7 +239,7 @@ def execute_capture(
         manifest["custom_image"] = dict(custom_image)
         manifest["resources"][1] = dict(custom_image)
         finish_validation(manifest["validation"])
-        finish_step(manifest, "wait_custom_image_available")
+        finish_step(manifest, "wait_custom_image_available", client=run_client)
 
         if options.defer_cleanup:
             manifest["cleanup"] = {"status": "deferred", "deleted": [], "preserved": []}
@@ -254,7 +254,7 @@ def execute_capture(
         manifest["status"] = "succeeded"
         return manifest
     except Exception as exc:
-        mark_running_step_failed(manifest)
+        mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
         if capture_source is not None and not cleanup_started(manifest):
@@ -267,7 +267,7 @@ def execute_capture(
                     required_tags=list(manifest["tags"]),
                 )
             except Exception:
-                mark_running_step_failed(manifest)
+                mark_running_step_failed(manifest, client=run_client)
                 manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
         if manifest.get("validation", {}).get("status") == "running":
             manifest["validation"]["status"] = "failed"
@@ -318,7 +318,7 @@ def cleanup_capture_source(
             {"resource_type": "linode", "linode_id": capture_source.get("linode_id"), "reason": "tag_mismatch"}
         )
     manifest["cleanup"] = cleanup
-    finish_step(manifest, "cleanup_capture_source")
+    finish_step(manifest, "cleanup_capture_source", client=client)
 
 
 def append_step(
@@ -335,18 +335,29 @@ def append_step(
     manifest["steps"].append(step)
 
 
-def finish_step(manifest: dict[str, Any], name: str) -> None:
+def finish_step(manifest: dict[str, Any], name: str, *, client: object | None = None) -> None:
     for step in reversed(manifest["steps"]):
         if step["name"] == name:
+            attach_retry_events(step, client)
             step["status"] = "succeeded"
             return
 
 
-def mark_running_step_failed(manifest: dict[str, Any]) -> None:
+def mark_running_step_failed(manifest: dict[str, Any], *, client: object | None = None) -> None:
     for step in reversed(manifest.get("steps", [])):
         if step.get("status") == "running":
+            attach_retry_events(step, client)
             step["status"] = "failed"
             return
+
+
+def attach_retry_events(step: dict[str, Any], client: object | None) -> None:
+    consume = getattr(client, "consume_retry_events", None)
+    if not callable(consume):
+        return
+    retry_events = consume()
+    if retry_events:
+        step["api_retries"] = retry_events
 
 
 def cleanup_started(manifest: dict[str, Any]) -> bool:
