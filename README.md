@@ -42,6 +42,37 @@ python3 -m pip install git+https://github.com/ctrl-alt-keith/linode-image-lab.gi
 linode-image-lab --help
 ```
 
+## Release Recovery
+
+If `make release-publish VERSION=X.Y.Z` pushes `vX.Y.Z` but fails before
+`gh release create` completes, recover manually instead of rerunning the publish
+target. Confirm that the remote tag exists, the GitHub release does not, and the
+tag points at the intended release commit:
+
+```sh
+VERSION=X.Y.Z
+TAG="v${VERSION}"
+git fetch origin main --tags
+git ls-remote --exit-code --tags origin "refs/tags/${TAG}"
+git show --no-patch --decorate --oneline "${TAG}"
+gh release view "${TAG}"
+```
+
+If the tag commit is correct and `gh release view` reports no release, create
+the missing GitHub release from the existing tag:
+
+```sh
+make release-notes VERSION="${VERSION}" > /tmp/linode-image-lab-release-notes.md
+gh release create "${TAG}" \
+  --title "${TAG}" \
+  --notes-file /tmp/linode-image-lab-release-notes.md
+gh release view "${TAG}"
+```
+
+Do not delete, recreate, or force-push a public release tag during this recovery
+path. If the pushed tag points at the wrong commit, stop and handle it as an
+explicit release correction.
+
 Run from source:
 
 ```sh
