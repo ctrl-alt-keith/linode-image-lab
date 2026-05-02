@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -269,26 +271,32 @@ class LinodeClient:
                 if exc.code in {401, 403}:
                     raise LinodeTokenError("LINODE_TOKEN was rejected by the Linode API") from exc
                 if self._should_retry_status(exc.code, attempt=attempt, attempts=attempts):
+                    delay, delay_source = self._retry_delay(exc, attempt)
                     self._record_retry_event(
                         method=method,
                         operation=operation,
                         attempt=attempt,
                         attempts=attempts,
                         reason=f"status_{exc.code}",
+                        retry_delay_seconds=delay,
+                        retry_delay_source=delay_source,
                     )
-                    self._sleep_before_retry(attempt)
+                    self._sleep_before_retry(delay)
                     continue
                 raise LinodeApiError(self._failure_message(f"Linode API request failed with status {exc.code}", attempt)) from exc
             except OSError as exc:
                 if attempt < attempts:
+                    delay, delay_source = self._deterministic_retry_delay(attempt)
                     self._record_retry_event(
                         method=method,
                         operation=operation,
                         attempt=attempt,
                         attempts=attempts,
                         reason=exc.__class__.__name__,
+                        retry_delay_seconds=delay,
+                        retry_delay_source=delay_source,
                     )
-                    self._sleep_before_retry(attempt)
+                    self._sleep_before_retry(delay)
                     continue
                 raise LinodeApiError(self._failure_message("Linode API request failed", attempt)) from exc
 
@@ -313,11 +321,89 @@ class LinodeClient:
     def _should_retry_status(status: int, *, attempt: int, attempts: int) -> bool:
         return status in RETRYABLE_STATUS_CODES and attempt < attempts
 
-    def _sleep_before_retry(self, attempt: int) -> None:
+    def _retry_delay(self, exc: HTTPError, attempt: int) -> tuple[float | None, str | None]:
+        if exc.code == 429:
+            retry_after_delay = self._retry_after_delay(exc)
+            if retry_after_delay is not None:
+                return retry_after_delay, "retry_after"
+
+            rate_limit_reset_delay = self._rate_limit_reset_delay(exc)
+            if rate_limit_reset_delay is not None:
+                return rate_limit_reset_delay, "x_ratelimit_reset"
+
+        return self._deterministic_retry_delay(attempt)
+
+    def _deterministic_retry_delay(self, attempt: int) -> tuple[float | None, str | None]:
         if not self.retry_backoff_seconds:
-            return
+            return None, None
         delay = self.retry_backoff_seconds[min(attempt - 1, len(self.retry_backoff_seconds) - 1)]
-        if delay > 0:
+        return delay, "deterministic_backoff"
+
+    @classmethod
+    def _retry_after_delay(cls, exc: HTTPError) -> float | None:
+        value = cls._response_header(exc, "Retry-After")
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        delay = cls._parse_non_negative_seconds(text)
+        if delay is not None:
+            return delay
+
+        try:
+            retry_at = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+        return cls._delay_until(retry_at.timestamp())
+
+    @classmethod
+    def _rate_limit_reset_delay(cls, exc: HTTPError) -> float | None:
+        value = cls._response_header(exc, "X-RateLimit-Reset")
+        if value is None:
+            return None
+
+        try:
+            reset_at = float(str(value).strip())
+        except ValueError:
+            return None
+        return cls._delay_until(reset_at)
+
+    @staticmethod
+    def _delay_until(timestamp: float) -> float | None:
+        if not math.isfinite(timestamp):
+            return None
+        return max(0.0, timestamp - time.time())
+
+    @staticmethod
+    def _parse_non_negative_seconds(value: str) -> float | None:
+        try:
+            delay = float(value)
+        except ValueError:
+            return None
+        if not math.isfinite(delay) or delay < 0:
+            return None
+        return delay
+
+    @staticmethod
+    def _response_header(exc: HTTPError, name: str) -> object | None:
+        headers = exc.headers
+        if not headers:
+            return None
+        get = getattr(headers, "get", None)
+        if callable(get):
+            value = get(name)
+            if value is not None:
+                return value
+        items = getattr(headers, "items", None)
+        if callable(items):
+            for key, value in items():
+                if str(key).lower() == name.lower():
+                    return value
+        return None
+
+    @staticmethod
+    def _sleep_before_retry(delay: float | None) -> None:
+        if delay is not None and delay > 0:
             time.sleep(delay)
 
     def _record_retry_event(
@@ -328,17 +414,22 @@ class LinodeClient:
         attempt: int,
         attempts: int,
         reason: str,
+        retry_delay_seconds: float | None = None,
+        retry_delay_source: str | None = None,
     ) -> None:
-        self.retry_events.append(
-            {
-                "operation": operation or "linode_api_request",
-                "method": method,
-                "attempt": attempt,
-                "next_attempt": attempt + 1,
-                "max_attempts": attempts,
-                "reason": reason,
-            }
-        )
+        event = {
+            "operation": operation or "linode_api_request",
+            "method": method,
+            "attempt": attempt,
+            "next_attempt": attempt + 1,
+            "max_attempts": attempts,
+            "reason": reason,
+        }
+        if retry_delay_seconds is not None:
+            event["retry_delay_seconds"] = retry_delay_seconds
+        if retry_delay_source is not None:
+            event["retry_delay_source"] = retry_delay_source
+        self.retry_events.append(event)
 
     @staticmethod
     def _failure_message(message: str, attempt: int) -> str:

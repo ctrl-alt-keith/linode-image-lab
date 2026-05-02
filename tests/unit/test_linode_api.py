@@ -38,8 +38,8 @@ def request_payload(request: object) -> dict[str, object]:
 
 
 class LinodeClientTests(unittest.TestCase):
-    def http_error(self, status: int, message: str) -> HTTPError:
-        error = HTTPError(f"{API_BASE_URL}/profile", status, message, {}, None)
+    def http_error(self, status: int, message: str, headers: dict[str, str] | None = None) -> HTTPError:
+        error = HTTPError(f"{API_BASE_URL}/profile", status, message, headers or {}, None)
         self.addCleanup(error.close)
         return error
 
@@ -150,6 +150,8 @@ class LinodeClientTests(unittest.TestCase):
                     "next_attempt": 2,
                     "max_attempts": 3,
                     "reason": "status_429",
+                    "retry_delay_seconds": 1.0,
+                    "retry_delay_source": "deterministic_backoff",
                 },
                 {
                     "operation": "list_disks",
@@ -158,7 +160,98 @@ class LinodeClientTests(unittest.TestCase):
                     "next_attempt": 3,
                     "max_attempts": 3,
                     "reason": "status_500",
+                    "retry_delay_seconds": 2.0,
+                    "retry_delay_source": "deterministic_backoff",
                 },
+            ],
+        )
+
+    def test_rate_limit_retry_honors_retry_after_header(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=2,
+            retry_backoff_seconds=(1.0,),
+        )
+        responses: list[FakeHTTPResponse | HTTPError] = [
+            self.http_error(429, "rate limited", {"Retry-After": "7"}),
+            FakeHTTPResponse({"data": [{"id": 456, "label": "root"}]}),
+        ]
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            response = responses.pop(0)
+            if isinstance(response, HTTPError):
+                raise response
+            return response
+
+        with (
+            patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen),
+            patch("linode_image_lab.linode_api.time.sleep") as sleep,
+        ):
+            disks = client.list_disks(123)
+
+        self.assertEqual(disks, [{"id": 456, "label": "root"}])
+        self.assertEqual(sleep.call_args_list, [call(7.0)])
+        self.assertEqual(
+            client.consume_retry_events(),
+            [
+                {
+                    "operation": "list_disks",
+                    "method": "GET",
+                    "attempt": 1,
+                    "next_attempt": 2,
+                    "max_attempts": 2,
+                    "reason": "status_429",
+                    "retry_delay_seconds": 7.0,
+                    "retry_delay_source": "retry_after",
+                }
+            ],
+        )
+
+    def test_rate_limit_retry_uses_reset_header_when_retry_after_is_invalid(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=2,
+            retry_backoff_seconds=(1.0,),
+        )
+        responses: list[FakeHTTPResponse | HTTPError] = [
+            self.http_error(
+                429,
+                "rate limited",
+                {"Retry-After": "soon", "X-RateLimit-Reset": "115"},
+            ),
+            FakeHTTPResponse({"data": [{"id": 456, "label": "root"}]}),
+        ]
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            response = responses.pop(0)
+            if isinstance(response, HTTPError):
+                raise response
+            return response
+
+        with (
+            patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen),
+            patch("linode_image_lab.linode_api.time.time", return_value=100.0),
+            patch("linode_image_lab.linode_api.time.sleep") as sleep,
+        ):
+            disks = client.list_disks(123)
+
+        self.assertEqual(disks, [{"id": 456, "label": "root"}])
+        self.assertEqual(sleep.call_args_list, [call(15.0)])
+        self.assertEqual(
+            client.consume_retry_events(),
+            [
+                {
+                    "operation": "list_disks",
+                    "method": "GET",
+                    "attempt": 1,
+                    "next_attempt": 2,
+                    "max_attempts": 2,
+                    "reason": "status_429",
+                    "retry_delay_seconds": 15.0,
+                    "retry_delay_source": "x_ratelimit_reset",
+                }
             ],
         )
 
