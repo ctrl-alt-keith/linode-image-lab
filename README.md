@@ -120,6 +120,49 @@ LINODE_TOKEN='op://Private/Linode API Token/credential' op run -- \
     --execute
 ```
 
+## Live Smoke Test
+
+`make smoke` is a manual-only validation target for exercising the full
+`capture-deploy --execute` path against real Linode APIs. It is intentionally
+separate from `make check` and should not be wired into CI, schedules, or other
+automation.
+
+The target requires both `LINODE_TOKEN` and the explicit opt-in variable
+`SMOKE_EXECUTE=1`. Without both gates, it exits before running the mutating
+command. When enabled, it prints this warning:
+
+```text
+WARNING: This will create and delete temporary Linodes
+```
+
+Then it runs the known-good smoke config:
+
+```sh
+linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --region us-sea --execute
+```
+
+The default smoke region is `us-sea`. Run it only when you are ready to create
+billable temporary Linodes and preserve one custom image deliverable:
+
+```sh
+export LINODE_TOKEN='<your-linode-api-token>'
+SMOKE_EXECUTE=1 make smoke
+```
+
+Override the region explicitly when needed:
+
+```sh
+SMOKE_EXECUTE=1 REGION=us-lax make smoke
+```
+
+Expected output is the warning followed by a redacted JSON manifest. A successful
+single-region smoke run reports `status: "succeeded"`, includes nested
+`capture` and `deploy` sections, records deleted temporary capture and deploy
+Linodes in cleanup data, and preserves one custom image as the deliverable.
+Provider or validation failures are reported with public-safe symbolic targets
+and sanitized failure reasons; normal stdout must not expose provider resource
+identifiers.
+
 ## Config Defaults
 
 Pass `--config` before or after the command to load optional TOML execution
