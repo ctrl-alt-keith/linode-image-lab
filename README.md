@@ -48,28 +48,28 @@ Replace `vX.Y.Z` with the desired release tag.
 ## Release Recovery
 
 If `make release-publish VERSION=X.Y.Z` pushes `vX.Y.Z` but fails before
-`gh release create` completes, recover manually instead of rerunning the publish
-target. Confirm that the remote tag exists, the GitHub release does not, and the
-tag points at the intended release commit:
+`gh release create` completes, inspect the partial state before rerunning any
+release command:
 
 ```sh
-VERSION=X.Y.Z
-TAG="v${VERSION}"
-git fetch origin main --tags
-git ls-remote --exit-code --tags origin "refs/tags/${TAG}"
-git show --no-patch --decorate --oneline "${TAG}"
-gh release view "${TAG}"
+make release-recover VERSION=X.Y.Z
 ```
 
-If the tag commit is correct and `gh release view` reports no release, create
-the missing GitHub release from the existing tag:
+The recovery target reports whether the local tag, remote tag, and GitHub
+release exist. It does not create, delete, move, or push tags.
+
+If only the local tag exists and the publish should be retried from scratch, the
+target prints the exact manual local deletion command:
 
 ```sh
-make release-notes VERSION="${VERSION}" > /tmp/linode-image-lab-release-notes.md
-gh release create "${TAG}" \
-  --title "${TAG}" \
-  --notes-file /tmp/linode-image-lab-release-notes.md
-gh release view "${TAG}"
+git tag -d vX.Y.Z
+```
+
+If the remote tag exists but the GitHub release is missing, create the release
+from the existing remote tag without creating, deleting, or moving tags:
+
+```sh
+make release-create-from-tag VERSION=X.Y.Z
 ```
 
 Do not delete, recreate, or force-push a public release tag during this recovery

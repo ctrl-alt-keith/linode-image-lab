@@ -4,7 +4,7 @@ export PYTHONPATH := src
 RELEASE_VERSION = $(patsubst v%,%,$(VERSION))
 RELEASE_TAG = v$(RELEASE_VERSION)
 
-.PHONY: check test security-check smoke check-gh-env release-notes release-check release-publish
+.PHONY: check test security-check smoke check-gh-env release-notes release-check release-recover release-create-from-tag release-publish
 
 check: security-check test
 
@@ -112,6 +112,96 @@ release-check: check-gh-env
 		exit 1; \
 	fi
 	@echo "Release checks passed for $(RELEASE_TAG)."
+
+release-recover: check-gh-env
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION is required. Usage: make release-recover VERSION=0.1.0" >&2; \
+		exit 1; \
+	fi
+	@if ! printf '%s\n' '$(RELEASE_VERSION)' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Error: VERSION must be X.Y.Z or vX.Y.Z." >&2; \
+		exit 1; \
+	fi
+	@local_tag_state=missing; \
+	if git rev-parse --verify --quiet "refs/tags/$(RELEASE_TAG)" >/dev/null; then \
+		local_tag_state=exists; \
+	fi; \
+	remote_tag_state=missing; \
+	remote_tag_status=0; \
+	git ls-remote --exit-code --tags origin "refs/tags/$(RELEASE_TAG)" >/dev/null 2>&1 || remote_tag_status=$$?; \
+	if [ "$$remote_tag_status" -eq 0 ]; then \
+		remote_tag_state=exists; \
+	elif [ "$$remote_tag_status" -eq 2 ]; then \
+		remote_tag_state=missing; \
+	else \
+		echo "Error: unable to inspect remote tag $(RELEASE_TAG)." >&2; \
+		echo "No automatic recovery action was taken." >&2; \
+		exit 1; \
+	fi; \
+	release_state=missing; \
+	release_view=$$(gh release view "$(RELEASE_TAG)" 2>&1 >/dev/null); \
+	release_status=$$?; \
+	if [ "$$release_status" -eq 0 ]; then \
+		release_state=exists; \
+	elif printf '%s\n' "$$release_view" | grep -Eiq 'not found|could not find'; then \
+		release_state=missing; \
+	else \
+		echo "Error: unable to inspect GitHub release $(RELEASE_TAG): $$release_view" >&2; \
+		echo "No automatic recovery action was taken." >&2; \
+		exit 1; \
+	fi; \
+	echo "Release recovery state for $(RELEASE_TAG):"; \
+	echo "  local tag: $$local_tag_state"; \
+	echo "  remote tag: $$remote_tag_state"; \
+	echo "  GitHub release: $$release_state"; \
+	if [ "$$release_state" = "exists" ]; then \
+		echo "GitHub release $(RELEASE_TAG) already exists; normal recovery may be complete."; \
+	elif [ "$$remote_tag_state" = "exists" ]; then \
+		echo "Remote tag $(RELEASE_TAG) has already been published, but the GitHub release is missing."; \
+		echo "To create the missing release from the existing remote tag, run:"; \
+		echo "  make release-create-from-tag VERSION=$(RELEASE_VERSION)"; \
+	elif [ "$$local_tag_state" = "exists" ]; then \
+		echo "Local tag $(RELEASE_TAG) exists, but the remote tag and GitHub release are missing."; \
+		echo "If the publish should be retried from scratch, delete only the local tag manually:"; \
+		echo "  git tag -d $(RELEASE_TAG)"; \
+	else \
+		echo "No partial release publish state was found for $(RELEASE_TAG)."; \
+	fi
+
+release-create-from-tag: check-gh-env
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION is required. Usage: make release-create-from-tag VERSION=0.1.0" >&2; \
+		exit 1; \
+	fi
+	@if ! printf '%s\n' '$(RELEASE_VERSION)' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Error: VERSION must be X.Y.Z or vX.Y.Z." >&2; \
+		exit 1; \
+	fi
+	@remote_tag_status=0; \
+	git ls-remote --exit-code --tags origin "refs/tags/$(RELEASE_TAG)" >/dev/null 2>&1 || remote_tag_status=$$?; \
+	if [ "$$remote_tag_status" -eq 2 ]; then \
+		echo "Error: remote tag $(RELEASE_TAG) does not exist. No release was created." >&2; \
+		exit 1; \
+	elif [ "$$remote_tag_status" -ne 0 ]; then \
+		echo "Error: unable to inspect remote tag $(RELEASE_TAG). No release was created." >&2; \
+		exit 1; \
+	fi
+	@release_view=$$(gh release view "$(RELEASE_TAG)" 2>&1 >/dev/null); \
+	release_status=$$?; \
+	if [ "$$release_status" -eq 0 ]; then \
+		echo "Error: GitHub release $(RELEASE_TAG) already exists. No release was created." >&2; \
+		exit 1; \
+	elif ! printf '%s\n' "$$release_view" | grep -Eiq 'not found|could not find'; then \
+		echo "Error: unable to inspect GitHub release $(RELEASE_TAG): $$release_view" >&2; \
+		echo "No release was created." >&2; \
+		exit 1; \
+	fi
+	@set -e; \
+	notes_file=$$(mktemp); \
+	trap 'rm -f "$$notes_file"' EXIT; \
+	$(MAKE) --no-print-directory release-notes VERSION='$(RELEASE_VERSION)' > "$$notes_file"; \
+	gh release create "$(RELEASE_TAG)" --title "$(RELEASE_TAG)" --notes-file "$$notes_file" --verify-tag; \
+	echo "Created GitHub release $(RELEASE_TAG) from existing remote tag."
 
 release-publish: release-check
 	@set -e; \
