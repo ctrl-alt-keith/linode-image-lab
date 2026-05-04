@@ -55,7 +55,11 @@ Repo-local rules take precedence only for repo-specific behavior.
 ## Validation
 
 - Use `make check` as the canonical validation entrypoint.
-- Use `make security-check` for the public-safety scan.
+- `make check` runs `make security-check` and `make test`.
+- `make smoke` requires `LINODE_TOKEN` and `SMOKE_EXECUTE=1`, creates real
+  Linode resources, and remains manual-only outside canonical PR validation.
+- Release targets and the CI authoritative-source scan sit outside the local
+  blocking `make check` path.
 - Keep validation implemented through the Makefile rather than direct tool
   invocation in normal workflow.
 
