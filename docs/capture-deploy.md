@@ -122,13 +122,14 @@ reusable, so combined manifests may show two `preflight_api_access` and
 
 When multiple regions are provided, `capture-deploy --execute` captures one
 custom image in the first requested region, then deploys that same captured
-image to each requested region concurrently with a bounded worker pool. There
-is no cross-region dependency graph, scheduler, retry fan-out, or
-infrastructure reconciliation. Linode custom images are deployable across
-regions; public docs do not specify cross-region deploy latency. Operators
-should expect farther-region deploys may take longer, but the tool does not
-depend on that timing. The single capture result is recorded under `capture`,
-and each deploy attempt is recorded under `deploy_results.<region>`.
+image to each requested region concurrently with a bounded worker pool capped
+at 4 deploy workers. There is no cross-region dependency graph, scheduler,
+retry fan-out, or infrastructure reconciliation. Linode custom images are
+deployable across regions; public docs do not specify cross-region deploy
+latency. Operators should expect farther-region deploys may take longer, but
+the tool does not depend on that timing. The single capture result is recorded
+under `capture`, and each deploy attempt is recorded under
+`deploy_results.<region>`.
 
 If capture fails, no deploy regions are attempted and the top-level status is
 `failed`. If capture succeeds, multi-region execution continues after a deploy

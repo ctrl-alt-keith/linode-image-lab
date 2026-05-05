@@ -181,10 +181,10 @@ combined manifest is expected.
 
 With multiple requested regions, capture-deploy captures one custom image in
 the first region and then deploys it to each requested region concurrently with
-a bounded worker pool. Linode custom images are deployable across regions;
-public docs do not specify cross-region deploy latency. Operators should expect
-farther-region deploys may take longer, but the tool does not depend on that
-timing.
+a bounded worker pool capped at 4 deploy workers. Linode custom images are
+deployable across regions; public docs do not specify cross-region deploy
+latency. Operators should expect farther-region deploys may take longer, but
+the tool does not depend on that timing.
 
 ## Cleanup Semantics
 

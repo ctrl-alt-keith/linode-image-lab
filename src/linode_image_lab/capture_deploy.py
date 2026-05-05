@@ -252,7 +252,7 @@ def execute_region_deploy(
                 defer_cleanup=False,
                 label_suffix=region,
             ),
-            client=client or LinodeClient.from_env(command="capture-deploy"),
+            client=worker_deploy_client(client),
         )
     except DeployError as exc:
         deploy_manifest = exc.manifest or failed_deploy_manifest(
@@ -264,6 +264,22 @@ def execute_region_deploy(
         )
         add_region_error_context(deploy_manifest, region=region)
         return deploy_manifest
+
+
+def worker_deploy_client(client: LinodeClientProtocol | None) -> LinodeClientProtocol:
+    if client is None:
+        return LinodeClient.from_env(command="capture-deploy")
+    if isinstance(client, LinodeClient):
+        return LinodeClient(
+            token=client.token,
+            api_base_url=client.api_base_url,
+            timeout_seconds=client.timeout_seconds,
+            poll_interval_seconds=client.poll_interval_seconds,
+            max_wait_seconds=client.max_wait_seconds,
+            max_retry_attempts=client.max_retry_attempts,
+            retry_backoff_seconds=client.retry_backoff_seconds,
+        )
+    return client
 
 
 def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:

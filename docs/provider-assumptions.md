@@ -5,7 +5,8 @@ project policies chosen when public provider docs are ambiguous. It is a
 source-backed checklist for future behavior, docs, and test changes; it is not a
 record of live API verification.
 
-Checked date: 2026-05-05.
+Rows carry their own checked dates. Update a row date only when that specific
+assumption is rechecked.
 
 | Assumption | Project behavior relying on it | Source | Checked date | Notes/uncertainty |
 | --- | --- | --- | --- | --- |

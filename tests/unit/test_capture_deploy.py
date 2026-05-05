@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from linode_image_lab.capture_deploy import CaptureDeployError, capture_deploy_plan
-from linode_image_lab.linode_api import LinodePreflightError
+from linode_image_lab.linode_api import LinodeClient, LinodePreflightError
 from linode_image_lab.manifest import serialize_manifest
 
 
@@ -356,10 +356,11 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         client = FakeLinodeClient()
         RecordingExecutor.max_workers = None
         RecordingExecutor.submitted_regions = []
+        regions = ["us-east", "us-west", "us-lax", "us-sea", "us-ord", "eu-central"]
 
         with patch("linode_image_lab.capture_deploy.ThreadPoolExecutor", RecordingExecutor):
             manifest = capture_deploy_plan(
-                regions=["us-east", "us-west", "us-lax"],
+                regions=regions,
                 run_id="run-test",
                 ttl="2030-01-01T00:00:00Z",
                 execute=True,
@@ -368,9 +369,60 @@ class CaptureDeployExecutionTests(unittest.TestCase):
                 client=client,
             )
 
-        self.assertEqual(RecordingExecutor.max_workers, 3)
-        self.assertEqual(RecordingExecutor.submitted_regions, ["us-east", "us-west", "us-lax"])
-        self.assertEqual(list(manifest["deploy_results"]), ["us-east", "us-west", "us-lax"])
+        self.assertEqual(RecordingExecutor.max_workers, 4)
+        self.assertEqual(RecordingExecutor.submitted_regions, regions)
+        self.assertEqual(list(manifest["deploy_results"]), regions)
+
+    def test_parallel_deploy_workers_clone_real_linode_clients(self) -> None:
+        injected_client = LinodeClient(
+            "test-token",
+            api_base_url="https://api.example.invalid/v4",
+            timeout_seconds=7,
+            poll_interval_seconds=1,
+            max_wait_seconds=11,
+            max_retry_attempts=2,
+            retry_backoff_seconds=(0.1,),
+        )
+        worker_clients: list[LinodeClient] = []
+        worker_lock = threading.Lock()
+
+        def capture_manifest(*args: object, **kwargs: object) -> dict[str, object]:
+            self.assertIs(kwargs["client"], injected_client)
+            return {
+                "status": "succeeded",
+                "custom_image": {"image_id": "private/789"},
+                "cleanup": {"status": "completed", "deleted": [], "preserved": []},
+            }
+
+        def deploy_manifest(*args: object, **kwargs: object) -> dict[str, object]:
+            client = kwargs["client"]
+            self.assertIsInstance(client, LinodeClient)
+            assert isinstance(client, LinodeClient)
+            with worker_lock:
+                worker_clients.append(client)
+            region = args[0].regions[0]
+            return {"status": "succeeded", "regions": [region], "deploy_source": {"image_id": "private/789"}}
+
+        with (
+            patch("linode_image_lab.capture_deploy.execute_capture", side_effect=capture_manifest),
+            patch("linode_image_lab.capture_deploy.execute_deploy", side_effect=deploy_manifest),
+        ):
+            manifest = capture_deploy_plan(
+                regions=["us-east", "us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=injected_client,
+            )
+
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertEqual(len(worker_clients), 2)
+        self.assertTrue(all(client is not injected_client for client in worker_clients))
+        self.assertIsNot(worker_clients[0], worker_clients[1])
+        self.assertTrue(all(client.api_base_url == injected_client.api_base_url for client in worker_clients))
+        self.assertTrue(all(client.retry_events == [] for client in worker_clients))
 
     def test_execute_single_region_does_not_use_parallel_executor(self) -> None:
         with patch("linode_image_lab.capture_deploy.ThreadPoolExecutor") as executor:
@@ -491,6 +543,44 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(sorted(client.deleted[:2]), [321, 322])
         self.assertEqual(client.deleted[-1], 123)
         self.assertEqual(manifest["deploy_results"]["us-west"]["errors"], ["us-west: deploy image unavailable in us-west"])
+
+    def test_execute_multi_region_unexpected_worker_exception_records_region_failure(self) -> None:
+        def capture_manifest(*args: object, **kwargs: object) -> dict[str, object]:
+            return {
+                "status": "succeeded",
+                "custom_image": {"image_id": "private/789"},
+                "cleanup": {"status": "completed", "deleted": [], "preserved": []},
+            }
+
+        def deploy_or_raise(*, region: str, **kwargs: object) -> dict[str, object]:
+            if region == "us-west":
+                raise RuntimeError("provider id private/789 leaked internally")
+            return {"status": "succeeded", "regions": [region], "deploy_source": {"image_id": "private/789"}}
+
+        with (
+            patch("linode_image_lab.capture_deploy.execute_capture", side_effect=capture_manifest),
+            patch("linode_image_lab.capture_deploy.execute_region_deploy", side_effect=deploy_or_raise),
+        ):
+            with self.assertRaises(CaptureDeployError) as raised:
+                capture_deploy_plan(
+                    regions=["us-east", "us-west", "us-lax"],
+                    run_id="run-test",
+                    ttl="2030-01-01T00:00:00Z",
+                    execute=True,
+                    source_image="linode/debian12",
+                    instance_type="g6-nanode-1",
+                    client=FakeLinodeClient(),
+                )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "partial")
+        self.assertEqual(list(manifest["deploy_results"]), ["us-east", "us-west", "us-lax"])
+        self.assertEqual(manifest["summary"]["succeeded"], ["us-east", "us-lax"])
+        self.assertEqual(manifest["summary"]["failed"], ["us-west"])
+        self.assertEqual(manifest["deploy_results"]["us-west"]["status"], "failed")
+        self.assertEqual(manifest["deploy_results"]["us-west"]["errors"], ["us-west: RuntimeError"])
 
     def test_execute_multi_region_all_fail_records_failed_manifest(self) -> None:
         client = RegionDeployPreflightFailureClient({"us-east", "us-west"})

@@ -184,11 +184,12 @@ on the command.
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
 the first requested region, then deploys that captured image to each requested
-region concurrently with a bounded worker pool. Linode custom images are
-deployable across regions; the public docs do not specify cross-region deploy
-latency. Operators should expect farther-region deploys may take longer, but
-the tool does not depend on that timing. Standalone `capture --execute` and
-`deploy --execute` remain single-region only.
+region concurrently with a bounded worker pool capped at 4 deploy workers.
+Linode custom images are deployable across regions; the public docs do not
+specify cross-region deploy latency. Operators should expect farther-region
+deploys may take longer, but the tool does not depend on that timing.
+Standalone `capture --execute` and `deploy --execute` remain single-region
+only.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
