@@ -2,8 +2,8 @@
 
 This document describes the current capture/deploy workflow shape. M2 adds
 single-region capture execution, M3 adds single-region deploy execution, M4
-adds single-region capture-deploy execution, and M5 adds sequential
-multi-region capture-deploy execution.
+adds single-region capture-deploy execution, and M5 adds bounded multi-region
+capture-deploy execution.
 
 ## Capture
 
@@ -122,18 +122,18 @@ reusable, so combined manifests may show two `preflight_api_access` and
 
 When multiple regions are provided, `capture-deploy --execute` captures one
 custom image in the first requested region, then deploys that same captured
-image sequentially to each requested region. Execution is sequential only;
-there is no parallelism, cross-region dependency graph, scheduler, retry
-fan-out, or infrastructure reconciliation. Linode custom images are deployable
-across regions; public docs do not specify cross-region deploy latency.
-Operators should expect farther-region deploys may take longer, but the tool
-does not depend on that timing. The single capture result is recorded under
-`capture`, and each deploy attempt is recorded under `deploy_results.<region>`.
+image to each requested region concurrently with a bounded worker pool. There
+is no cross-region dependency graph, scheduler, retry fan-out, or
+infrastructure reconciliation. Linode custom images are deployable across
+regions; public docs do not specify cross-region deploy latency. Operators
+should expect farther-region deploys may take longer, but the tool does not
+depend on that timing. The single capture result is recorded under `capture`,
+and each deploy attempt is recorded under `deploy_results.<region>`.
 
 If capture fails, no deploy regions are attempted and the top-level status is
 `failed`. If capture succeeds, multi-region execution continues after a deploy
 region fails. Cleanup for each temporary deploy Linode is handled by that
-region's deploy run, and later deploy regions still get their own isolated
+region's deploy run, and other deploy regions still get their own isolated
 flow. After all deploy regions finish, the temporary capture-source Linode is
 cleaned up once and the custom image is preserved as the single deliverable.
 The top-level manifest reports:

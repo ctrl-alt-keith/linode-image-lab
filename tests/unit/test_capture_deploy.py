@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 import json
 import os
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -38,19 +40,26 @@ class FakeLinodeClient:
         self.instance_regions: dict[int, str] = {}
         self.instance_tags: dict[int, list[str]] = {}
         self.deploy_instance_ids: set[int] = set()
+        self._lock = threading.Lock()
+        self._local = threading.local()
 
     def preflight(self) -> None:
-        self.calls.append("preflight")
+        with self._lock:
+            self.calls.append("preflight")
 
     def preflight_region(self, region: str) -> None:
-        self.current_region = region
-        self.calls.append("preflight_region")
+        self._local.current_region = region
+        with self._lock:
+            self.current_region = region
+            self.calls.append("preflight_region")
 
     def preflight_instance_type(self, instance_type: str) -> None:
-        self.calls.append("preflight_instance_type")
+        with self._lock:
+            self.calls.append("preflight_instance_type")
 
     def preflight_image(self, image_id: str) -> None:
-        self.calls.append("preflight_image")
+        with self._lock:
+            self.calls.append("preflight_image")
 
     def create_instance(
         self,
@@ -62,72 +71,81 @@ class FakeLinodeClient:
         tags: list[str],
         root_password: str,
     ) -> dict[str, object]:
-        if source_image == "private/789":
-            linode_id = 321 + self.deploy_count
-            self.deploy_count += 1
-            self.calls.append("create_deploy_instance")
-            self.deploy_source_images.append(source_image)
-            self.deploy_tags = tags
+        with self._lock:
+            if source_image == "private/789":
+                linode_id = 321 + self.deploy_count
+                self.deploy_count += 1
+                self.calls.append("create_deploy_instance")
+                self.deploy_source_images.append(source_image)
+                self.deploy_tags = tags
+                self.created_regions.append(region)
+                self.instance_regions[linode_id] = region
+                self.instance_tags[linode_id] = [] if self.missing_deploy_tags else tags
+                self.deploy_instance_ids.add(linode_id)
+                return {
+                    "linode_id": linode_id,
+                    "label": label,
+                    "region": region,
+                    "status": "provisioning",
+                    "tags": [] if self.missing_deploy_tags else tags,
+                }
+
+            linode_id = 123 + self.capture_count
+            self.capture_count += 1
+            self.calls.append("create_capture_source")
+            self.capture_tags = tags
             self.created_regions.append(region)
             self.instance_regions[linode_id] = region
-            self.instance_tags[linode_id] = [] if self.missing_deploy_tags else tags
-            self.deploy_instance_ids.add(linode_id)
+            self.instance_tags[linode_id] = tags
             return {
                 "linode_id": linode_id,
                 "label": label,
                 "region": region,
                 "status": "provisioning",
-                "tags": [] if self.missing_deploy_tags else tags,
+                "tags": tags,
             }
 
-        linode_id = 123 + self.capture_count
-        self.capture_count += 1
-        self.calls.append("create_capture_source")
-        self.capture_tags = tags
-        self.created_regions.append(region)
-        self.instance_regions[linode_id] = region
-        self.instance_tags[linode_id] = tags
+    def wait_instance_ready(self, linode_id: int) -> dict[str, object]:
+        with self._lock:
+            is_deploy = linode_id in self.deploy_instance_ids
+            region = self.instance_regions[linode_id]
+            tags = self.instance_tags[linode_id]
+            self.calls.append("wait_deploy_instance_ready" if is_deploy else "wait_capture_source_ready")
+        if is_deploy:
+            return {
+                "linode_id": linode_id,
+                "region": region,
+                "status": "running",
+                "tags": tags,
+            }
+
         return {
             "linode_id": linode_id,
-            "label": label,
             "region": region,
-            "status": "provisioning",
+            "status": "running",
             "tags": tags,
         }
 
-    def wait_instance_ready(self, linode_id: int) -> dict[str, object]:
-        if linode_id in self.deploy_instance_ids:
-            self.calls.append("wait_deploy_instance_ready")
-            return {
-                "linode_id": linode_id,
-                "region": self.instance_regions[linode_id],
-                "status": "running",
-                "tags": self.instance_tags[linode_id],
-            }
-
-        self.calls.append("wait_capture_source_ready")
-        return {
-            "linode_id": linode_id,
-            "region": self.instance_regions[linode_id],
-            "status": "running",
-            "tags": self.instance_tags[linode_id],
-        }
-
     def list_disks(self, linode_id: int) -> list[dict[str, object]]:
-        self.calls.append("list_disks")
+        with self._lock:
+            self.calls.append("list_disks")
         return [{"disk_id": 456}]
 
     def shutdown_instance(self, linode_id: int) -> dict[str, object]:
-        self.calls.append("shutdown_capture_source")
+        with self._lock:
+            self.calls.append("shutdown_capture_source")
         return {"linode_id": linode_id}
 
     def wait_instance_offline(self, linode_id: int) -> dict[str, object]:
-        self.calls.append("wait_capture_source_offline")
+        with self._lock:
+            region = self.instance_regions[linode_id]
+            tags = self.instance_tags[linode_id]
+            self.calls.append("wait_capture_source_offline")
         return {
             "linode_id": linode_id,
-            "region": self.instance_regions[linode_id],
+            "region": region,
             "status": "offline",
-            "tags": self.instance_tags[linode_id],
+            "tags": tags,
         }
 
     def capture_image(
@@ -139,8 +157,9 @@ class FakeLinodeClient:
         description: str,
         cloud_init: bool,
     ) -> dict[str, object]:
-        self.calls.append("capture_image")
-        self.image_tags = tags
+        with self._lock:
+            self.calls.append("capture_image")
+            self.image_tags = tags
         return {
             "image_id": "private/789",
             "label": label,
@@ -149,20 +168,26 @@ class FakeLinodeClient:
         }
 
     def wait_image_available(self, image_id: str) -> dict[str, object]:
-        self.calls.append("wait_image_available")
+        with self._lock:
+            self.calls.append("wait_image_available")
+            tags = self.image_tags
         return {
             "image_id": image_id,
             "status": "available",
-            "tags": self.image_tags,
+            "tags": tags,
         }
 
     def delete_instance(self, linode_id: int) -> dict[str, object]:
-        if linode_id in self.deploy_instance_ids:
-            self.calls.append("delete_deploy_instance")
-        else:
-            self.calls.append("delete_capture_source")
-        self.deleted.append(linode_id)
+        with self._lock:
+            if linode_id in self.deploy_instance_ids:
+                self.calls.append("delete_deploy_instance")
+            else:
+                self.calls.append("delete_capture_source")
+            self.deleted.append(linode_id)
         return {"linode_id": linode_id, "deleted": True}
+
+    def current_thread_region(self) -> str:
+        return str(getattr(self._local, "current_region", self.current_region))
 
 
 class ExplodingClient:
@@ -183,9 +208,11 @@ class RegionDeployPreflightFailureClient(FakeLinodeClient):
         self.failing_regions = failing_regions
 
     def preflight_image(self, image_id: str) -> None:
-        self.calls.append("preflight_image")
-        if image_id == "private/789" and self.current_region in self.failing_regions:
-            raise LinodePreflightError(f"deploy image unavailable in {self.current_region}")
+        with self._lock:
+            self.calls.append("preflight_image")
+        region = self.current_thread_region()
+        if image_id == "private/789" and region in self.failing_regions:
+            raise LinodePreflightError(f"deploy image unavailable in {region}")
 
 
 class CaptureValidationFailureClient(FakeLinodeClient):
@@ -198,8 +225,39 @@ class CaptureCleanupFailureClient(FakeLinodeClient):
     def delete_instance(self, linode_id: int) -> dict[str, object]:
         if linode_id in self.deploy_instance_ids:
             return super().delete_instance(linode_id)
-        self.calls.append("delete_capture_source")
+        with self._lock:
+            self.calls.append("delete_capture_source")
         raise ValueError("provider response included private details")
+
+
+class RecordingExecutor:
+    max_workers: int | None = None
+    submitted_regions: list[str] = []
+
+    def __init__(self, *, max_workers: int, thread_name_prefix: str) -> None:
+        type(self).max_workers = max_workers
+        self.thread_name_prefix = thread_name_prefix
+
+    def __enter__(self) -> "RecordingExecutor":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def submit(self, fn: object, **kwargs: object) -> Future[dict[str, object]]:
+        region = kwargs["region"]
+        assert isinstance(region, str)
+        type(self).submitted_regions.append(region)
+        future: Future[dict[str, object]] = Future()
+        future.set_result(
+            {
+                "status": "succeeded",
+                "regions": [region],
+                "deploy_source": {"image_id": kwargs["image_id"]},
+                "deploy_instance": {},
+            }
+        )
+        return future
 
 
 class CaptureDeployExecutionTests(unittest.TestCase):
@@ -294,6 +352,40 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertNotIn("cleanup", manifest)
         self.assertNotIn("validation", manifest)
 
+    def test_execute_multi_region_uses_bounded_parallel_executor(self) -> None:
+        client = FakeLinodeClient()
+        RecordingExecutor.max_workers = None
+        RecordingExecutor.submitted_regions = []
+
+        with patch("linode_image_lab.capture_deploy.ThreadPoolExecutor", RecordingExecutor):
+            manifest = capture_deploy_plan(
+                regions=["us-east", "us-west", "us-lax"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        self.assertEqual(RecordingExecutor.max_workers, 3)
+        self.assertEqual(RecordingExecutor.submitted_regions, ["us-east", "us-west", "us-lax"])
+        self.assertEqual(list(manifest["deploy_results"]), ["us-east", "us-west", "us-lax"])
+
+    def test_execute_single_region_does_not_use_parallel_executor(self) -> None:
+        with patch("linode_image_lab.capture_deploy.ThreadPoolExecutor") as executor:
+            capture_deploy_plan(
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                client=FakeLinodeClient(),
+            )
+
+        executor.assert_not_called()
+
     def test_execute_multi_region_captures_once_then_deploys_to_each_region(self) -> None:
         client = FakeLinodeClient()
 
@@ -309,8 +401,10 @@ class CaptureDeployExecutionTests(unittest.TestCase):
 
         self.assertEqual(client.calls.count("capture_image"), 1)
         self.assertEqual(client.deploy_source_images, ["private/789", "private/789"])
-        self.assertEqual(client.created_regions, ["us-east", "us-east", "us-west"])
-        self.assertEqual(client.deleted, [321, 322, 123])
+        self.assertEqual(client.created_regions[0], "us-east")
+        self.assertEqual(sorted(client.created_regions[1:]), ["us-east", "us-west"])
+        self.assertEqual(sorted(client.deleted[:2]), [321, 322])
+        self.assertEqual(client.deleted[-1], 123)
         self.assertEqual(manifest["capture"]["cleanup"]["deleted"][0]["linode_id"], 123)
         self.assertEqual(manifest["capture"]["cleanup"]["preserved"][0]["reason"], "deliverable")
 
@@ -392,8 +486,11 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["deploy_results"]["us-east"]["status"], "succeeded")
         self.assertEqual(manifest["deploy_results"]["us-west"]["status"], "failed")
         self.assertEqual(manifest["deploy_results"]["us-lax"]["status"], "succeeded")
-        self.assertEqual(client.created_regions, ["us-east", "us-east", "us-lax"])
-        self.assertEqual(client.deleted, [321, 322, 123])
+        self.assertEqual(client.created_regions[0], "us-east")
+        self.assertEqual(sorted(client.created_regions[1:]), ["us-east", "us-lax"])
+        self.assertEqual(sorted(client.deleted[:2]), [321, 322])
+        self.assertEqual(client.deleted[-1], 123)
+        self.assertEqual(manifest["deploy_results"]["us-west"]["errors"], ["us-west: deploy image unavailable in us-west"])
 
     def test_execute_multi_region_all_fail_records_failed_manifest(self) -> None:
         client = RegionDeployPreflightFailureClient({"us-east", "us-west"})

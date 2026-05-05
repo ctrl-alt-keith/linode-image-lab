@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,8 @@ from .deploy import (
 from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import create_manifest, generate_tags
 from .validation_results import combined_validation
+
+MAX_PARALLEL_DEPLOYS = 4
 
 
 class CaptureDeployError(ValueError):
@@ -134,35 +137,17 @@ def execute_multi_region_capture_deploy(
     manifest["capture"] = capture_manifest
     image_id = required_text(capture_manifest.get("custom_image", {}).get("image_id"))
 
+    deploy_manifests = execute_region_deploys(
+        regions=manifest["summary"]["deploy_regions"],
+        run_id=manifest["run_id"],
+        ttl=manifest["ttl"],
+        image_id=image_id,
+        instance_type=required_text(options.instance_type),
+        preserve_instance=options.preserve_instance,
+        client=client,
+    )
     for region in manifest["summary"]["deploy_regions"]:
-        deploy_manifest: dict[str, Any]
-        try:
-            deploy_manifest = execute_deploy(
-                DeployOptions(
-                    regions=[region],
-                    run_id=manifest["run_id"],
-                    ttl=manifest["ttl"],
-                    execute=True,
-                    image_id=image_id,
-                    instance_type=options.instance_type,
-                    preserve_instance=options.preserve_instance,
-                    command="capture-deploy",
-                    mode="capture-deploy",
-                    component="deploy",
-                    defer_cleanup=False,
-                    label_suffix=region,
-                ),
-                client=run_client,
-            )
-        except DeployError as exc:
-            deploy_manifest = exc.manifest or failed_deploy_manifest(
-                region=region,
-                run_id=manifest["run_id"],
-                ttl=manifest["ttl"],
-                image_id=image_id,
-                exc=exc,
-            )
-
+        deploy_manifest = deploy_manifests[region]
         manifest["deploy_results"][region] = deploy_manifest
         if deploy_manifest.get("status") == "succeeded":
             manifest["summary"]["succeeded"].append(region)
@@ -184,6 +169,101 @@ def execute_multi_region_capture_deploy(
             raise CaptureDeployError("capture-deploy --execute cleanup failed", manifest)
         raise CaptureDeployError("capture-deploy --execute failed for one or more regions", manifest)
     return manifest
+
+
+def execute_region_deploys(
+    *,
+    regions: list[str],
+    run_id: str,
+    ttl: str,
+    image_id: str,
+    instance_type: str,
+    preserve_instance: bool,
+    client: LinodeClientProtocol | None,
+) -> dict[str, dict[str, Any]]:
+    if len(regions) == 1:
+        region = regions[0]
+        return {
+            region: execute_region_deploy(
+                region=region,
+                run_id=run_id,
+                ttl=ttl,
+                image_id=image_id,
+                instance_type=instance_type,
+                preserve_instance=preserve_instance,
+                client=client,
+            )
+        }
+
+    max_workers = min(len(regions), MAX_PARALLEL_DEPLOYS)
+    results: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="linode-image-lab-deploy") as executor:
+        futures: dict[Future[dict[str, Any]], str] = {
+            executor.submit(
+                execute_region_deploy,
+                region=region,
+                run_id=run_id,
+                ttl=ttl,
+                image_id=image_id,
+                instance_type=instance_type,
+                preserve_instance=preserve_instance,
+                client=client,
+            ): region
+            for region in regions
+        }
+        for future in as_completed(futures):
+            region = futures[future]
+            try:
+                results[region] = future.result()
+            except Exception as exc:
+                results[region] = failed_deploy_manifest(
+                    region=region,
+                    run_id=run_id,
+                    ttl=ttl,
+                    image_id=image_id,
+                    exc=exc,
+                )
+    return results
+
+
+def execute_region_deploy(
+    *,
+    region: str,
+    run_id: str,
+    ttl: str,
+    image_id: str,
+    instance_type: str,
+    preserve_instance: bool,
+    client: LinodeClientProtocol | None,
+) -> dict[str, Any]:
+    try:
+        return execute_deploy(
+            DeployOptions(
+                regions=[region],
+                run_id=run_id,
+                ttl=ttl,
+                execute=True,
+                image_id=image_id,
+                instance_type=instance_type,
+                preserve_instance=preserve_instance,
+                command="capture-deploy",
+                mode="capture-deploy",
+                component="deploy",
+                defer_cleanup=False,
+                label_suffix=region,
+            ),
+            client=client or LinodeClient.from_env(command="capture-deploy"),
+        )
+    except DeployError as exc:
+        deploy_manifest = exc.manifest or failed_deploy_manifest(
+            region=region,
+            run_id=run_id,
+            ttl=ttl,
+            image_id=image_id,
+            exc=exc,
+        )
+        add_region_error_context(deploy_manifest, region=region)
+        return deploy_manifest
 
 
 def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
@@ -444,7 +524,16 @@ def failed_deploy_manifest(
     for action in manifest["planned_actions"]:
         action["mutates"] = True
     manifest["errors"] = [safe_error_message(exc)]
+    add_region_error_context(manifest, region=region)
     return manifest
+
+
+def add_region_error_context(manifest: dict[str, Any], *, region: str) -> None:
+    errors = manifest.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return
+    prefix = f"{region}: "
+    manifest["errors"] = [error if str(error).startswith(prefix) else f"{prefix}{error}" for error in errors]
 
 
 def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> None:
