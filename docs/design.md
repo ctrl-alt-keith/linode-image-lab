@@ -10,13 +10,13 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Define a stable tag contract for resource rediscovery.
 - Make cleanup selection testable without cloud access.
 - Allow capture, deploy, and capture-deploy execution only after explicit
-  opt-in; capture-deploy may fan out sequentially across requested regions.
+  opt-in; capture-deploy may fan out across requested regions.
 
 ## Non-Goals
 
 - No implicit Linode API mutations.
 - No GitHub Actions mutation, external scheduler integration, or
-  general-purpose multi-region orchestration outside sequential
+  general-purpose multi-region orchestration outside bounded
   capture-deploy validation runs.
 - No infrastructure ownership or planning model.
 - CI exists to run `make check`.
@@ -111,7 +111,8 @@ configurable. Unknown keys and secret-like keys fail before command execution.
 
 Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
-multiple regions and runs one capture followed by sequential deploy attempts.
+multiple regions and runs one capture followed by bounded parallel deploy
+attempts.
 
 ## Capture Execution Boundary
 
@@ -179,10 +180,11 @@ Seeing two `preflight_api_access` and `preflight_provider_inputs` steps in a
 combined manifest is expected.
 
 With multiple requested regions, capture-deploy captures one custom image in
-the first region and then deploys it sequentially to each requested region.
-Linode custom images are deployable across regions; public docs do not specify
-cross-region deploy latency. Operators should expect farther-region deploys may
-take longer, but the tool does not depend on that timing.
+the first region and then deploys it to each requested region concurrently with
+a bounded worker pool capped at 4 deploy workers. Linode custom images are
+deployable across regions; public docs do not specify cross-region deploy
+latency. Operators should expect farther-region deploys may take longer, but
+the tool does not depend on that timing.
 
 ## Cleanup Semantics
 

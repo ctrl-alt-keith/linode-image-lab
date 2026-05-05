@@ -12,8 +12,8 @@
 - Add structured validation results to execution manifests.
 - Add bounded retries for read/list/poll operations, including `Retry-After`
   and `X-RateLimit-Reset` support for `429` responses.
-- Add sequential multi-region `capture-deploy --execute`, capturing once and
-  deploying the resulting custom image to each requested region in order.
+- Add bounded parallel multi-region `capture-deploy --execute`, capturing once
+  and deploying the resulting custom image to each requested region.
 - Add authoritative-source checking and provider-assumptions documentation for
   public API claims.
 - Add a human-gated live smoke target with configurable smoke region.

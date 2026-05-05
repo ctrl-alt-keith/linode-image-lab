@@ -183,12 +183,13 @@ on the command.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
-the first requested region, then deploys that captured image sequentially to
-each requested region. Linode custom images are deployable across regions; the
-public docs do not specify cross-region deploy latency. Operators should expect
-farther-region deploys may take longer, but the tool does not depend on that
-timing. Standalone `capture --execute` and `deploy --execute` remain
-single-region only.
+the first requested region, then deploys that captured image to each requested
+region concurrently with a bounded worker pool capped at 4 deploy workers.
+Linode custom images are deployable across regions; the public docs do not
+specify cross-region deploy latency. Operators should expect farther-region
+deploys may take longer, but the tool does not depend on that timing.
+Standalone `capture --execute` and `deploy --execute` remain single-region
+only.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
@@ -232,7 +233,7 @@ environment or approved environment injection.
 
 - SSH, cloud-init, service, or application-level validation.
 - Manage long-lived infrastructure.
-- General-purpose multi-region orchestration outside sequential
+- General-purpose multi-region orchestration outside bounded
   `capture-deploy --execute` validation runs.
 
 ## Commands
@@ -321,7 +322,7 @@ Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or
 capture cleanup fails after successful deploys, and `failed` when capture fails
 or every deploy region fails. A failed deploy region does not block cleanup for
-that region or execution of later deploy regions. Partial failures indicate
+that region or completion of other deploy regions. Partial failures indicate
 real provider/API errors, invalid inputs, transient issues, or unresolved
 cleanup. Validation checks are objects with `name`, `status`, and a symbolic
 `target`; failed checks include a sanitized `failure_reason`.
