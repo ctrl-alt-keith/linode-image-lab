@@ -265,6 +265,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "source_image": "--source-image",
         "image_id": "--image-id",
         "type": "--type",
+        "firewall_id": "--firewall-id",
     }
 
     for field, value in candidate_values.items():

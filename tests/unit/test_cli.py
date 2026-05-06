@@ -485,6 +485,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--region is not supported for cleanup config defaults", error.getvalue())
 
+    def test_config_validate_rejects_unsupported_firewall_override_for_capture(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "capture",
+                    "--firewall-id",
+                    "123",
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--firewall-id is not supported for capture config defaults", error.getvalue())
+
     def test_unknown_config_key_fails_clearly(self) -> None:
         config_path = self.write_config(
             """
