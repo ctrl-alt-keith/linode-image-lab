@@ -6,4 +6,6 @@ ttl = "2030-01-01T00:00:00Z"
 
 [deploy]
 image_id = "private/example-custom-image"
-type = "g6-nanode-1"
+instance_type = "g6-nanode-1"
+# Optional: assign an existing Cloud Firewall to temporary deploy instances.
+# firewall_id = 12345

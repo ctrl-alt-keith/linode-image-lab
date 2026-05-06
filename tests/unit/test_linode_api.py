@@ -86,14 +86,16 @@ class LinodeClientTests(unittest.TestCase):
             client.preflight_region("us-east")
             client.preflight_instance_type("g6-nanode-1")
             client.preflight_image("linode/debian12")
+            client.preflight_firewall(12345)
 
-        self.assertEqual([request.get_method() for request in requests], ["GET", "GET", "GET"])
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET", "GET", "GET"])
         self.assertEqual(
             [request.full_url for request in requests],
             [
                 f"{API_BASE_URL}/regions/us-east",
                 f"{API_BASE_URL}/linode/types/g6-nanode-1",
                 f"{API_BASE_URL}/images/linode%2Fdebian12",
+                f"{API_BASE_URL}/networking/firewalls/12345",
             ],
         )
 
@@ -123,6 +125,20 @@ class LinodeClientTests(unittest.TestCase):
 
         self.assertEqual(str(raised.exception), "requested image is not available")
         self.assertNotIn("private/789", str(raised.exception))
+        self.assertNotIn(TOKEN_VALUE, str(raised.exception))
+
+    def test_provider_preflight_firewall_failure_uses_sanitized_message(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL, retry_backoff_seconds=())
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            side_effect=self.http_error(404, "missing firewall 12345"),
+        ):
+            with self.assertRaises(LinodePreflightError) as raised:
+                client.preflight_firewall(12345)
+
+        self.assertEqual(str(raised.exception), "requested firewall is unavailable")
+        self.assertNotIn("12345", str(raised.exception))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
     def test_read_retries_transient_http_failures_with_deterministic_backoff(self) -> None:
@@ -346,6 +362,45 @@ class LinodeClientTests(unittest.TestCase):
                 "tags": ["project=linode-image-lab"],
             },
         )
+
+    def test_create_instance_includes_firewall_id_only_when_configured(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        root_value = "generated-" + "root-pass"
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": 123,
+                    "label": "lil-run-source",
+                    "region": "us-east",
+                    "status": "provisioning",
+                    "tags": ["project=linode-image-lab"],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            client.create_instance(
+                region="us-east",
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                label="lil-run-source",
+                tags=["project=linode-image-lab"],
+                root_password=root_value,
+            )
+            client.create_instance(
+                region="us-east",
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                label="lil-run-source",
+                tags=["project=linode-image-lab"],
+                root_password=root_value,
+                firewall_id=12345,
+            )
+
+        self.assertNotIn("firewall_id", request_payload(requests[0]))
+        self.assertEqual(request_payload(requests[1])["firewall_id"], 12345)
 
     def test_create_instance_does_not_retry_transient_failure(self) -> None:
         client = LinodeClient(

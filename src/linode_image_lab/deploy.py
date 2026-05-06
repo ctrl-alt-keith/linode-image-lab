@@ -34,6 +34,7 @@ class DeployOptions:
     execute: bool = False
     image_id: str | None = None
     instance_type: str | None = None
+    firewall_id: int | None = None
     preserve_instance: bool = False
     command: str = "deploy"
     mode: str = "deploy"
@@ -50,6 +51,7 @@ def deploy_plan(
     execute: bool = False,
     image_id: str | None = None,
     instance_type: str | None = None,
+    firewall_id: int | None = None,
     preserve_instance: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -60,6 +62,7 @@ def deploy_plan(
         execute=execute,
         image_id=image_id,
         instance_type=instance_type,
+        firewall_id=firewall_id,
         preserve_instance=preserve_instance,
     )
     if not execute:
@@ -80,6 +83,7 @@ def dry_run_manifest(options: DeployOptions) -> dict[str, Any]:
     )
     manifest["execution_mode"] = "dry-run"
     manifest["message"] = "deploy is non-mutating unless --execute is provided"
+    attach_deploy_config(manifest, options)
     return manifest
 
 
@@ -103,6 +107,7 @@ def execute_deploy(
     manifest["steps"] = []
     manifest["resources"] = []
     manifest["deploy_source"] = {"image_id": required_text(options.image_id)}
+    attach_deploy_config(manifest, options)
     manifest["deploy_instance"] = {}
     manifest["validation"] = {"status": "not_started", "checks": []}
     manifest["cleanup"] = {"status": "not_started", "deleted": [], "preserved": []}
@@ -121,23 +126,29 @@ def execute_deploy(
         region = options.regions[0]
         image_id = required_text(options.image_id)
         instance_type = required_text(options.instance_type)
+        firewall_id = options.firewall_id
         instance_label = resource_label(manifest["run_id"], "deploy", suffix=options.label_suffix)
 
         append_step(manifest, "preflight_provider_inputs", mutates=False, status="running")
         run_client.preflight_region(region)
         run_client.preflight_instance_type(instance_type)
         run_client.preflight_image(image_id)
+        if firewall_id is not None:
+            run_client.preflight_firewall(firewall_id)
         finish_step(manifest, "preflight_provider_inputs", client=run_client)
 
         append_step(manifest, "create_deploy_instance", mutates=True, status="running")
-        deploy_instance = run_client.create_instance(
-            region=region,
-            source_image=image_id,
-            instance_type=instance_type,
-            label=instance_label,
-            tags=tags,
-            root_password=secrets.token_urlsafe(32),
-        )
+        create_args: dict[str, Any] = {
+            "region": region,
+            "source_image": image_id,
+            "instance_type": instance_type,
+            "label": instance_label,
+            "tags": tags,
+            "root_password": secrets.token_urlsafe(32),
+        }
+        if firewall_id is not None:
+            create_args["firewall_id"] = firewall_id
+        deploy_instance = run_client.create_instance(**create_args)
         deploy_instance["resource_type"] = "linode"
         manifest["deploy_instance"] = dict(deploy_instance)
         manifest["resources"].append(dict(deploy_instance))
@@ -212,6 +223,17 @@ def validate_execute_options(options: DeployOptions) -> None:
         raise DeployError("deploy --execute requires --image-id for the custom image to deploy")
     if not options.instance_type:
         raise DeployError("deploy --execute requires --type for the temporary deploy Linode")
+
+
+def attach_deploy_config(manifest: dict[str, Any], options: DeployOptions) -> None:
+    if options.firewall_id is None:
+        return
+    manifest["deploy_config"] = {
+        "firewall": {
+            "enabled": True,
+            "firewall_id": options.firewall_id,
+        }
+    }
 
 
 def cleanup_deploy_instance(

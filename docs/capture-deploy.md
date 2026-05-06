@@ -48,14 +48,16 @@ account charges until cleanup completes. It requires:
 - exactly one `--region`,
 - `--image-id`,
 - `--type`,
+- optional `--firewall-id` for an existing Cloud Firewall,
 - `LINODE_TOKEN`.
 
 Execution steps:
 
 1. preflight token access without mutating resources,
-2. verify the requested region, Linode type, and deploy image with read-only API
-   calls,
-3. create a temporary deploy Linode from the custom image id,
+2. verify the requested region, Linode type, deploy image, and configured
+   firewall with read-only API calls,
+3. create a temporary deploy Linode from the custom image id, assigning the
+   configured firewall when provided,
 4. wait until the provider reports the instance is running,
 5. validate provider/API-level running status, requested region, and required tags,
 6. delete the temporary instance unless `--preserve-instance` is set.
@@ -98,6 +100,7 @@ dry-run manifest and performs no Linode action.
 - at least one `--region`,
 - `--source-image`,
 - `--type`,
+- optional `--firewall-id` for deploy validation Linodes,
 - `LINODE_TOKEN`.
 
 Execution steps:
@@ -116,9 +119,9 @@ manifests.
 
 Capture-deploy intentionally runs the non-mutating API preflight inside both
 the capture and deploy phases, including read-only provider checks for region,
-type, and image availability. This keeps each phase independently safe and
-reusable, so combined manifests may show two `preflight_api_access` and
-`preflight_provider_inputs` steps.
+type, image availability, and configured firewall availability. This keeps each
+phase independently safe and reusable, so combined manifests may show two
+`preflight_api_access` and `preflight_provider_inputs` steps.
 
 When multiple regions are provided, `capture-deploy --execute` captures one
 custom image in the first requested region, then deploys that same captured

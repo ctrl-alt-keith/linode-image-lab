@@ -253,6 +253,66 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["regions"], ["us-west"])
         self.assertEqual(payload["ttl"], "2031-01-01T00:00:00Z")
 
+    def test_deploy_config_fills_firewall_and_instance_type_alias_for_dry_run(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            firewall_id = 12345
+            """
+        )
+
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            redirect_stdout(output),
+        ):
+            code = main(["deploy", "--config", config_path])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["regions"], ["us-east"])
+        self.assertEqual(payload["deploy_config"]["firewall"], {"enabled": True, "firewall_id": "[REDACTED]"})
+
+    def test_config_validate_shows_firewall_cli_override_precedence(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            firewall_id = 12345
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "deploy",
+                    "--firewall-id",
+                    "45678",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["firewall_id"], "[REDACTED]")
+        self.assertIn({"field": "firewall_id", "source": "cli --firewall-id"}, payload["sources"])
+
     def test_config_validate_shows_effective_defaults_and_precedence(self) -> None:
         config_path = self.write_config(
             """
@@ -334,6 +394,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["effective_defaults"]["image_id"], "[REDACTED]")
         self.assertIn({"field": "image_id", "source": "[deploy].image_id"}, payload["sources"])
+
+    def test_invalid_firewall_config_fails_clearly(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            firewall_id = "not-an-id"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("config [deploy].firewall_id must be a positive integer", error.getvalue())
+
+    def test_type_and_instance_type_config_aliases_are_mutually_exclusive(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            instance_type = "g6-standard-1"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("cannot set both type and instance_type", error.getvalue())
 
     def test_config_validate_rejects_invalid_config_without_command_execution(self) -> None:
         config_path = self.write_config(

@@ -103,11 +103,16 @@ Supported config values are intentionally narrow:
 - `ttl`,
 - `source_image` for capture and capture-deploy,
 - `image_id` for deploy,
-- `type` for capture, deploy, and capture-deploy.
+- `type` or `instance_type` for capture, deploy, and capture-deploy,
+- `firewall_id` for deploy instances in deploy and capture-deploy.
 
 `--execute`, preservation flags, run id fields, image labels, tokens,
-passwords, SSH keys, root passwords, and cloud-init or user-data fields are not
-configurable. Unknown keys and secret-like keys fail before command execution.
+passwords, SSH keys, root passwords, authorized keys, metadata, and cloud-init
+or user-data fields are not configurable. Unknown keys and secret-like keys fail
+before command execution. The config structure is deliberately small so future
+deploy-only fields such as `authorized_keys` and `metadata.user_data` can be
+added through the same explicit deploy defaults path without adding implicit
+global discovery.
 
 Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
@@ -140,14 +145,16 @@ tags, disk presence, image availability, and image tags from API responses.
 
 `deploy` without `--execute` remains non-mutating and does not read
 `LINODE_TOKEN`. `deploy --execute` requires exactly one region, an existing
-custom image id via `--image-id`, a Linode type, and `LINODE_TOKEN`.
+custom image id via `--image-id`, a Linode type, and `LINODE_TOKEN`. It may
+also receive an existing firewall through `--firewall-id` or deploy config.
 
 The execute flow is intentionally linear:
 
 1. preflight the token with non-mutating API calls,
-2. preflight the requested region, Linode type, and available deploy image with
-   non-mutating API calls,
-3. create a tagged temporary deploy Linode from the custom image id,
+2. preflight the requested region, Linode type, available deploy image, and
+   configured firewall with non-mutating API calls,
+3. create a tagged temporary deploy Linode from the custom image id, passing
+   `firewall_id` only when one was explicitly configured,
 4. wait for provider/API-level running status,
 5. validate running status, requested region, and required tags,
 6. delete or preserve the deploy instance according to explicit flags.

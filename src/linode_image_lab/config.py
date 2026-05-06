@@ -24,18 +24,18 @@ ROOT_KEYS = {
     "cleanup",
 }
 TABLE_FIELDS = {
-    "defaults": {"region", "regions", "ttl"},
-    "capture": {"region", "regions", "source_image", "type", "ttl"},
-    "deploy": {"region", "regions", "image_id", "type", "ttl"},
-    "capture-deploy": {"region", "regions", "source_image", "type", "ttl"},
+    "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
+    "capture": {"region", "regions", "source_image", "type", "instance_type", "ttl"},
+    "deploy": {"region", "regions", "image_id", "type", "instance_type", "firewall_id", "ttl"},
+    "capture-deploy": {"region", "regions", "source_image", "type", "instance_type", "firewall_id", "ttl"},
     "cleanup": {"ttl"},
 }
 COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type"),
-    "deploy": ("regions", "ttl", "image_id", "type"),
-    "capture-deploy": ("regions", "ttl", "source_image", "type"),
+    "deploy": ("regions", "ttl", "image_id", "type", "firewall_id"),
+    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id"),
     "cleanup": ("ttl",),
 }
 CLI_SOURCE_LABELS = {
@@ -44,6 +44,7 @@ CLI_SOURCE_LABELS = {
     "source_image": "cli --source-image",
     "image_id": "cli --image-id",
     "type": "cli --type",
+    "firewall_id": "cli --firewall-id",
 }
 PROHIBITED_KEYS = {
     "discover",
@@ -120,6 +121,8 @@ def validate_table(table: str, values: dict[str, Any]) -> None:
     allowed = TABLE_FIELDS[table]
     if "region" in values and "regions" in values:
         raise ConfigError(f"config [{table}] cannot set both region and regions")
+    if "type" in values and "instance_type" in values:
+        raise ConfigError(f"config [{table}] cannot set both type and instance_type")
 
     for key, value in values.items():
         validate_key_is_safe(key, location=f"[{table}]")
@@ -142,6 +145,10 @@ def validate_value(table: str, key: str, value: Any) -> None:
             raise ConfigError(f"config [{table}].regions must be a non-empty list of strings")
         if not all(isinstance(region, str) and region.strip() for region in value):
             raise ConfigError(f"config [{table}].regions must be a non-empty list of strings")
+        return
+
+    if key == "firewall_id":
+        normalize_firewall_id(value, f"config [{table}].firewall_id")
         return
 
     if not isinstance(value, str) or not value.strip():
@@ -226,8 +233,15 @@ def resolve_table_field(table: dict[str, Any], field: str, label: str) -> tuple[
             return normalize_default_value(field, [table["region"]]), f"{label}.region"
         return None
 
+    if field == "type":
+        if "instance_type" in table:
+            return table["instance_type"], f"{label}.instance_type"
+        if "type" in table:
+            return table["type"], f"{label}.type"
+        return None
+
     if field in table:
-        return table[field], f"{label}.{field}"
+        return normalize_default_value(field, table[field]), f"{label}.{field}"
     return None
 
 
@@ -239,4 +253,24 @@ def normalize_default_value(field: str, value: Any) -> Any:
                 "config validate requires at least one non-empty --region when --region is provided"
             )
         return regions
+    if field == "firewall_id":
+        return normalize_firewall_id(value, "firewall_id")
     return value
+
+
+def normalize_firewall_id(value: Any, label: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{label} must be a positive integer")
+    if isinstance(value, int):
+        firewall_id = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            firewall_id = int(value.strip(), 10)
+        except ValueError as exc:
+            raise ConfigError(f"{label} must be a positive integer") from exc
+    else:
+        raise ConfigError(f"{label} must be a positive integer")
+
+    if firewall_id <= 0:
+        raise ConfigError(f"{label} must be a positive integer")
+    return firewall_id

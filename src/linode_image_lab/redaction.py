@@ -14,6 +14,7 @@ TOKEN_TEXT_RE = re.compile(
 PROVIDER_IDENTIFIER_KEYS = {
     "account_id",
     "disk_id",
+    "firewall_id",
     "image_id",
     "linode_id",
     "provider_id",
