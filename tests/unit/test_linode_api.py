@@ -441,6 +441,45 @@ class LinodeClientTests(unittest.TestCase):
         self.assertNotIn("authorized_keys", request_payload(requests[0]))
         self.assertEqual(request_payload(requests[1])["authorized_keys"], [public_key])
 
+    def test_create_instance_includes_metadata_user_data_only_when_configured(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        encoded_user_data = "I2Nsb3VkLWNvbmZpZwo="
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": 123,
+                    "label": "lil-run-source",
+                    "region": "us-east",
+                    "status": "provisioning",
+                    "tags": ["project=linode-image-lab"],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            client.create_instance(
+                region="us-east",
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                label="lil-run-source",
+                tags=["project=linode-image-lab"],
+                root_password="generated-" + "root-pass",
+            )
+            client.create_instance(
+                region="us-east",
+                source_image="linode/debian12",
+                instance_type="g6-nanode-1",
+                label="lil-run-source",
+                tags=["project=linode-image-lab"],
+                root_password="generated-" + "root-pass",
+                metadata_user_data=encoded_user_data,
+            )
+
+        self.assertNotIn("metadata", request_payload(requests[0]))
+        self.assertEqual(request_payload(requests[1])["metadata"], {"user_data": encoded_user_data})
+
     def test_create_instance_does_not_retry_transient_failure(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,

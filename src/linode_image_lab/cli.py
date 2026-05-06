@@ -19,6 +19,7 @@ from .config import (
     effective_command_defaults,
     load_config,
     load_authorized_keys_file,
+    load_user_data,
     normalize_firewall_id,
     normalize_authorized_key,
 )
@@ -75,6 +76,13 @@ def add_authorized_keys_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--authorized-keys-file",
         help="Explicit file containing public SSH keys for deploy instances, one key per line.",
+    )
+
+
+def add_user_data_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--user-data-file",
+        help="Explicit file containing deploy user data to send as Linode metadata.user_data.",
     )
 
 
@@ -140,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_firewall_arg(config_validate)
     add_authorized_keys_args(config_validate)
+    add_user_data_arg(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -175,6 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--type", dest="instance_type", help="Linode type for the temporary deploy Linode.")
     add_firewall_arg(deploy)
     add_authorized_keys_args(deploy)
+    add_user_data_arg(deploy)
     deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -194,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_firewall_arg(capture_deploy)
     add_authorized_keys_args(capture_deploy)
+    add_user_data_arg(capture_deploy)
     capture_deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -239,11 +250,13 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
         if args.firewall_id is None and "firewall_id" in defaults:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
+        args.user_data = resolved_user_data(defaults, args)
 
     if args.command == "capture-deploy":
         if args.firewall_id is None and "firewall_id" in defaults:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
+        args.user_data = resolved_user_data(defaults, args)
 
 
 def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -285,6 +298,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "image_id": args.image_id,
         "type": args.instance_type,
         "firewall_id": args.firewall_id,
+        "user_data": args.user_data_file,
     }
     option_names = {
         "regions": "--region",
@@ -293,6 +307,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "image_id": "--image-id",
         "type": "--type",
         "firewall_id": "--firewall-id",
+        "user_data": "--user-data-file",
     }
 
     for field, value in candidate_values.items():
@@ -355,6 +370,12 @@ def merged_authorized_keys(defaults: dict[str, Any], args: argparse.Namespace) -
     return deduped or None
 
 
+def resolved_user_data(defaults: dict[str, Any], args: argparse.Namespace) -> Any:
+    if args.user_data_file is not None:
+        return load_user_data(args.user_data_file, "--user-data-file")
+    return defaults.get("user_data")
+
+
 def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "plan":
         return create_manifest(
@@ -389,6 +410,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             instance_type=args.instance_type,
             firewall_id=args.firewall_id,
             authorized_keys=args.authorized_keys,
+            user_data=args.user_data,
             preserve_instance=args.preserve_instance,
         )
 
@@ -402,6 +424,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             instance_type=args.instance_type,
             firewall_id=args.firewall_id,
             authorized_keys=args.authorized_keys,
+            user_data=args.user_data,
             preserve_instance=args.preserve_instance,
         )
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from linode_image_lab.capture_deploy import CaptureDeployError, capture_deploy_plan
 from linode_image_lab.linode_api import LinodeClient, LinodePreflightError
 from linode_image_lab.manifest import serialize_manifest
+from linode_image_lab.user_data import DeployUserData
 
 
 def validation_check(manifest: dict[str, object], name: str, target: str) -> dict[str, object]:
@@ -39,6 +40,8 @@ class FakeLinodeClient:
         self.deploy_source_images: list[str] = []
         self.deploy_firewall_ids: list[int | None] = []
         self.deploy_authorized_keys: list[list[str] | None] = []
+        self.capture_metadata_user_data: list[str | None] = []
+        self.deploy_metadata_user_data: list[str | None] = []
         self.instance_regions: dict[int, str] = {}
         self.instance_tags: dict[int, list[str]] = {}
         self.deploy_instance_ids: set[int] = set()
@@ -78,6 +81,7 @@ class FakeLinodeClient:
         root_password: str,
         firewall_id: int | None = None,
         authorized_keys: list[str] | None = None,
+        metadata_user_data: str | None = None,
     ) -> dict[str, object]:
         with self._lock:
             if source_image == "private/789":
@@ -87,6 +91,7 @@ class FakeLinodeClient:
                 self.deploy_source_images.append(source_image)
                 self.deploy_firewall_ids.append(firewall_id)
                 self.deploy_authorized_keys.append(authorized_keys)
+                self.deploy_metadata_user_data.append(metadata_user_data)
                 self.deploy_tags = tags
                 self.created_regions.append(region)
                 self.instance_regions[linode_id] = region
@@ -104,6 +109,7 @@ class FakeLinodeClient:
             self.capture_count += 1
             self.calls.append("create_capture_source")
             self.capture_tags = tags
+            self.capture_metadata_user_data.append(metadata_user_data)
             self.created_regions.append(region)
             self.instance_regions[linode_id] = region
             self.instance_tags[linode_id] = tags
@@ -719,6 +725,28 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertEqual(
             manifest["deploy"]["deploy_config"]["authorized_keys"],
             {"enabled": True, "authorized_key_count": 1},
+        )
+
+    def test_capture_deploy_passes_user_data_to_deploy_phase_only(self) -> None:
+        client = FakeLinodeClient()
+        user_data = DeployUserData(encoded="I2Nsb3VkLWNvbmZpZwo=", byte_count=14)
+
+        manifest = capture_deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            user_data=user_data,
+            client=client,
+        )
+
+        self.assertEqual(client.capture_metadata_user_data, [None])
+        self.assertEqual(client.deploy_metadata_user_data, ["I2Nsb3VkLWNvbmZpZwo="])
+        self.assertEqual(
+            manifest["deploy"]["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": 14},
         )
 
     def test_deploy_provider_preflight_fails_before_deploy_mutation(self) -> None:

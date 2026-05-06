@@ -9,6 +9,7 @@ from typing import Any
 
 from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import REQUIRED_TAG_KEYS, create_manifest, tags_to_dict
+from .user_data import DeployUserData
 from .validation_results import finish_validation, record_validation_check, start_validation
 
 DEPLOY_VALIDATION_CHECKS = (
@@ -36,6 +37,7 @@ class DeployOptions:
     instance_type: str | None = None
     firewall_id: int | None = None
     authorized_keys: list[str] | None = None
+    user_data: DeployUserData | None = None
     preserve_instance: bool = False
     command: str = "deploy"
     mode: str = "deploy"
@@ -54,6 +56,7 @@ def deploy_plan(
     instance_type: str | None = None,
     firewall_id: int | None = None,
     authorized_keys: list[str] | None = None,
+    user_data: DeployUserData | None = None,
     preserve_instance: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -66,6 +69,7 @@ def deploy_plan(
         instance_type=instance_type,
         firewall_id=firewall_id,
         authorized_keys=authorized_keys,
+        user_data=user_data,
         preserve_instance=preserve_instance,
     )
     if not execute:
@@ -153,6 +157,8 @@ def execute_deploy(
             create_args["firewall_id"] = firewall_id
         if options.authorized_keys:
             create_args["authorized_keys"] = list(options.authorized_keys)
+        if options.user_data is not None:
+            create_args["metadata_user_data"] = options.user_data.encoded
         deploy_instance = run_client.create_instance(**create_args)
         deploy_instance["resource_type"] = "linode"
         manifest["deploy_instance"] = dict(deploy_instance)
@@ -241,6 +247,12 @@ def attach_deploy_config(manifest: dict[str, Any], options: DeployOptions) -> No
         deploy_config["authorized_keys"] = {
             "enabled": True,
             "authorized_key_count": len(options.authorized_keys),
+        }
+    if options.user_data is not None:
+        deploy_config["user_data"] = {
+            "enabled": True,
+            "source": options.user_data.source,
+            "byte_count": options.user_data.byte_count,
         }
     if not deploy_config:
         return

@@ -26,10 +26,12 @@ when they appear in a table that is not used by the selected command.
 
 Supported config values are limited to region defaults, TTL, source image,
 existing custom image id, Linode type, an existing firewall id for deploy
-instances, and explicit public SSH authorized keys for deploy instances. Config
+instances, explicit public SSH authorized keys for deploy instances, and an
+explicit `[deploy].user_data_file` path for deploy metadata user data. Config
 cannot set `--execute`, `--discover`, preservation flags, run ids, image labels,
-tokens, passwords, private SSH keys, root passwords, metadata, cloud-init data,
-or user-data. Raw authorized key contents are not serialized in CLI output.
+tokens, passwords, private SSH keys, root passwords, inline metadata, inline
+cloud-init data, or inline user-data. Raw authorized key contents and raw or
+Base64-encoded user data are not serialized in CLI output.
 
 Config loading and validation happen before token lookup. Execute mode and
 `cleanup --discover` still require `LINODE_TOKEN` from the environment or
@@ -87,9 +89,12 @@ before mutation if required options or `LINODE_TOKEN` are missing. They perform
 non-mutating token preflight and read-only region, type, and image input
 preflight before creating resources. When a firewall is configured, they also
 preflight the firewall before resource creation and include `firewall_id` in the
-create payload only for deploy instances. Partial-failure cleanup only targets
-resources whose required tags exactly match the current run. Tag mismatches are
-represented as preserved resources in manifests, not as deletion attempts.
+create payload only for deploy instances. Explicit user-data files are loaded,
+checked as non-empty UTF-8 text, Base64 encoded, and included as
+`metadata.user_data` only for deploy instance creation. Partial-failure cleanup
+only targets resources whose required tags exactly match the current run. Tag
+mismatches are represented as preserved resources in manifests, not as deletion
+attempts.
 
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
