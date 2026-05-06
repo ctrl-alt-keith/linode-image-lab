@@ -41,6 +41,7 @@ class CaptureDeployOptions:
     execute: bool = False
     source_image: str | None = None
     instance_type: str | None = None
+    firewall_id: int | None = None
     preserve_instance: bool = False
 
 
@@ -52,6 +53,7 @@ def capture_deploy_plan(
     execute: bool = False,
     source_image: str | None = None,
     instance_type: str | None = None,
+    firewall_id: int | None = None,
     preserve_instance: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -62,6 +64,7 @@ def capture_deploy_plan(
         execute=execute,
         source_image=source_image,
         instance_type=instance_type,
+        firewall_id=firewall_id,
         preserve_instance=preserve_instance,
     )
     if not execute:
@@ -81,6 +84,7 @@ def dry_run_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         status="planned",
     )
     apply_capture_deploy_shape(manifest, mutates=False)
+    attach_deploy_config(manifest, options)
     manifest["execution_mode"] = "dry-run"
     manifest["message"] = "capture-deploy is non-mutating unless --execute is provided"
     return manifest
@@ -143,6 +147,7 @@ def execute_multi_region_capture_deploy(
         ttl=manifest["ttl"],
         image_id=image_id,
         instance_type=required_text(options.instance_type),
+        firewall_id=options.firewall_id,
         preserve_instance=options.preserve_instance,
         client=client,
     )
@@ -178,6 +183,7 @@ def execute_region_deploys(
     ttl: str,
     image_id: str,
     instance_type: str,
+    firewall_id: int | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
 ) -> dict[str, dict[str, Any]]:
@@ -190,6 +196,7 @@ def execute_region_deploys(
                 ttl=ttl,
                 image_id=image_id,
                 instance_type=instance_type,
+                firewall_id=firewall_id,
                 preserve_instance=preserve_instance,
                 client=client,
             )
@@ -206,6 +213,7 @@ def execute_region_deploys(
                 ttl=ttl,
                 image_id=image_id,
                 instance_type=instance_type,
+                firewall_id=firewall_id,
                 preserve_instance=preserve_instance,
                 client=client,
             ): region
@@ -233,6 +241,7 @@ def execute_region_deploy(
     ttl: str,
     image_id: str,
     instance_type: str,
+    firewall_id: int | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
 ) -> dict[str, Any]:
@@ -245,6 +254,7 @@ def execute_region_deploy(
                 execute=True,
                 image_id=image_id,
                 instance_type=instance_type,
+                firewall_id=firewall_id,
                 preserve_instance=preserve_instance,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -293,7 +303,7 @@ def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         dry_run=False,
         status="running",
     )
-    return {
+    manifest = {
         "schema_version": base["schema_version"],
         "project": base["project"],
         "command": base["command"],
@@ -313,6 +323,8 @@ def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
             "failed": [],
         },
     }
+    attach_deploy_config(manifest, options)
+    return manifest
 
 
 def execute_single_region_capture_deploy(
@@ -378,6 +390,7 @@ def execute_single_region_capture_deploy(
                 execute=True,
                 image_id=image_id,
                 instance_type=required_text(options.instance_type),
+                firewall_id=options.firewall_id,
                 preserve_instance=options.preserve_instance,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -662,6 +675,7 @@ def sync_manifest(
             "steps": deploy_manifest.get("steps", []),
             "resources": deploy_manifest.get("resources", []),
             "deploy_source": deploy_manifest.get("deploy_source", {}),
+            "deploy_config": deploy_manifest.get("deploy_config", {}),
             "deploy_instance": deploy_manifest.get("deploy_instance", {}),
             "validation": deploy_manifest.get("validation", {}),
             "cleanup": deploy_manifest.get("cleanup", {}),
@@ -730,6 +744,17 @@ def cleanup_block(manifest: dict[str, Any] | None) -> dict[str, Any]:
     if manifest is None:
         return {"status": "not_started", "deleted": [], "preserved": []}
     return dict(manifest.get("cleanup", {"status": "not_started", "deleted": [], "preserved": []}))
+
+
+def attach_deploy_config(manifest: dict[str, Any], options: CaptureDeployOptions) -> None:
+    if options.firewall_id is None:
+        return
+    manifest["deploy_config"] = {
+        "firewall": {
+            "enabled": True,
+            "firewall_id": options.firewall_id,
+        }
+    }
 
 
 def cleanup_status(manifest: dict[str, Any]) -> str:

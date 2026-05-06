@@ -25,9 +25,10 @@ declare `schema_version = 1`. Unknown keys fail, and secret-like keys fail even
 when they appear in a table that is not used by the selected command.
 
 Supported config values are limited to region defaults, TTL, source image,
-existing custom image id, and Linode type. Config cannot set `--execute`,
-`--discover`, preservation flags, run ids, image labels, tokens, passwords, SSH
-keys, root passwords, cloud-init data, or user-data.
+existing custom image id, Linode type, and an existing firewall id for deploy
+instances. Config cannot set `--execute`, `--discover`, preservation flags, run
+ids, image labels, tokens, passwords, SSH keys, root passwords, authorized keys,
+metadata, cloud-init data, or user-data.
 
 Config loading and validation happen before token lookup. Execute mode and
 `cleanup --discover` still require `LINODE_TOKEN` from the environment or
@@ -44,17 +45,19 @@ selected command table, then `[defaults]`.
 OAuth access that can:
 
 - read the current profile for preflight,
-- read regions, Linode types, and images for input preflight,
+- read regions, Linode types, images, and configured firewalls for input
+  preflight,
 - create, read, shut down, and delete temporary Linodes,
 - create and read custom images,
 - apply tags to created resources.
 
 In Linode scope terms, this generally means `linodes:read_write` and
-`images:read_write`, plus account permissions or grants that allow Linode
-creation and tagging. Deploy execution from an existing image does not create a
-custom image, and standalone cleanup does not create or delete custom images.
-If tags cannot be applied or later verified, execution fails safely because
-cleanup depends on rediscoverable tags.
+`images:read_write`, plus `firewall:read_only` when firewall preflight is
+configured, and account permissions or grants that allow Linode creation and
+tagging. Deploy execution from an existing image does not create a custom image,
+and standalone cleanup does not create or delete custom images. If tags cannot
+be applied or later verified, execution fails safely because cleanup depends on
+rediscoverable tags.
 
 ## Public-Safety Scan
 
@@ -81,7 +84,9 @@ preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
 `capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
 before mutation if required options or `LINODE_TOKEN` are missing. They perform
 non-mutating token preflight and read-only region, type, and image input
-preflight before creating resources. Partial-failure cleanup only targets
+preflight before creating resources. When a firewall is configured, they also
+preflight the firewall before resource creation and include `firewall_id` in the
+create payload only for deploy instances. Partial-failure cleanup only targets
 resources whose required tags exactly match the current run. Tag mismatches are
 represented as preserved resources in manifests, not as deletion attempts.
 

@@ -26,6 +26,7 @@ class FakeLinodeClient:
     def __init__(self, *, missing_create_tags: bool = False, status: str = "running") -> None:
         self.calls: list[str] = []
         self.create_tags: list[str] = []
+        self.create_firewall_id: int | None = None
         self.deleted: list[int] = []
         self.missing_create_tags = missing_create_tags
         self.status = status
@@ -42,6 +43,9 @@ class FakeLinodeClient:
     def preflight_image(self, image_id: str) -> None:
         self.calls.append("preflight_image")
 
+    def preflight_firewall(self, firewall_id: int) -> None:
+        self.calls.append("preflight_firewall")
+
     def create_instance(
         self,
         *,
@@ -51,9 +55,11 @@ class FakeLinodeClient:
         label: str,
         tags: list[str],
         root_password: str,
+        firewall_id: int | None = None,
     ) -> dict[str, object]:
         self.calls.append("create_instance")
         self.create_tags = tags
+        self.create_firewall_id = firewall_id
         self.source_image = source_image
         self.instance_type = instance_type
         self.root_password_length = len(root_password)
@@ -133,6 +139,11 @@ class InvalidProviderInputClient(FakeLinodeClient):
     def preflight_image(self, image_id: str) -> None:
         self.calls.append("preflight_image")
         if self.fail_call == "image":
+            raise LinodePreflightError(self.message)
+
+    def preflight_firewall(self, firewall_id: int) -> None:
+        self.calls.append("preflight_firewall")
+        if self.fail_call == "firewall":
             raise LinodePreflightError(self.message)
 
 
@@ -225,6 +236,17 @@ class DeployExecutionTests(unittest.TestCase):
                 "requested image is unavailable",
                 ["preflight", "preflight_region", "preflight_instance_type", "preflight_image"],
             ),
+            (
+                "firewall",
+                "requested firewall is unavailable",
+                [
+                    "preflight",
+                    "preflight_region",
+                    "preflight_instance_type",
+                    "preflight_image",
+                    "preflight_firewall",
+                ],
+            ),
         ]
 
         for fail_call, message, expected_calls in cases:
@@ -239,6 +261,7 @@ class DeployExecutionTests(unittest.TestCase):
                         execute=True,
                         image_id="private/invalid-image",
                         instance_type="g6-nanode-1",
+                        firewall_id=12345 if fail_call == "firewall" else None,
                         client=client,
                     )
 
@@ -285,6 +308,36 @@ class DeployExecutionTests(unittest.TestCase):
             ],
         )
         self.assertEqual(manifest["cleanup"]["status"], "deleted")
+
+    def test_execute_preflights_and_assigns_configured_firewall(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            firewall_id=12345,
+            client=client,
+        )
+
+        self.assertEqual(
+            client.calls,
+            [
+                "preflight",
+                "preflight_region",
+                "preflight_instance_type",
+                "preflight_image",
+                "preflight_firewall",
+                "create_instance",
+                "wait_instance_ready",
+                "delete_instance",
+            ],
+        )
+        self.assertEqual(client.create_firewall_id, 12345)
+        self.assertEqual(manifest["deploy_config"]["firewall"], {"enabled": True, "firewall_id": 12345})
 
     def test_execute_applies_required_tags_to_created_resource(self) -> None:
         client = FakeLinodeClient()
@@ -393,7 +446,25 @@ class DeployExecutionTests(unittest.TestCase):
         exported = json.loads(serialize_manifest(manifest))
 
         self.assertEqual(exported["deploy_source"]["image_id"], "[REDACTED]")
+        self.assertNotIn("deploy_config", exported)
         self.assertEqual(exported["deploy_instance"]["linode_id"], "[REDACTED]")
+
+    def test_serialized_firewall_manifest_redacts_firewall_id(self) -> None:
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            firewall_id=12345,
+            client=FakeLinodeClient(),
+        )
+
+        exported = json.loads(serialize_manifest(manifest))
+
+        self.assertEqual(exported["deploy_config"]["firewall"]["enabled"], True)
+        self.assertEqual(exported["deploy_config"]["firewall"]["firewall_id"], "[REDACTED]")
 
 
 if __name__ == "__main__":

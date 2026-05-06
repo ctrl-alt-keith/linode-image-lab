@@ -37,6 +37,7 @@ class FakeLinodeClient:
         self.deploy_count = 0
         self.created_regions: list[str] = []
         self.deploy_source_images: list[str] = []
+        self.deploy_firewall_ids: list[int | None] = []
         self.instance_regions: dict[int, str] = {}
         self.instance_tags: dict[int, list[str]] = {}
         self.deploy_instance_ids: set[int] = set()
@@ -61,6 +62,10 @@ class FakeLinodeClient:
         with self._lock:
             self.calls.append("preflight_image")
 
+    def preflight_firewall(self, firewall_id: int) -> None:
+        with self._lock:
+            self.calls.append("preflight_firewall")
+
     def create_instance(
         self,
         *,
@@ -70,6 +75,7 @@ class FakeLinodeClient:
         label: str,
         tags: list[str],
         root_password: str,
+        firewall_id: int | None = None,
     ) -> dict[str, object]:
         with self._lock:
             if source_image == "private/789":
@@ -77,6 +83,7 @@ class FakeLinodeClient:
                 self.deploy_count += 1
                 self.calls.append("create_deploy_instance")
                 self.deploy_source_images.append(source_image)
+                self.deploy_firewall_ids.append(firewall_id)
                 self.deploy_tags = tags
                 self.created_regions.append(region)
                 self.instance_regions[linode_id] = region
@@ -669,6 +676,24 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         )
         self.assertEqual(manifest["cleanup"]["status"], "completed")
         self.assertEqual(client.deleted, [123, 321])
+
+    def test_capture_deploy_passes_firewall_to_deploy_phase_only(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = capture_deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            firewall_id=12345,
+            client=client,
+        )
+
+        self.assertEqual(client.calls.count("preflight_firewall"), 1)
+        self.assertEqual(client.deploy_firewall_ids, [12345])
+        self.assertEqual(manifest["deploy"]["deploy_config"]["firewall"], {"enabled": True, "firewall_id": 12345})
 
     def test_deploy_provider_preflight_fails_before_deploy_mutation(self) -> None:
         client = InvalidCapturedImageClient()

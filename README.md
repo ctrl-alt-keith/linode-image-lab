@@ -178,8 +178,9 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
-`region` or `regions`, `ttl`, `source_image`, `image_id`, and `type`, depending
-on the command.
+`region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
+`instance_type`, and `firewall_id`, depending on the command. `firewall_id`
+applies only to deploy instances from `deploy` and `capture-deploy`.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -197,6 +198,7 @@ command execution, and emits a non-mutating JSON report with `precedence`,
 then the selected command table, then `[defaults]`. You can pass supported CLI
 default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
 `--type` to preview how they override the config for the selected command.
+For deploy defaults, `--firewall-id` can also be previewed.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, SSH keys, cloud-init data, `execute`, `discover`,
@@ -214,8 +216,9 @@ environment or approved environment injection.
 - Config values only fill omitted command options; CLI flags override config.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
-- Execute runs verify the requested region, Linode type, and source or deploy
-  image with read-only Linode API calls before resource creation.
+- Execute runs verify the requested region, Linode type, source or deploy
+  image, and configured firewall with read-only Linode API calls before
+  resource creation.
 - Custom images are preserved as deliverables.
 - `cleanup` is independently runnable, dry-run by default, and can delete
   expired tagged temporary Linodes only with `--execute`.
@@ -265,6 +268,7 @@ linode-image-lab deploy \
   --region us-east \
   --image-id "$CUSTOM_IMAGE_ID" \
   --type g6-nanode-1 \
+  --firewall-id "$FIREWALL_ID" \
   --execute
 ```
 
@@ -275,6 +279,7 @@ linode-image-lab capture-deploy \
   --region us-east \
   --source-image linode/alpine3.23 \
   --type g6-nanode-1 \
+  --firewall-id "$FIREWALL_ID" \
   --execute
 ```
 
@@ -316,7 +321,9 @@ Multi-region `capture-deploy --execute` emits one combined manifest with
 top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each
 `deploy_results.<region>` value is the deploy manifest for that requested
-region.
+region. When a firewall is configured, deploy manifests include
+`deploy_config.firewall`; provider identifiers remain redacted in normal
+stdout.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or

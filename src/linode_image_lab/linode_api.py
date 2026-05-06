@@ -42,6 +42,8 @@ class LinodeClientProtocol(Protocol):
 
     def preflight_image(self, image_id: str) -> None: ...
 
+    def preflight_firewall(self, firewall_id: int) -> None: ...
+
     def create_instance(
         self,
         *,
@@ -51,6 +53,7 @@ class LinodeClientProtocol(Protocol):
         label: str,
         tags: list[str],
         root_password: str,
+        firewall_id: int | None = None,
     ) -> dict[str, Any]: ...
 
     def wait_instance_ready(self, linode_id: int) -> dict[str, Any]: ...
@@ -130,6 +133,10 @@ class LinodeClient:
         if response.get("status") != "available":
             raise LinodePreflightError("requested image is not available")
 
+    def preflight_firewall(self, firewall_id: int) -> None:
+        escaped = quote(str(firewall_id), safe="")
+        self._preflight_resource(f"/networking/firewalls/{escaped}", "requested firewall is unavailable")
+
     def create_instance(
         self,
         *,
@@ -139,6 +146,7 @@ class LinodeClient:
         label: str,
         tags: list[str],
         root_password: str,
+        firewall_id: int | None = None,
     ) -> dict[str, Any]:
         payload = {
             "booted": True,
@@ -149,6 +157,8 @@ class LinodeClient:
             "tags": tags,
             "type": instance_type,
         }
+        if firewall_id is not None:
+            payload["firewall_id"] = firewall_id
         response = self._request("POST", "/linode/instances", payload)
         return self._instance_resource(response)
 

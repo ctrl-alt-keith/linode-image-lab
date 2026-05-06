@@ -18,6 +18,7 @@ from .config import (
     command_defaults,
     effective_command_defaults,
     load_config,
+    normalize_firewall_id,
 )
 from .deploy import DeployError, deploy_plan
 from .manifest import PROJECT, create_manifest, serialize_manifest
@@ -52,6 +53,21 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
     )
     parser.add_argument("--run-id", help="Optional run id for deterministic planning.")
     parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
+
+
+def add_firewall_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--firewall-id",
+        type=positive_firewall_id,
+        help="Existing Linode Cloud Firewall id to assign to deploy instances.",
+    )
+
+
+def positive_firewall_id(value: str) -> int:
+    try:
+        return normalize_firewall_id(value, "--firewall-id")
+    except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def add_version_arg(parser: argparse.ArgumentParser, version_text: str) -> None:
@@ -100,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="instance_type",
         help="Optional CLI Linode type override to include in resolution.",
     )
+    add_firewall_arg(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -133,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
     deploy.add_argument("--image-id", help="Custom image id for the temporary deploy Linode.")
     deploy.add_argument("--type", dest="instance_type", help="Linode type for the temporary deploy Linode.")
+    add_firewall_arg(deploy)
     deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -150,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="instance_type",
         help="Linode type for the temporary capture and deploy Linodes.",
     )
+    add_firewall_arg(capture_deploy)
     capture_deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -184,14 +203,20 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
     if args.command in {"capture", "capture-deploy"}:
         if args.source_image is None and "source_image" in defaults:
             args.source_image = defaults["source_image"]
-        if args.instance_type is None and "type" in defaults:
-            args.instance_type = defaults["type"]
+        if args.instance_type is None and ("type" in defaults or "instance_type" in defaults):
+            args.instance_type = config_instance_type(defaults)
 
     if args.command == "deploy":
         if args.image_id is None and "image_id" in defaults:
             args.image_id = defaults["image_id"]
-        if args.instance_type is None and "type" in defaults:
-            args.instance_type = defaults["type"]
+        if args.instance_type is None and ("type" in defaults or "instance_type" in defaults):
+            args.instance_type = config_instance_type(defaults)
+        if args.firewall_id is None and "firewall_id" in defaults:
+            args.firewall_id = defaults["firewall_id"]
+
+    if args.command == "capture-deploy":
+        if args.firewall_id is None and "firewall_id" in defaults:
+            args.firewall_id = defaults["firewall_id"]
 
 
 def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -232,6 +257,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "source_image": args.source_image,
         "image_id": args.image_id,
         "type": args.instance_type,
+        "firewall_id": args.firewall_id,
     }
     option_names = {
         "regions": "--region",
@@ -239,6 +265,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "source_image": "--source-image",
         "image_id": "--image-id",
         "type": "--type",
+        "firewall_id": "--firewall-id",
     }
 
     for field, value in candidate_values.items():
@@ -264,6 +291,14 @@ def config_regions(defaults: dict[str, Any]) -> list[str] | None:
         return list(defaults["regions"])
     if "region" in defaults:
         return [defaults["region"]]
+    return None
+
+
+def config_instance_type(defaults: dict[str, Any]) -> str | None:
+    if "instance_type" in defaults:
+        return str(defaults["instance_type"])
+    if "type" in defaults:
+        return str(defaults["type"])
     return None
 
 
@@ -299,6 +334,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             execute=args.execute,
             image_id=args.image_id,
             instance_type=args.instance_type,
+            firewall_id=args.firewall_id,
             preserve_instance=args.preserve_instance,
         )
 
@@ -310,6 +346,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             execute=args.execute,
             source_image=args.source_image,
             instance_type=args.instance_type,
+            firewall_id=args.firewall_id,
             preserve_instance=args.preserve_instance,
         )
 
