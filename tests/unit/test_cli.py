@@ -13,6 +13,8 @@ from linode_image_lab.cli import build_parser, main
 
 PUBLIC_KEY_ONE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA one@example"
 PUBLIC_KEY_TWO = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA two@example"
+USER_DATA = "#cloud-config\nfinal_message: sensitive value\n"
+USER_DATA_OVERRIDE = "#!/bin/bash\necho override\n"
 
 
 class CliTests(unittest.TestCase):
@@ -374,6 +376,181 @@ class CliTests(unittest.TestCase):
             {"authorized_key_count": 1, "enabled": True},
         )
 
+    def test_deploy_config_loads_user_data_file_for_dry_run_metadata(self) -> None:
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            user_data_file = "{user_data_path}"
+            """
+        )
+
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            redirect_stdout(output),
+        ):
+            code = main(["deploy", "--config", config_path])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertNotIn(USER_DATA, payload_text)
+        self.assertNotIn("I2Nsb3VkLWNvbmZpZw", payload_text)
+        self.assertEqual(
+            payload["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA.encode("utf-8"))},
+        )
+
+    def test_deploy_user_data_config_path_is_relative_to_config_file(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        (root / "cloud-init.yaml").write_text(USER_DATA, encoding="utf-8")
+        config_path = root / "lab.toml"
+        config_path.write_text(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            user_data_file = "cloud-init.yaml"
+            """,
+            encoding="utf-8",
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["deploy", "--config", str(config_path)])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA.encode("utf-8"))},
+        )
+
+    def test_capture_deploy_uses_deploy_scoped_user_data_config(self) -> None:
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [capture-deploy]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            instance_type = "g6-nanode-1"
+
+            [deploy]
+            user_data_file = "{user_data_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["capture-deploy", "--config", config_path])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertNotIn(USER_DATA, payload_text)
+        self.assertEqual(
+            payload["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA.encode("utf-8"))},
+        )
+
+    def test_cli_user_data_file_overrides_config_user_data_file(self) -> None:
+        config_user_data_path = self.write_file(USER_DATA, name="config-cloud-init.yaml")
+        cli_user_data_path = self.write_file(USER_DATA_OVERRIDE, name="cli-cloud-init.sh")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            user_data_file = "{config_user_data_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["deploy", "--config", config_path, "--user-data-file", cli_user_data_path])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA_OVERRIDE.encode("utf-8"))},
+        )
+
+    def test_user_data_file_missing_fails_without_leaking_path_contents(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            user_data_file = "missing-cloud-init.yaml"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("[deploy].user_data_file file not found", error.getvalue())
+
+    def test_user_data_file_unreadable_and_empty_inputs_fail_safely(self) -> None:
+        directory_path = tempfile.TemporaryDirectory()
+        self.addCleanup(directory_path.cleanup)
+        empty_path = self.write_file("", name="empty-cloud-init.yaml")
+
+        cases = [
+            (directory_path.name, "file could not be read"),
+            (empty_path, "must not be empty"),
+        ]
+        for path, message in cases:
+            with self.subTest(message=message):
+                error = StringIO()
+                with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                    main(
+                        [
+                            "deploy",
+                            "--region",
+                            "us-east",
+                            "--user-data-file",
+                            path,
+                        ]
+                    )
+
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, error.getvalue())
+
+    def test_binary_user_data_file_fails_safely(self) -> None:
+        binary_path = self.write_bytes(b"#cloud-config\n\x00secret\n", name="binary-cloud-init.yaml")
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--region", "us-east", "--user-data-file", binary_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must be text user data, not binary data", error.getvalue())
+        self.assertNotIn("secret", error.getvalue())
+
     def test_config_validate_shows_firewall_cli_override_precedence(self) -> None:
         config_path = self.write_config(
             """
@@ -449,6 +626,72 @@ class CliTests(unittest.TestCase):
         self.assertIn({"field": "authorized_keys", "source": "[deploy].authorized_keys"}, payload["sources"])
         self.assertIn({"field": "authorized_keys", "source": "[deploy].authorized_keys_file"}, payload["sources"])
         self.assertIn({"field": "authorized_keys", "source": "cli --authorized-key"}, payload["sources"])
+
+    def test_config_validate_reports_user_data_metadata_without_raw_contents(self) -> None:
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            user_data_file = "{user_data_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["config", "validate", "--config", config_path, "--command", "deploy"])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertNotIn(USER_DATA, payload_text)
+        self.assertEqual(
+            payload["effective_defaults"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA.encode("utf-8"))},
+        )
+        self.assertIn({"field": "user_data", "source": "[deploy].user_data_file"}, payload["sources"])
+
+    def test_config_validate_reports_user_data_cli_override_precedence(self) -> None:
+        config_user_data_path = self.write_file(USER_DATA, name="config-cloud-init.yaml")
+        cli_user_data_path = self.write_file(USER_DATA_OVERRIDE, name="cli-cloud-init.sh")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            user_data_file = "{config_user_data_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "deploy",
+                    "--user-data-file",
+                    cli_user_data_path,
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["effective_defaults"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(USER_DATA_OVERRIDE.encode("utf-8"))},
+        )
+        self.assertIn({"field": "user_data", "source": "cli --user-data-file"}, payload["sources"])
 
     def test_config_validate_shows_effective_defaults_and_precedence(self) -> None:
         config_path = self.write_config(
@@ -682,6 +925,57 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--authorized-key is not supported for capture config defaults", error.getvalue())
 
+    def test_config_validate_rejects_unsupported_user_data_override_for_capture(self) -> None:
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "capture",
+                    "--user-data-file",
+                    user_data_path,
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--user-data-file is not supported for capture config defaults", error.getvalue())
+
+    def test_inline_user_data_config_is_rejected(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            user_data = "#cloud-config"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must not contain secrets", error.getvalue())
+
     def test_invalid_authorized_key_config_fails_without_leaking_key(self) -> None:
         private_key_marker = "-----BEGIN OPENSSH PRIVATE KEY-----"
         config_path = self.write_config(
@@ -899,6 +1193,13 @@ class CliTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / name
         path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def write_bytes(self, data: bytes, *, name: str) -> str:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / name
+        path.write_bytes(data)
         return str(path)
 
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from linode_image_lab.deploy import DeployError, deploy_plan
 from linode_image_lab.linode_api import LinodePreflightError, LinodeTokenError
 from linode_image_lab.manifest import serialize_manifest
+from linode_image_lab.user_data import DeployUserData
 
 
 def validation_check(manifest: dict[str, object], name: str) -> dict[str, object]:
@@ -28,6 +29,7 @@ class FakeLinodeClient:
         self.create_tags: list[str] = []
         self.create_firewall_id: int | None = None
         self.create_authorized_keys: list[str] | None = None
+        self.create_metadata_user_data: str | None = None
         self.deleted: list[int] = []
         self.missing_create_tags = missing_create_tags
         self.status = status
@@ -58,11 +60,13 @@ class FakeLinodeClient:
         root_password: str,
         firewall_id: int | None = None,
         authorized_keys: list[str] | None = None,
+        metadata_user_data: str | None = None,
     ) -> dict[str, object]:
         self.calls.append("create_instance")
         self.create_tags = tags
         self.create_firewall_id = firewall_id
         self.create_authorized_keys = authorized_keys
+        self.create_metadata_user_data = metadata_user_data
         self.source_image = source_image
         self.instance_type = instance_type
         self.root_password_length = len(root_password)
@@ -365,6 +369,27 @@ class DeployExecutionTests(unittest.TestCase):
             {"enabled": True, "authorized_key_count": 1},
         )
 
+    def test_execute_passes_configured_user_data_to_create_payload(self) -> None:
+        client = FakeLinodeClient()
+        user_data = DeployUserData(encoded="I2Nsb3VkLWNvbmZpZwo=", byte_count=14)
+
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            user_data=user_data,
+            client=client,
+        )
+
+        self.assertEqual(client.create_metadata_user_data, "I2Nsb3VkLWNvbmZpZwo=")
+        self.assertEqual(
+            manifest["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": 14},
+        )
+
     def test_execute_applies_required_tags_to_created_resource(self) -> None:
         client = FakeLinodeClient()
 
@@ -512,6 +537,30 @@ class DeployExecutionTests(unittest.TestCase):
         self.assertEqual(
             exported["deploy_config"]["authorized_keys"],
             {"authorized_key_count": 1, "enabled": True},
+        )
+
+    def test_serialized_user_data_manifest_exposes_only_safe_metadata(self) -> None:
+        raw_text = "#cloud-config\nfinal_message: sensitive\n"
+        encoded = "I2Nsb3VkLWNvbmZpZwpmaW5hbF9tZXNzYWdlOiBzZW5zaXRpdmUK"
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            user_data=DeployUserData(encoded=encoded, byte_count=len(raw_text)),
+            client=FakeLinodeClient(),
+        )
+
+        exported_text = serialize_manifest(manifest)
+        exported = json.loads(exported_text)
+
+        self.assertNotIn(raw_text, exported_text)
+        self.assertNotIn(encoded, exported_text)
+        self.assertEqual(
+            exported["deploy_config"]["user_data"],
+            {"enabled": True, "source": "file", "byte_count": len(raw_text)},
         )
 
 

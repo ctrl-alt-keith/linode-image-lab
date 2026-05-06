@@ -20,6 +20,7 @@ from .deploy import (
 )
 from .linode_api import LinodeClient, LinodeClientProtocol
 from .manifest import create_manifest, generate_tags
+from .user_data import DeployUserData
 from .validation_results import combined_validation
 
 MAX_PARALLEL_DEPLOYS = 4
@@ -43,6 +44,7 @@ class CaptureDeployOptions:
     instance_type: str | None = None
     firewall_id: int | None = None
     authorized_keys: list[str] | None = None
+    user_data: DeployUserData | None = None
     preserve_instance: bool = False
 
 
@@ -56,6 +58,7 @@ def capture_deploy_plan(
     instance_type: str | None = None,
     firewall_id: int | None = None,
     authorized_keys: list[str] | None = None,
+    user_data: DeployUserData | None = None,
     preserve_instance: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -68,6 +71,7 @@ def capture_deploy_plan(
         instance_type=instance_type,
         firewall_id=firewall_id,
         authorized_keys=authorized_keys,
+        user_data=user_data,
         preserve_instance=preserve_instance,
     )
     if not execute:
@@ -152,6 +156,7 @@ def execute_multi_region_capture_deploy(
         instance_type=required_text(options.instance_type),
         firewall_id=options.firewall_id,
         authorized_keys=options.authorized_keys,
+        user_data=options.user_data,
         preserve_instance=options.preserve_instance,
         client=client,
     )
@@ -189,6 +194,7 @@ def execute_region_deploys(
     instance_type: str,
     firewall_id: int | None,
     authorized_keys: list[str] | None,
+    user_data: DeployUserData | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
 ) -> dict[str, dict[str, Any]]:
@@ -203,6 +209,7 @@ def execute_region_deploys(
                 instance_type=instance_type,
                 firewall_id=firewall_id,
                 authorized_keys=authorized_keys,
+                user_data=user_data,
                 preserve_instance=preserve_instance,
                 client=client,
             )
@@ -221,6 +228,7 @@ def execute_region_deploys(
                 instance_type=instance_type,
                 firewall_id=firewall_id,
                 authorized_keys=authorized_keys,
+                user_data=user_data,
                 preserve_instance=preserve_instance,
                 client=client,
             ): region
@@ -250,6 +258,7 @@ def execute_region_deploy(
     instance_type: str,
     firewall_id: int | None,
     authorized_keys: list[str] | None,
+    user_data: DeployUserData | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
 ) -> dict[str, Any]:
@@ -264,6 +273,7 @@ def execute_region_deploy(
                 instance_type=instance_type,
                 firewall_id=firewall_id,
                 authorized_keys=authorized_keys,
+                user_data=user_data,
                 preserve_instance=preserve_instance,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -401,6 +411,7 @@ def execute_single_region_capture_deploy(
                 instance_type=required_text(options.instance_type),
                 firewall_id=options.firewall_id,
                 authorized_keys=options.authorized_keys,
+                user_data=options.user_data,
                 preserve_instance=options.preserve_instance,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -767,6 +778,12 @@ def attach_deploy_config(manifest: dict[str, Any], options: CaptureDeployOptions
         deploy_config["authorized_keys"] = {
             "enabled": True,
             "authorized_key_count": len(options.authorized_keys),
+        }
+    if options.user_data is not None:
+        deploy_config["user_data"] = {
+            "enabled": True,
+            "source": options.user_data.source,
+            "byte_count": options.user_data.byte_count,
         }
     if not deploy_config:
         return

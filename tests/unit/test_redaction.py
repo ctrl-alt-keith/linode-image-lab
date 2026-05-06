@@ -28,6 +28,20 @@ class RedactionTests(unittest.TestCase):
             {"linode_id": REDACTION, "image_id": REDACTION, "run_id": "run-test"},
         )
 
+    def test_redacts_raw_user_data_but_keeps_safe_metadata(self) -> None:
+        payload = {
+            "metadata": {"user_data": "I2Nsb3VkLWNvbmZpZwo="},
+            "deploy_config": {"user_data": {"enabled": True, "source": "file", "byte_count": 14}},
+        }
+
+        self.assertEqual(
+            redact(payload),
+            {
+                "metadata": {"user_data": REDACTION},
+                "deploy_config": {"user_data": {"enabled": True, "source": "file", "byte_count": 14}},
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

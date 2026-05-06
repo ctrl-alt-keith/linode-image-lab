@@ -180,11 +180,12 @@ Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `firewall_id`, `authorized_keys`, and
-`authorized_keys_file`, depending on the command. `firewall_id` and authorized
-keys apply only to deploy instances from `deploy` and `capture-deploy`.
-`authorized_keys_file` is explicit; the tool never discovers keys from
-`~/.ssh`. `[deploy]` authorized keys also apply to the deploy phase of
-`capture-deploy`; `[capture-deploy]` can add command-specific keys.
+`authorized_keys_file`, depending on the command. `[deploy].user_data_file`
+can provide deploy-scoped Linode metadata user data. `firewall_id`, authorized
+keys, and user data apply only to deploy instances from `deploy` and
+`capture-deploy`. File inputs are explicit; the tool never discovers keys or
+user data. `[deploy]` authorized keys and user data also apply to the deploy
+phase of `capture-deploy`; `[capture-deploy]` can add command-specific keys.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -202,15 +203,16 @@ command execution, and emits a non-mutating JSON report with `precedence`,
 then the selected command table, then `[defaults]`. You can pass supported CLI
 default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
 `--type` to preview how they override the config for the selected command.
-For deploy defaults, `--firewall-id`, `--authorized-key`, and
-`--authorized-keys-file` can also be previewed. Authorized key output reports
-safe metadata such as count only.
+For deploy defaults, `--firewall-id`, `--authorized-key`,
+`--authorized-keys-file`, and `--user-data-file` can also be previewed.
+Authorized key and user-data output reports safe metadata such as count, source,
+and byte count only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
-values, passwords, private SSH keys, cloud-init data, `execute`, `discover`,
-preservation flags, or run id fields. `--execute` or `cleanup --discover` must
-still be passed explicitly, and `LINODE_TOKEN` must still come from the
-environment or approved environment injection.
+values, passwords, private SSH keys, inline cloud-init data, `execute`,
+`discover`, preservation flags, or run id fields. `--execute` or
+`cleanup --discover` must still be passed explicitly, and `LINODE_TOKEN` must
+still come from the environment or approved environment injection.
 
 ## Behavior Clarifications
 
@@ -225,6 +227,8 @@ environment or approved environment injection.
 - Execute runs verify the requested region, Linode type, source or deploy
   image, and configured firewall with read-only Linode API calls before
   resource creation.
+- Deploy user data is read only from explicit files, Base64 encoded for Linode
+  `metadata.user_data`, and omitted from manifests except for safe metadata.
 - Custom images are preserved as deliverables.
 - `cleanup` is independently runnable, dry-run by default, and can delete
   expired tagged temporary Linodes only with `--execute`.
@@ -329,8 +333,10 @@ The nested `capture` value is the single capture manifest, and each
 `deploy_results.<region>` value is the deploy manifest for that requested
 region. When a firewall is configured, deploy manifests include
 `deploy_config.firewall`; when authorized keys are configured, deploy manifests
-include `deploy_config.authorized_keys` count metadata only. Provider
-identifiers and raw key material remain redacted in normal stdout.
+include `deploy_config.authorized_keys` count metadata only; when user data is
+configured, deploy manifests include `deploy_config.user_data` source and byte
+count metadata only. Provider identifiers, raw key material, and raw or encoded
+user data remain redacted in normal stdout.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or

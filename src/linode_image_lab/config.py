@@ -8,6 +8,7 @@ from typing import Any
 import tomllib
 
 from .regions import parse_regions
+from .user_data import DeployUserData, UserDataError, load_user_data_file
 
 
 class ConfigError(ValueError):
@@ -37,6 +38,7 @@ TABLE_FIELDS = {
         "ttl",
         "authorized_keys",
         "authorized_keys_file",
+        "user_data_file",
     },
     "capture-deploy": {
         "region",
@@ -55,8 +57,8 @@ COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type"),
-    "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys"),
-    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id", "authorized_keys"),
+    "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys", "user_data"),
+    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id", "authorized_keys", "user_data"),
     "cleanup": ("ttl",),
 }
 CLI_SOURCE_LABELS = {
@@ -67,6 +69,7 @@ CLI_SOURCE_LABELS = {
     "type": "cli --type",
     "firewall_id": "cli --firewall-id",
     "authorized_keys": "cli authorized key inputs",
+    "user_data": "cli --user-data-file",
 }
 PROHIBITED_KEYS = {
     "discover",
@@ -99,6 +102,9 @@ SECRET_KEY_FRAGMENTS = (
     "user_data",
     "userdata",
 )
+SECRET_POINTER_KEYS = {
+    "user_data_file",
+}
 AUTHORIZED_KEY_TYPES = (
     "ssh-rsa",
     "ssh-ed25519",
@@ -175,6 +181,8 @@ def validate_table(table: str, values: dict[str, Any]) -> None:
 
 def validate_key_is_safe(key: str, *, location: str) -> None:
     normalized = key.lower().replace("-", "_")
+    if normalized in SECRET_POINTER_KEYS:
+        return
     if normalized in {value.replace("-", "_") for value in PROHIBITED_KEYS}:
         raise ConfigError(f"config {location} key is not supported: {key}")
     if any(fragment in normalized for fragment in SECRET_KEY_FRAGMENTS):
@@ -200,9 +208,9 @@ def validate_value(table: str, key: str, value: Any) -> None:
             normalize_authorized_key(item, f"config [{table}].authorized_keys[{index}]")
         return
 
-    if key == "authorized_keys_file":
+    if key in {"authorized_keys_file", "user_data_file"}:
         if not isinstance(value, str) or not value.strip():
-            raise ConfigError(f"config [{table}].authorized_keys_file must be a non-empty string")
+            raise ConfigError(f"config [{table}].{key} must be a non-empty string")
         return
 
     if not isinstance(value, str) or not value.strip():
@@ -223,6 +231,8 @@ def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any
             ]
         if "authorized_keys_file" in table:
             table["authorized_keys_file"] = str(resolve_config_path(table["authorized_keys_file"], base_dir=base_dir))
+        if "user_data_file" in table:
+            table["user_data_file"] = str(resolve_config_path(table["user_data_file"], base_dir=base_dir))
         normalized[key] = table
     return normalized
 
@@ -248,6 +258,10 @@ def command_defaults(config: dict[str, Any], command: str) -> dict[str, Any]:
         values["authorized_keys"] = keys
     else:
         values.pop("authorized_keys", None)
+    user_data = config_user_data(config, command)
+    values.pop("user_data_file", None)
+    if user_data is not None:
+        values["user_data"] = user_data
     return values
 
 
@@ -281,6 +295,13 @@ def effective_command_defaults(
             }
             for source in key_sources or [CLI_SOURCE_LABELS[field]]:
                 sources.append({"field": field, "source": source})
+            continue
+        if field == "user_data":
+            user_data, user_data_source = resolve_user_data_defaults(config, command, cli_values)
+            if user_data is None:
+                continue
+            effective_defaults["user_data"] = user_data_metadata(user_data)
+            sources.append({"field": field, "source": user_data_source})
             continue
         resolved = resolve_default_field(config, command, field, cli_values)
         if resolved is None:
@@ -354,6 +375,31 @@ def resolve_authorized_key_defaults(
     return dedupe_authorized_keys(keys), sources
 
 
+def resolve_user_data_defaults(
+    config: dict[str, Any],
+    command: str,
+    cli_values: dict[str, Any],
+) -> tuple[DeployUserData | None, str]:
+    if "user_data" in cli_values:
+        return load_user_data(str(cli_values["user_data"]), "cli --user-data-file"), CLI_SOURCE_LABELS["user_data"]
+
+    if command not in {"deploy", "capture-deploy"}:
+        return None, ""
+
+    deploy_table = config.get("deploy", {})
+    if "user_data_file" not in deploy_table:
+        return None, ""
+    return load_user_data(str(deploy_table["user_data_file"]), "[deploy].user_data_file"), "[deploy].user_data_file"
+
+
+def user_data_metadata(user_data: DeployUserData) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "source": user_data.source,
+        "byte_count": user_data.byte_count,
+    }
+
+
 def config_authorized_keys(config: dict[str, Any], command: str) -> list[str]:
     keys: list[str] = []
     for table_name in authorized_key_table_order(command):
@@ -367,6 +413,15 @@ def authorized_key_table_order(command: str) -> tuple[str, ...]:
     if command == "capture-deploy":
         return ("deploy", "capture-deploy")
     return ()
+
+
+def config_user_data(config: dict[str, Any], command: str) -> DeployUserData | None:
+    if command not in {"deploy", "capture-deploy"}:
+        return None
+    deploy_table = config.get("deploy", {})
+    if "user_data_file" not in deploy_table:
+        return None
+    return load_user_data(str(deploy_table["user_data_file"]), "[deploy].user_data_file")
 
 
 def table_authorized_keys(table: dict[str, Any], label: str) -> list[str]:
@@ -394,6 +449,13 @@ def load_authorized_keys_file(path: str, label: str) -> list[str]:
     if not text:
         raise ConfigError(f"{label} must contain at least one public SSH key")
     return [normalize_authorized_key(line, f"{label} line {index}") for index, line in enumerate(text.splitlines(), 1)]
+
+
+def load_user_data(path: str, label: str) -> DeployUserData:
+    try:
+        return load_user_data_file(path, label)
+    except UserDataError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def normalize_authorized_key(value: Any, label: str) -> str:

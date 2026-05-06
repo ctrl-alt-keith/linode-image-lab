@@ -12,3 +12,5 @@ instance_type = "g6-nanode-1"
 # Optional: install explicit public SSH keys for root on deploy instances.
 # authorized_keys = ["ssh-ed25519 AAAA... operator@example"]
 # authorized_keys_file = "examples/config/authorized_keys.example"
+# Optional: send explicit cloud-init/user-data file through Linode metadata.
+# user_data_file = "examples/cloud-init/minimal.yaml"

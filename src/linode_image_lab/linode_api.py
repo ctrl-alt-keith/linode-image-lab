@@ -55,6 +55,7 @@ class LinodeClientProtocol(Protocol):
         root_password: str,
         firewall_id: int | None = None,
         authorized_keys: list[str] | None = None,
+        metadata_user_data: str | None = None,
     ) -> dict[str, Any]: ...
 
     def wait_instance_ready(self, linode_id: int) -> dict[str, Any]: ...
@@ -149,6 +150,7 @@ class LinodeClient:
         root_password: str,
         firewall_id: int | None = None,
         authorized_keys: list[str] | None = None,
+        metadata_user_data: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "booted": True,
@@ -163,6 +165,8 @@ class LinodeClient:
             payload["firewall_id"] = firewall_id
         if authorized_keys:
             payload["authorized_keys"] = list(authorized_keys)
+        if metadata_user_data is not None:
+            payload["metadata"] = {"user_data": metadata_user_data}
         response = self._request("POST", "/linode/instances", payload)
         return self._instance_resource(response)
 

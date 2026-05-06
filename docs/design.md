@@ -106,16 +106,22 @@ Supported config values are intentionally narrow:
 - `type` or `instance_type` for capture, deploy, and capture-deploy,
 - `firewall_id` for deploy instances in deploy and capture-deploy,
 - `authorized_keys` and `authorized_keys_file` for deploy instances in deploy
-  and capture-deploy.
+  and capture-deploy,
+- `user_data_file` in `[deploy]` for Linode metadata user data on deploy
+  instances.
 
 `--execute`, preservation flags, run id fields, image labels, tokens,
-passwords, private SSH keys, root passwords, metadata, and cloud-init or
-user-data fields are not configurable. Unknown keys and secret-like keys fail
-before command execution. Authorized key files are explicit paths supplied by
-config or CLI; the tool does not discover keys from `~/.ssh`. Raw authorized
-key contents are never serialized in manifests or config validation output.
+passwords, private SSH keys, root passwords, inline metadata, and inline
+cloud-init or user-data values are not configurable. Unknown keys and
+secret-like keys fail before command execution. Authorized key and user-data
+files are explicit paths supplied by config or CLI; the tool does not discover
+keys from `~/.ssh` or user-data files. Raw authorized key contents and raw or
+Base64-encoded user data are never serialized in manifests or config validation
+output.
 `[deploy]` authorized keys are deploy-scoped and also feed the deploy phase of
-`capture-deploy`; `[capture-deploy]` can add command-specific keys.
+`capture-deploy`; `[capture-deploy]` can add command-specific keys. `[deploy]`
+user data is deploy-scoped and also feeds only the deploy phase of
+`capture-deploy`.
 
 Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
@@ -151,7 +157,8 @@ tags, disk presence, image availability, and image tags from API responses.
 custom image id via `--image-id`, a Linode type, and `LINODE_TOKEN`. It may
 also receive an existing firewall through `--firewall-id` or deploy config, and
 public SSH keys through repeated `--authorized-key`, `--authorized-keys-file`,
-or deploy config.
+or deploy config. It may receive Linode metadata user data through
+`--user-data-file` or `[deploy].user_data_file`.
 
 The execute flow is intentionally linear:
 
@@ -159,7 +166,8 @@ The execute flow is intentionally linear:
 2. preflight the requested region, Linode type, available deploy image, and
    configured firewall with non-mutating API calls,
 3. create a tagged temporary deploy Linode from the custom image id, passing
-   `firewall_id` and `authorized_keys` only when explicitly configured,
+   `firewall_id`, `authorized_keys`, and Base64-encoded `metadata.user_data`
+   only when explicitly configured,
 4. wait for provider/API-level running status,
 5. validate running status, requested region, and required tags,
 6. delete or preserve the deploy instance according to explicit flags.
