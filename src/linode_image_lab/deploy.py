@@ -35,6 +35,7 @@ class DeployOptions:
     image_id: str | None = None
     instance_type: str | None = None
     firewall_id: int | None = None
+    authorized_keys: list[str] | None = None
     preserve_instance: bool = False
     command: str = "deploy"
     mode: str = "deploy"
@@ -52,6 +53,7 @@ def deploy_plan(
     image_id: str | None = None,
     instance_type: str | None = None,
     firewall_id: int | None = None,
+    authorized_keys: list[str] | None = None,
     preserve_instance: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -63,6 +65,7 @@ def deploy_plan(
         image_id=image_id,
         instance_type=instance_type,
         firewall_id=firewall_id,
+        authorized_keys=authorized_keys,
         preserve_instance=preserve_instance,
     )
     if not execute:
@@ -148,6 +151,8 @@ def execute_deploy(
         }
         if firewall_id is not None:
             create_args["firewall_id"] = firewall_id
+        if options.authorized_keys:
+            create_args["authorized_keys"] = list(options.authorized_keys)
         deploy_instance = run_client.create_instance(**create_args)
         deploy_instance["resource_type"] = "linode"
         manifest["deploy_instance"] = dict(deploy_instance)
@@ -226,14 +231,20 @@ def validate_execute_options(options: DeployOptions) -> None:
 
 
 def attach_deploy_config(manifest: dict[str, Any], options: DeployOptions) -> None:
-    if options.firewall_id is None:
-        return
-    manifest["deploy_config"] = {
-        "firewall": {
+    deploy_config: dict[str, Any] = {}
+    if options.firewall_id is not None:
+        deploy_config["firewall"] = {
             "enabled": True,
             "firewall_id": options.firewall_id,
         }
-    }
+    if options.authorized_keys:
+        deploy_config["authorized_keys"] = {
+            "enabled": True,
+            "authorized_key_count": len(options.authorized_keys),
+        }
+    if not deploy_config:
+        return
+    manifest["deploy_config"] = deploy_config
 
 
 def cleanup_deploy_instance(

@@ -11,6 +11,10 @@ SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|root[_-]?pass|api[_-]?key
 TOKEN_TEXT_RE = re.compile(
     r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]{8,}|\b(token|secret|password)=([^\s]+)"
 )
+AUTHORIZED_KEY_TEXT_RE = re.compile(
+    r"\b(?:ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|"
+    r"sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+(?: [^\n\r]+)?"
+)
 PROVIDER_IDENTIFIER_KEYS = {
     "account_id",
     "disk_id",
@@ -43,7 +47,7 @@ def redact_text(value: str) -> str:
             return f"{match.group(2)}={REDACTION}"
         return REDACTION
 
-    return TOKEN_TEXT_RE.sub(replace, value)
+    return AUTHORIZED_KEY_TEXT_RE.sub(REDACTION, TOKEN_TEXT_RE.sub(replace, value))
 
 
 def redact(value: Any) -> Any:

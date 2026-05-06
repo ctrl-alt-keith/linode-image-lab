@@ -9,3 +9,6 @@ image_id = "private/example-custom-image"
 instance_type = "g6-nanode-1"
 # Optional: assign an existing Cloud Firewall to temporary deploy instances.
 # firewall_id = 12345
+# Optional: install explicit public SSH keys for root on deploy instances.
+# authorized_keys = ["ssh-ed25519 AAAA... operator@example"]
+# authorized_keys_file = "examples/config/authorized_keys.example"

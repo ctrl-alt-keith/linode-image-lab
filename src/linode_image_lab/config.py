@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 import tomllib
@@ -26,16 +27,36 @@ ROOT_KEYS = {
 TABLE_FIELDS = {
     "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
     "capture": {"region", "regions", "source_image", "type", "instance_type", "ttl"},
-    "deploy": {"region", "regions", "image_id", "type", "instance_type", "firewall_id", "ttl"},
-    "capture-deploy": {"region", "regions", "source_image", "type", "instance_type", "firewall_id", "ttl"},
+    "deploy": {
+        "region",
+        "regions",
+        "image_id",
+        "type",
+        "instance_type",
+        "firewall_id",
+        "ttl",
+        "authorized_keys",
+        "authorized_keys_file",
+    },
+    "capture-deploy": {
+        "region",
+        "regions",
+        "source_image",
+        "type",
+        "instance_type",
+        "firewall_id",
+        "ttl",
+        "authorized_keys",
+        "authorized_keys_file",
+    },
     "cleanup": {"ttl"},
 }
 COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type"),
-    "deploy": ("regions", "ttl", "image_id", "type", "firewall_id"),
-    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id"),
+    "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys"),
+    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id", "authorized_keys"),
     "cleanup": ("ttl",),
 }
 CLI_SOURCE_LABELS = {
@@ -45,6 +66,7 @@ CLI_SOURCE_LABELS = {
     "image_id": "cli --image-id",
     "type": "cli --type",
     "firewall_id": "cli --firewall-id",
+    "authorized_keys": "cli authorized key inputs",
 }
 PROHIBITED_KEYS = {
     "discover",
@@ -76,8 +98,28 @@ SECRET_KEY_FRAGMENTS = (
     "cloudinit",
     "user_data",
     "userdata",
-    "authorized_keys",
-    "authorizedkeys",
+)
+AUTHORIZED_KEY_TYPES = (
+    "ssh-rsa",
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519" + "@openssh.com",
+    "sk-ecdsa-sha2-nistp256" + "@openssh.com",
+)
+AUTHORIZED_KEY_RE = re.compile(
+    r"^(?:"
+    + "|".join(re.escape(key_type) for key_type in AUTHORIZED_KEY_TYPES)
+    + r") [A-Za-z0-9+/=]+(?: .*)?$"
+)
+PRIVATE_KEY_MARKERS = (
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "-----BEGIN DSA PRIVATE KEY-----",
+    "-----BEGIN EC PRIVATE KEY-----",
+    "-----BEGIN PRIVATE KEY-----",
+    "PuTTY-User-Key-File-",
 )
 
 
@@ -98,7 +140,7 @@ def load_config(path: str | None) -> dict[str, Any]:
         raise ConfigError(f"invalid TOML config: {exc}") from exc
 
     validate_config(raw_config)
-    return raw_config
+    return normalize_config(raw_config, base_dir=config_path.parent)
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -151,8 +193,45 @@ def validate_value(table: str, key: str, value: Any) -> None:
         normalize_firewall_id(value, f"config [{table}].firewall_id")
         return
 
+    if key == "authorized_keys":
+        if not isinstance(value, list) or not value:
+            raise ConfigError(f"config [{table}].authorized_keys must be a non-empty list of public SSH keys")
+        for index, item in enumerate(value):
+            normalize_authorized_key(item, f"config [{table}].authorized_keys[{index}]")
+        return
+
+    if key == "authorized_keys_file":
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"config [{table}].authorized_keys_file must be a non-empty string")
+        return
+
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"config [{table}].{key} must be a non-empty string")
+
+
+def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in config.items():
+        if not isinstance(value, dict):
+            normalized[key] = value
+            continue
+        table = dict(value)
+        if "authorized_keys" in table:
+            table["authorized_keys"] = [
+                normalize_authorized_key(item, f"config [{key}].authorized_keys[{index}]")
+                for index, item in enumerate(table["authorized_keys"])
+            ]
+        if "authorized_keys_file" in table:
+            table["authorized_keys_file"] = str(resolve_config_path(table["authorized_keys_file"], base_dir=base_dir))
+        normalized[key] = table
+    return normalized
+
+
+def resolve_config_path(value: str, *, base_dir: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
 
 
 def command_defaults(config: dict[str, Any], command: str) -> dict[str, Any]:
@@ -163,6 +242,12 @@ def command_defaults(config: dict[str, Any], command: str) -> dict[str, Any]:
     values: dict[str, Any] = dict(config.get("defaults", {}))
     if command in COMMAND_TABLES:
         values.update(config.get(command, {}))
+    keys = config_authorized_keys(config, command)
+    values.pop("authorized_keys_file", None)
+    if keys:
+        values["authorized_keys"] = keys
+    else:
+        values.pop("authorized_keys", None)
     return values
 
 
@@ -186,6 +271,17 @@ def effective_command_defaults(
     sources: list[dict[str, str]] = []
 
     for field in COMMAND_DEFAULT_FIELDS[command]:
+        if field == "authorized_keys":
+            keys, key_sources = resolve_authorized_key_defaults(config, command, cli_values)
+            if not keys:
+                continue
+            effective_defaults["authorized_keys"] = {
+                "enabled": True,
+                "authorized_key_count": len(keys),
+            }
+            for source in key_sources or [CLI_SOURCE_LABELS[field]]:
+                sources.append({"field": field, "source": source})
+            continue
         resolved = resolve_default_field(config, command, field, cli_values)
         if resolved is None:
             continue
@@ -202,6 +298,8 @@ def effective_command_defaults(
 
 def precedence_labels(command: str) -> list[str]:
     labels = ["cli"]
+    if command == "capture-deploy":
+        labels.append("[deploy]")
     if command in COMMAND_TABLES:
         labels.append(f"[{command}]")
     labels.append("[defaults]")
@@ -223,6 +321,101 @@ def resolve_default_field(
         return resolved
 
     return resolve_table_field(config.get("defaults", {}), field, "[defaults]")
+
+
+def resolve_authorized_key_defaults(
+    config: dict[str, Any],
+    command: str,
+    cli_values: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    keys: list[str] = []
+    sources: list[str] = []
+    for table_name in authorized_key_table_order(command):
+        table = config.get(table_name, {})
+        table_keys = table_authorized_keys(table, f"[{table_name}]")
+        if table_keys:
+            keys.extend(table_keys)
+            if "authorized_keys" in table:
+                sources.append(f"[{table_name}].authorized_keys")
+            if "authorized_keys_file" in table:
+                sources.append(f"[{table_name}].authorized_keys_file")
+
+    cli_authorized = cli_values.get("authorized_keys")
+    if isinstance(cli_authorized, dict):
+        cli_keys = list(cli_authorized.get("keys") or [])
+        cli_file = cli_authorized.get("file")
+        if cli_keys:
+            keys.extend(normalize_authorized_keys(cli_keys, "--authorized-key"))
+            sources.append("cli --authorized-key")
+        if cli_file is not None:
+            keys.extend(load_authorized_keys_file(str(cli_file), "--authorized-keys-file"))
+            sources.append("cli --authorized-keys-file")
+
+    return dedupe_authorized_keys(keys), sources
+
+
+def config_authorized_keys(config: dict[str, Any], command: str) -> list[str]:
+    keys: list[str] = []
+    for table_name in authorized_key_table_order(command):
+        keys.extend(table_authorized_keys(config.get(table_name, {}), f"[{table_name}]"))
+    return dedupe_authorized_keys(keys)
+
+
+def authorized_key_table_order(command: str) -> tuple[str, ...]:
+    if command == "deploy":
+        return ("deploy",)
+    if command == "capture-deploy":
+        return ("deploy", "capture-deploy")
+    return ()
+
+
+def table_authorized_keys(table: dict[str, Any], label: str) -> list[str]:
+    keys: list[str] = []
+    if "authorized_keys" in table:
+        keys.extend(normalize_authorized_keys(table["authorized_keys"], f"{label}.authorized_keys"))
+    if "authorized_keys_file" in table:
+        keys.extend(load_authorized_keys_file(str(table["authorized_keys_file"]), f"{label}.authorized_keys_file"))
+    return keys
+
+
+def normalize_authorized_keys(values: list[Any], label: str) -> list[str]:
+    return [normalize_authorized_key(value, f"{label}[{index}]") for index, value in enumerate(values)]
+
+
+def load_authorized_keys_file(path: str, label: str) -> list[str]:
+    key_path = Path(path).expanduser()
+    try:
+        text = key_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ConfigError(f"{label} file not found") from exc
+    except OSError as exc:
+        raise ConfigError(f"{label} file could not be read") from exc
+
+    if not text:
+        raise ConfigError(f"{label} must contain at least one public SSH key")
+    return [normalize_authorized_key(line, f"{label} line {index}") for index, line in enumerate(text.splitlines(), 1)]
+
+
+def normalize_authorized_key(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{label} must be a non-empty public SSH key")
+    key = value.strip()
+    if any(marker in key for marker in PRIVATE_KEY_MARKERS) or "PRIVATE KEY" in key:
+        raise ConfigError(f"{label} must be a public SSH key, not private key material")
+    if "\n" in key or "\r" in key or not AUTHORIZED_KEY_RE.match(key):
+        raise ConfigError(f"{label} must be a valid OpenSSH public key")
+    return key
+
+
+def dedupe_authorized_keys(keys: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
 
 
 def resolve_table_field(table: dict[str, Any], field: str, label: str) -> tuple[Any, str] | None:

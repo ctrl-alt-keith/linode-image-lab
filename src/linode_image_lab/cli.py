@@ -18,7 +18,9 @@ from .config import (
     command_defaults,
     effective_command_defaults,
     load_config,
+    load_authorized_keys_file,
     normalize_firewall_id,
+    normalize_authorized_key,
 )
 from .deploy import DeployError, deploy_plan
 from .manifest import PROJECT, create_manifest, serialize_manifest
@@ -63,9 +65,29 @@ def add_firewall_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_authorized_keys_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--authorized-key",
+        action="append",
+        type=authorized_key_value,
+        help="Public SSH key to append to root's authorized_keys on deploy instances. May be repeated.",
+    )
+    parser.add_argument(
+        "--authorized-keys-file",
+        help="Explicit file containing public SSH keys for deploy instances, one key per line.",
+    )
+
+
 def positive_firewall_id(value: str) -> int:
     try:
         return normalize_firewall_id(value, "--firewall-id")
+    except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def authorized_key_value(value: str) -> str:
+    try:
+        return normalize_authorized_key(value, "--authorized-key")
     except ConfigError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
@@ -117,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional CLI Linode type override to include in resolution.",
     )
     add_firewall_arg(config_validate)
+    add_authorized_keys_args(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -151,6 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--image-id", help="Custom image id for the temporary deploy Linode.")
     deploy.add_argument("--type", dest="instance_type", help="Linode type for the temporary deploy Linode.")
     add_firewall_arg(deploy)
+    add_authorized_keys_args(deploy)
     deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -169,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Linode type for the temporary capture and deploy Linodes.",
     )
     add_firewall_arg(capture_deploy)
+    add_authorized_keys_args(capture_deploy)
     capture_deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -213,10 +238,12 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.instance_type = config_instance_type(defaults)
         if args.firewall_id is None and "firewall_id" in defaults:
             args.firewall_id = defaults["firewall_id"]
+        args.authorized_keys = merged_authorized_keys(defaults, args)
 
     if args.command == "capture-deploy":
         if args.firewall_id is None and "firewall_id" in defaults:
             args.firewall_id = defaults["firewall_id"]
+        args.authorized_keys = merged_authorized_keys(defaults, args)
 
 
 def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -275,6 +302,15 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"{option_names[field]} is not supported for {target_command} config defaults")
         values[field] = value
 
+    if args.authorized_key is not None or args.authorized_keys_file is not None:
+        if "authorized_keys" not in allowed_fields:
+            option = "--authorized-key" if args.authorized_key is not None else "--authorized-keys-file"
+            raise ValueError(f"{option} is not supported for {target_command} config defaults")
+        values["authorized_keys"] = {
+            "keys": args.authorized_key or [],
+            "file": args.authorized_keys_file,
+        }
+
     return values
 
 
@@ -300,6 +336,23 @@ def config_instance_type(defaults: dict[str, Any]) -> str | None:
     if "type" in defaults:
         return str(defaults["type"])
     return None
+
+
+def merged_authorized_keys(defaults: dict[str, Any], args: argparse.Namespace) -> list[str] | None:
+    keys = list(defaults.get("authorized_keys", []))
+    if args.authorized_key is not None:
+        keys.extend(args.authorized_key)
+    if args.authorized_keys_file is not None:
+        keys.extend(load_authorized_keys_file(args.authorized_keys_file, "--authorized-keys-file"))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped or None
 
 
 def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -335,6 +388,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             image_id=args.image_id,
             instance_type=args.instance_type,
             firewall_id=args.firewall_id,
+            authorized_keys=args.authorized_keys,
             preserve_instance=args.preserve_instance,
         )
 
@@ -347,6 +401,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             source_image=args.source_image,
             instance_type=args.instance_type,
             firewall_id=args.firewall_id,
+            authorized_keys=args.authorized_keys,
             preserve_instance=args.preserve_instance,
         )
 

@@ -179,8 +179,12 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
-`instance_type`, and `firewall_id`, depending on the command. `firewall_id`
-applies only to deploy instances from `deploy` and `capture-deploy`.
+`instance_type`, `firewall_id`, `authorized_keys`, and
+`authorized_keys_file`, depending on the command. `firewall_id` and authorized
+keys apply only to deploy instances from `deploy` and `capture-deploy`.
+`authorized_keys_file` is explicit; the tool never discovers keys from
+`~/.ssh`. `[deploy]` authorized keys also apply to the deploy phase of
+`capture-deploy`; `[capture-deploy]` can add command-specific keys.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -198,10 +202,12 @@ command execution, and emits a non-mutating JSON report with `precedence`,
 then the selected command table, then `[defaults]`. You can pass supported CLI
 default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
 `--type` to preview how they override the config for the selected command.
-For deploy defaults, `--firewall-id` can also be previewed.
+For deploy defaults, `--firewall-id`, `--authorized-key`, and
+`--authorized-keys-file` can also be previewed. Authorized key output reports
+safe metadata such as count only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
-values, passwords, SSH keys, cloud-init data, `execute`, `discover`,
+values, passwords, private SSH keys, cloud-init data, `execute`, `discover`,
 preservation flags, or run id fields. `--execute` or `cleanup --discover` must
 still be passed explicitly, and `LINODE_TOKEN` must still come from the
 environment or approved environment injection.
@@ -322,8 +328,9 @@ top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each
 `deploy_results.<region>` value is the deploy manifest for that requested
 region. When a firewall is configured, deploy manifests include
-`deploy_config.firewall`; provider identifiers remain redacted in normal
-stdout.
+`deploy_config.firewall`; when authorized keys are configured, deploy manifests
+include `deploy_config.authorized_keys` count metadata only. Provider
+identifiers and raw key material remain redacted in normal stdout.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or

@@ -15,6 +15,11 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(redact_text("Bearer abcdefgh123456"), f"Bearer {REDACTION}")
         self.assertEqual(redact_text("token=abcdefgh123456"), f"token={REDACTION}")
 
+    def test_redacts_public_ssh_key_text(self) -> None:
+        public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA user@example"
+
+        self.assertEqual(redact_text(f"key={public_key}"), f"key={REDACTION}")
+
     def test_redacts_provider_identifiers_but_keeps_run_id(self) -> None:
         payload = {"linode_id": 123, "image_id": "private/123", "run_id": "run-test"}
 

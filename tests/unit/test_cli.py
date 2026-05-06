@@ -11,6 +11,9 @@ from unittest.mock import patch
 
 from linode_image_lab.cli import build_parser, main
 
+PUBLIC_KEY_ONE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA one@example"
+PUBLIC_KEY_TWO = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA two@example"
+
 
 class CliTests(unittest.TestCase):
     def test_version_prints_package_version_and_exits(self) -> None:
@@ -280,6 +283,97 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["regions"], ["us-east"])
         self.assertEqual(payload["deploy_config"]["firewall"], {"enabled": True, "firewall_id": "[REDACTED]"})
 
+    def test_deploy_config_loads_authorized_keys_and_file_for_dry_run_metadata(self) -> None:
+        keys_path = self.write_file(f"{PUBLIC_KEY_TWO}\n")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            authorized_keys = ["{PUBLIC_KEY_ONE}"]
+            authorized_keys_file = "{keys_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["deploy", "--config", config_path])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertNotIn(PUBLIC_KEY_ONE, payload_text)
+        self.assertNotIn(PUBLIC_KEY_TWO, payload_text)
+        self.assertEqual(
+            payload["deploy_config"]["authorized_keys"],
+            {"authorized_key_count": 2, "enabled": True},
+        )
+
+    def test_cli_authorized_keys_merge_with_config_and_dedupe(self) -> None:
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            authorized_keys = ["{PUBLIC_KEY_ONE}", "{PUBLIC_KEY_TWO}"]
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "deploy",
+                    "--config",
+                    config_path,
+                    "--authorized-key",
+                    PUBLIC_KEY_ONE,
+                    "--authorized-key",
+                    PUBLIC_KEY_TWO,
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["deploy_config"]["authorized_keys"],
+            {"authorized_key_count": 2, "enabled": True},
+        )
+
+    def test_capture_deploy_uses_deploy_scoped_authorized_key_config(self) -> None:
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [capture-deploy]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            instance_type = "g6-nanode-1"
+
+            [deploy]
+            authorized_keys = ["{PUBLIC_KEY_ONE}"]
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["capture-deploy", "--config", config_path])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertNotIn(PUBLIC_KEY_ONE, payload_text)
+        self.assertEqual(
+            payload["deploy_config"]["authorized_keys"],
+            {"authorized_key_count": 1, "enabled": True},
+        )
+
     def test_config_validate_shows_firewall_cli_override_precedence(self) -> None:
         config_path = self.write_config(
             """
@@ -312,6 +406,49 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["effective_defaults"]["firewall_id"], "[REDACTED]")
         self.assertIn({"field": "firewall_id", "source": "cli --firewall-id"}, payload["sources"])
+
+    def test_config_validate_reports_authorized_key_metadata_without_raw_keys(self) -> None:
+        keys_path = self.write_file(f"{PUBLIC_KEY_TWO}\n")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            instance_type = "g6-nanode-1"
+            authorized_keys = ["{PUBLIC_KEY_ONE}"]
+            authorized_keys_file = "{keys_path}"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "deploy",
+                    "--authorized-key",
+                    PUBLIC_KEY_ONE,
+                ]
+            )
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertNotIn(PUBLIC_KEY_ONE, payload_text)
+        self.assertNotIn(PUBLIC_KEY_TWO, payload_text)
+        self.assertEqual(
+            payload["effective_defaults"]["authorized_keys"],
+            {"authorized_key_count": 2, "enabled": True},
+        )
+        self.assertIn({"field": "authorized_keys", "source": "[deploy].authorized_keys"}, payload["sources"])
+        self.assertIn({"field": "authorized_keys", "source": "[deploy].authorized_keys_file"}, payload["sources"])
+        self.assertIn({"field": "authorized_keys", "source": "cli --authorized-key"}, payload["sources"])
 
     def test_config_validate_shows_effective_defaults_and_precedence(self) -> None:
         config_path = self.write_config(
@@ -515,6 +652,80 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--firewall-id is not supported for capture config defaults", error.getvalue())
 
+    def test_config_validate_rejects_unsupported_authorized_key_override_for_capture(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "capture",
+                    "--authorized-key",
+                    PUBLIC_KEY_ONE,
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--authorized-key is not supported for capture config defaults", error.getvalue())
+
+    def test_invalid_authorized_key_config_fails_without_leaking_key(self) -> None:
+        private_key_marker = "-----BEGIN OPENSSH PRIVATE KEY-----"
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            authorized_keys = ["{private_key_marker}"]
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must be a public SSH key", error.getvalue())
+        self.assertNotIn(private_key_marker, error.getvalue())
+
+    def test_invalid_authorized_keys_file_fails_without_leaking_key(self) -> None:
+        keys_path = self.write_file("not-a-public-key\n")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            authorized_keys_file = "{keys_path}"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must be a valid OpenSSH public key", error.getvalue())
+        self.assertNotIn("not-a-public-key", error.getvalue())
+
     def test_unknown_config_key_fails_clearly(self) -> None:
         config_path = self.write_config(
             """
@@ -681,9 +892,12 @@ class CliTests(unittest.TestCase):
         self.assertIn("LINODE_TOKEN", error.getvalue())
 
     def write_config(self, text: str) -> str:
+        return self.write_file(text, name="lab.toml")
+
+    def write_file(self, text: str, *, name: str = "authorized_keys") -> str:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / "lab.toml"
+        path = Path(directory.name) / name
         path.write_text(text, encoding="utf-8")
         return str(path)
 

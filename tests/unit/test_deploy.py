@@ -27,6 +27,7 @@ class FakeLinodeClient:
         self.calls: list[str] = []
         self.create_tags: list[str] = []
         self.create_firewall_id: int | None = None
+        self.create_authorized_keys: list[str] | None = None
         self.deleted: list[int] = []
         self.missing_create_tags = missing_create_tags
         self.status = status
@@ -56,10 +57,12 @@ class FakeLinodeClient:
         tags: list[str],
         root_password: str,
         firewall_id: int | None = None,
+        authorized_keys: list[str] | None = None,
     ) -> dict[str, object]:
         self.calls.append("create_instance")
         self.create_tags = tags
         self.create_firewall_id = firewall_id
+        self.create_authorized_keys = authorized_keys
         self.source_image = source_image
         self.instance_type = instance_type
         self.root_password_length = len(root_password)
@@ -339,6 +342,29 @@ class DeployExecutionTests(unittest.TestCase):
         self.assertEqual(client.create_firewall_id, 12345)
         self.assertEqual(manifest["deploy_config"]["firewall"], {"enabled": True, "firewall_id": 12345})
 
+    def test_execute_passes_configured_authorized_keys_to_create_payload(self) -> None:
+        client = FakeLinodeClient()
+        authorized_keys = [
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA operator@example"
+        ]
+
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            authorized_keys=authorized_keys,
+            client=client,
+        )
+
+        self.assertEqual(client.create_authorized_keys, authorized_keys)
+        self.assertEqual(
+            manifest["deploy_config"]["authorized_keys"],
+            {"enabled": True, "authorized_key_count": 1},
+        )
+
     def test_execute_applies_required_tags_to_created_resource(self) -> None:
         client = FakeLinodeClient()
 
@@ -465,6 +491,28 @@ class DeployExecutionTests(unittest.TestCase):
 
         self.assertEqual(exported["deploy_config"]["firewall"]["enabled"], True)
         self.assertEqual(exported["deploy_config"]["firewall"]["firewall_id"], "[REDACTED]")
+
+    def test_serialized_authorized_keys_manifest_exposes_only_safe_metadata(self) -> None:
+        public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA operator@example"
+        manifest = deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            image_id="private/789",
+            instance_type="g6-nanode-1",
+            authorized_keys=[public_key],
+            client=FakeLinodeClient(),
+        )
+
+        exported_text = serialize_manifest(manifest)
+        exported = json.loads(exported_text)
+
+        self.assertNotIn(public_key, exported_text)
+        self.assertEqual(
+            exported["deploy_config"]["authorized_keys"],
+            {"authorized_key_count": 1, "enabled": True},
+        )
 
 
 if __name__ == "__main__":
