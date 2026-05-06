@@ -52,6 +52,8 @@ class FakeLinodeClient:
         label: str,
         tags: list[str],
         root_password: str,
+        firewall_id: int | None = None,
+        authorized_keys: list[str] | None = None,
     ) -> dict[str, object]:
         self.calls.append("create_instance")
         self.create_tags = tags

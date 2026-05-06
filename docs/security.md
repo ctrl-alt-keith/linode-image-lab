@@ -25,10 +25,11 @@ declare `schema_version = 1`. Unknown keys fail, and secret-like keys fail even
 when they appear in a table that is not used by the selected command.
 
 Supported config values are limited to region defaults, TTL, source image,
-existing custom image id, Linode type, and an existing firewall id for deploy
-instances. Config cannot set `--execute`, `--discover`, preservation flags, run
-ids, image labels, tokens, passwords, SSH keys, root passwords, authorized keys,
-metadata, cloud-init data, or user-data.
+existing custom image id, Linode type, an existing firewall id for deploy
+instances, and explicit public SSH authorized keys for deploy instances. Config
+cannot set `--execute`, `--discover`, preservation flags, run ids, image labels,
+tokens, passwords, private SSH keys, root passwords, metadata, cloud-init data,
+or user-data. Raw authorized key contents are not serialized in CLI output.
 
 Config loading and validation happen before token lookup. Execute mode and
 `cleanup --discover` still require `LINODE_TOKEN` from the environment or

@@ -49,6 +49,8 @@ account charges until cleanup completes. It requires:
 - `--image-id`,
 - `--type`,
 - optional `--firewall-id` for an existing Cloud Firewall,
+- optional repeated `--authorized-key` or `--authorized-keys-file` for public
+  SSH keys to install for root on deploy instances,
 - `LINODE_TOKEN`.
 
 Execution steps:
@@ -57,7 +59,7 @@ Execution steps:
 2. verify the requested region, Linode type, deploy image, and configured
    firewall with read-only API calls,
 3. create a temporary deploy Linode from the custom image id, assigning the
-   configured firewall when provided,
+   configured firewall and public SSH authorized keys when provided,
 4. wait until the provider reports the instance is running,
 5. validate provider/API-level running status, requested region, and required tags,
 6. delete the temporary instance unless `--preserve-instance` is set.
@@ -101,6 +103,8 @@ dry-run manifest and performs no Linode action.
 - `--source-image`,
 - `--type`,
 - optional `--firewall-id` for deploy validation Linodes,
+- optional repeated `--authorized-key` or `--authorized-keys-file` for public
+  SSH keys on deploy validation Linodes,
 - `LINODE_TOKEN`.
 
 Execution steps:
