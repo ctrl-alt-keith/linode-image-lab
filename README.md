@@ -370,6 +370,12 @@ Preserved and failed entries include a sanitized `reason`, such as
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;
   ambiguous failures are reported rather than retried.
 
+## Related Lab
+
+`ctrl-alt-keith/linode-backup-lab` is the sibling public-safe lab for backup
+validation, snapshot inspection, and future restore-drill validation. It keeps
+that scope separate from this repo's image capture and deploy validation work.
+
 ## Independence and Intent
 
 This is a personal, independent project. It is not affiliated with any employer
