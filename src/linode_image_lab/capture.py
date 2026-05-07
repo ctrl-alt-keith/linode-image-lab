@@ -37,6 +37,7 @@ class CaptureOptions:
     source_image: str | None = None
     instance_type: str | None = None
     image_label: str | None = None
+    image_project_tag: str | None = None
     preserve_source: bool = False
     command: str = "capture"
     mode: str = "capture"
@@ -54,6 +55,7 @@ def capture_plan(
     source_image: str | None = None,
     instance_type: str | None = None,
     image_label: str | None = None,
+    image_project_tag: str | None = None,
     preserve_source: bool = False,
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
@@ -65,6 +67,7 @@ def capture_plan(
         source_image=source_image,
         instance_type=instance_type,
         image_label=image_label,
+        image_project_tag=image_project_tag,
         preserve_source=preserve_source,
     )
     if not execute:
@@ -80,6 +83,7 @@ def dry_run_manifest(options: CaptureOptions) -> dict[str, Any]:
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
+        image_project_tag=options.image_project_tag,
         dry_run=True,
         status="planned",
     )
@@ -101,6 +105,7 @@ def execute_capture(
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
+        image_project_tag=options.image_project_tag,
         dry_run=False,
         status="running",
     )
@@ -123,7 +128,8 @@ def execute_capture(
         run_client.preflight()
         finish_step(manifest, "preflight_api_access", client=run_client)
 
-        tags = list(manifest["tags"])
+        lifecycle_tags = list(manifest["lifecycle_tags"])
+        artifact_tags = list(manifest["artifact_tags"])
         region = options.regions[0]
         source_image = required_text(options.source_image)
         instance_type = required_text(options.instance_type)
@@ -142,7 +148,7 @@ def execute_capture(
             source_image=source_image,
             instance_type=instance_type,
             label=source_label,
-            tags=tags,
+            tags=lifecycle_tags,
             root_password=secrets.token_urlsafe(32),
         )
         capture_source["resource_type"] = "linode"
@@ -175,7 +181,7 @@ def execute_capture(
             "source_required_tags_match",
             lambda: validate_required_tags(
                 capture_source,
-                required_tags=tags,
+                required_tags=lifecycle_tags,
                 message="created resource is missing required capture tags",
             ),
         )
@@ -209,7 +215,7 @@ def execute_capture(
         custom_image = run_client.capture_image(
             disk_id=required_int(capture_source.get("disk_id")),
             label=image_label,
-            tags=tags,
+            tags=artifact_tags,
             description=f"linode-image-lab capture run {manifest['run_id']}",
             cloud_init=True,
         )
@@ -231,10 +237,10 @@ def execute_capture(
         record_validation_check(
             manifest["validation"],
             "custom_image_required_tags_match",
-            lambda: validate_required_tags(
+            lambda: validate_expected_tags(
                 custom_image,
-                required_tags=tags,
-                message="created resource is missing required capture tags",
+                expected_tags=artifact_tags,
+                message="created image is missing required artifact tags",
             ),
         )
         manifest["custom_image"] = dict(custom_image)
@@ -250,7 +256,7 @@ def execute_capture(
                 run_client,
                 capture_source=capture_source,
                 preserve_source=options.preserve_source,
-                required_tags=tags,
+                required_tags=lifecycle_tags,
             )
         manifest["status"] = "succeeded"
         return manifest
@@ -265,7 +271,7 @@ def execute_capture(
                     run_client,
                     capture_source=capture_source,
                     preserve_source=options.preserve_source,
-                    required_tags=list(manifest["tags"]),
+                    required_tags=list(manifest["lifecycle_tags"]),
                 )
             except Exception:
                 mark_running_step_failed(manifest, client=run_client)
@@ -394,10 +400,21 @@ def validate_required_tags(resource: dict[str, Any], *, required_tags: list[str]
         raise CaptureError(message)
 
 
+def validate_expected_tags(resource: dict[str, Any], *, expected_tags: list[str], message: str) -> None:
+    if not has_expected_tags(resource, expected_tags):
+        raise CaptureError(message)
+
+
 def has_required_tags(resource: dict[str, Any], required_tags: list[str]) -> bool:
     tags = tags_to_dict(resource.get("tags", []))
     expected = tags_to_dict(required_tags)
     return all(key in tags and tags[key] == expected[key] for key in REQUIRED_TAG_KEYS)
+
+
+def has_expected_tags(resource: dict[str, Any], expected_tags: list[str]) -> bool:
+    tags = tags_to_dict(resource.get("tags", []))
+    expected = tags_to_dict(expected_tags)
+    return all(key in tags and tags[key] == value for key, value in expected.items())
 
 
 def select_capture_disk(disks: list[dict[str, Any]]) -> dict[str, Any]:

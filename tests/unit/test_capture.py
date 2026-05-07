@@ -417,11 +417,35 @@ class CaptureExecutionTests(unittest.TestCase):
             client=client,
         )
 
-        expected_tags = manifest["tags"]
-        self.assertEqual(client.create_tags, expected_tags)
-        self.assertEqual(client.image_tags, expected_tags)
-        self.assertIn("mode=capture", expected_tags)
-        self.assertIn("component=capture", expected_tags)
+        lifecycle_tags = manifest["lifecycle_tags"]
+        artifact_tags = manifest["artifact_tags"]
+        self.assertEqual(manifest["tags"], lifecycle_tags)
+        self.assertEqual(client.create_tags, lifecycle_tags)
+        self.assertEqual(client.image_tags, artifact_tags)
+        self.assertEqual(artifact_tags, ["project=linode-image-lab"])
+        self.assertIn("mode=capture", lifecycle_tags)
+        self.assertIn("component=capture", lifecycle_tags)
+
+    def test_configured_image_project_tag_only_changes_custom_image_tags(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = capture_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            image_project_tag="customer-image-lab",
+            client=client,
+        )
+
+        self.assertEqual(client.image_tags, ["project=customer-image-lab"])
+        self.assertEqual(manifest["artifact_tags"], ["project=customer-image-lab"])
+        self.assertIn("project=linode-image-lab", client.create_tags)
+        self.assertIn("run_id=run-test", client.create_tags)
+        self.assertNotIn("run_id=run-test", client.image_tags)
+        self.assertEqual(manifest["cleanup"]["status"], "deleted")
 
     def test_preserve_source_skips_success_cleanup_delete(self) -> None:
         client = FakeLinodeClient()

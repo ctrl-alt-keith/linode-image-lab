@@ -42,6 +42,7 @@ class CaptureDeployOptions:
     execute: bool = False
     source_image: str | None = None
     instance_type: str | None = None
+    image_project_tag: str | None = None
     firewall_id: int | None = None
     authorized_keys: list[str] | None = None
     user_data: DeployUserData | None = None
@@ -56,6 +57,7 @@ def capture_deploy_plan(
     execute: bool = False,
     source_image: str | None = None,
     instance_type: str | None = None,
+    image_project_tag: str | None = None,
     firewall_id: int | None = None,
     authorized_keys: list[str] | None = None,
     user_data: DeployUserData | None = None,
@@ -69,6 +71,7 @@ def capture_deploy_plan(
         execute=execute,
         source_image=source_image,
         instance_type=instance_type,
+        image_project_tag=image_project_tag,
         firewall_id=firewall_id,
         authorized_keys=authorized_keys,
         user_data=user_data,
@@ -87,6 +90,7 @@ def dry_run_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
+        image_project_tag=options.image_project_tag,
         dry_run=True,
         status="planned",
     )
@@ -126,6 +130,7 @@ def execute_multi_region_capture_deploy(
                 execute=True,
                 source_image=required_text(options.source_image),
                 instance_type=required_text(options.instance_type),
+                image_project_tag=options.image_project_tag,
                 preserve_source=False,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -140,6 +145,7 @@ def execute_multi_region_capture_deploy(
             region=capture_region,
             run_id=manifest["run_id"],
             ttl=manifest["ttl"],
+            image_project_tag=options.image_project_tag,
             exc=exc,
         )
         manifest["status"] = "failed"
@@ -319,6 +325,7 @@ def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
+        image_project_tag=options.image_project_tag,
         dry_run=False,
         status="running",
     )
@@ -333,6 +340,9 @@ def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         "dry_run": base["dry_run"],
         "execution_mode": "execute",
         "status": base["status"],
+        "tags": base["tags"],
+        "lifecycle_tags": base["lifecycle_tags"],
+        "artifact_tags": base["artifact_tags"],
         "capture": {},
         "deploy_results": {},
         "summary": {
@@ -360,6 +370,7 @@ def execute_single_region_capture_deploy(
         regions=options.regions,
         run_id=options.run_id,
         ttl=options.ttl,
+        image_project_tag=options.image_project_tag,
         dry_run=False,
         status="running",
     )
@@ -386,6 +397,7 @@ def execute_single_region_capture_deploy(
                 execute=True,
                 source_image=required_text(options.source_image),
                 instance_type=required_text(options.instance_type),
+                image_project_tag=options.image_project_tag,
                 preserve_source=False,
                 command="capture-deploy",
                 mode="capture-deploy",
@@ -521,6 +533,7 @@ def failed_capture_manifest(
     region: str,
     run_id: str,
     ttl: str,
+    image_project_tag: str | None = None,
     exc: Exception,
 ) -> dict[str, Any]:
     manifest = create_manifest(
@@ -530,6 +543,7 @@ def failed_capture_manifest(
         regions=[region],
         run_id=run_id,
         ttl=ttl,
+        image_project_tag=image_project_tag,
         dry_run=False,
         status="failed",
     )
@@ -610,6 +624,7 @@ def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> No
             "component": component,
             "mutates": mutates,
             "tags": tags,
+            "lifecycle_tags": tags,
         }
         for region in manifest["regions"]
         for action, component, tags in (

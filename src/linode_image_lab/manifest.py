@@ -14,6 +14,7 @@ SCHEMA_VERSION = 1
 VALID_MODES = {"capture", "deploy", "capture-deploy"}
 VALID_COMPONENTS = {"capture", "deploy"}
 REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
+RESERVED_TAG_KEYS = frozenset((*REQUIRED_TAG_KEYS, "lifecycle"))
 
 
 def utc_now() -> datetime:
@@ -56,6 +57,24 @@ def generate_tags(*, run_id: str, mode: str, component: str, ttl: str) -> list[s
     ]
 
 
+def normalize_image_project_tag(value: object, label: str = "image_project_tag") -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty tag value")
+    normalized = value.strip()
+    if "=" in normalized:
+        key = normalized.split("=", 1)[0].strip().lower()
+        if key in RESERVED_TAG_KEYS:
+            raise ValueError(f"{label} must not configure internal lifecycle tag key: {key}")
+        raise ValueError(f"{label} must be a tag value, not a key=value tag")
+    return normalized
+
+
+def generate_artifact_tags(*, image_project_tag: str | None = None) -> list[str]:
+    """Generate tags for captured custom image artifacts."""
+    project_tag = normalize_image_project_tag(image_project_tag or PROJECT)
+    return [f"project={project_tag}"]
+
+
 def tags_to_dict(tags: list[str] | dict[str, str]) -> dict[str, str]:
     if isinstance(tags, dict):
         return {str(key): str(value) for key, value in tags.items()}
@@ -81,6 +100,7 @@ def create_manifest(
     component: str | None = None,
     run_id: str | None = None,
     ttl: str | None = None,
+    image_project_tag: str | None = None,
     dry_run: bool = True,
     status: str = "planned",
 ) -> dict[str, Any]:
@@ -94,12 +114,13 @@ def create_manifest(
     manifest_ttl = ttl or default_ttl()
     manifest_component = component or component_for_mode(mode)
     validate_component(manifest_component)
-    tags = generate_tags(
+    lifecycle_tags = generate_tags(
         run_id=manifest_run_id,
         mode=mode,
         component=manifest_component,
         ttl=manifest_ttl,
     )
+    artifact_tags = generate_artifact_tags(image_project_tag=image_project_tag)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -112,14 +133,17 @@ def create_manifest(
         "ttl": manifest_ttl,
         "dry_run": dry_run,
         "status": status,
-        "tags": tags,
+        "tags": lifecycle_tags,
+        "lifecycle_tags": lifecycle_tags,
+        "artifact_tags": artifact_tags,
         "planned_actions": [
             {
                 "action": command,
                 "region": region,
                 "component": manifest_component,
                 "mutates": False,
-                "tags": tags,
+                "tags": lifecycle_tags,
+                "lifecycle_tags": lifecycle_tags,
             }
             for region in regions
         ],

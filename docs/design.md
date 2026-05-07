@@ -63,9 +63,9 @@ outcomes.
 ## Manifest Foundation
 
 Manifests are plain JSON-compatible dictionaries. They include schema version,
-project, command, mode, regions, timestamps, dry-run status, tags, and planned
-actions. Serialized manifests use stable JSON formatting and redacted provider
-identifiers.
+project, command, mode, regions, timestamps, dry-run status, lifecycle tags,
+artifact tags, and planned actions. Serialized manifests use stable JSON
+formatting and redacted provider identifiers.
 
 M2 capture execution adds `execution_mode`, ordered `steps`, `resources`,
 `capture_source`, `custom_image`, `validation`, and `cleanup` fields. M3 deploy
@@ -104,12 +104,16 @@ Supported config values are intentionally narrow:
 - `source_image` for capture and capture-deploy,
 - `image_id` for deploy,
 - `type` or `instance_type` for capture, deploy, and capture-deploy,
+- `image_project_tag` for captured custom image artifact tags in capture and
+  capture-deploy,
 - `firewall_id` for deploy instances in deploy and capture-deploy,
 - `authorized_keys` and `authorized_keys_file` for deploy instances in deploy
   and capture-deploy,
 - `user_data_file` in `[deploy]` for Linode metadata user data on deploy
   instances.
 
+`image_project_tag` config is a value for the captured image's
+`project=<value>` artifact tag, not a way to configure lifecycle tag keys.
 `--execute`, preservation flags, run id fields, image labels, tokens,
 passwords, private SSH keys, root passwords, inline metadata, and inline
 cloud-init or user-data values are not configurable. Unknown keys and

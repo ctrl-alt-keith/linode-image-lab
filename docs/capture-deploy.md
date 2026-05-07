@@ -179,7 +179,9 @@ LINODE_TOKEN="$LINODE_TOKEN" PYTHONPATH=src python3 -m linode_image_lab.cli \
 ```
 
 Config defaults can replace omitted `--region`, `--source-image`,
-`--image-id`, `--type`, and `--ttl` values. They do not replace `--execute`,
+`--image-id`, `--type`, `--ttl`, and captured image `image_project_tag` values.
+The image project tag affects only captured custom image artifact tags, not
+temporary Linode lifecycle tags. Config defaults do not replace `--execute`,
 preservation flags, run ids, or environment-based token injection.
 Use `linode-image-lab config validate --config PATH --command COMMAND` to
 validate a config file and inspect the effective defaults before a smoke run.

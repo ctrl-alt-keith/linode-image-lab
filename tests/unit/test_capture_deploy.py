@@ -787,6 +787,27 @@ class CaptureDeployExecutionTests(unittest.TestCase):
         self.assertIn("mode=capture-deploy", client.deploy_tags)
         self.assertIn("component=deploy", client.deploy_tags)
 
+    def test_configured_image_project_tag_flows_to_captured_image_only(self) -> None:
+        client = FakeLinodeClient()
+
+        manifest = capture_deploy_plan(
+            regions=["us-east"],
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/debian12",
+            instance_type="g6-nanode-1",
+            image_project_tag="customer-image-lab",
+            client=client,
+        )
+
+        self.assertEqual(client.image_tags, ["project=customer-image-lab"])
+        self.assertEqual(manifest["artifact_tags"], ["project=customer-image-lab"])
+        self.assertEqual(manifest["capture"]["custom_image"]["tags"], ["project=customer-image-lab"])
+        self.assertIn("project=linode-image-lab", client.capture_tags)
+        self.assertIn("project=linode-image-lab", client.deploy_tags)
+        self.assertNotIn("run_id=run-test", client.image_tags)
+
     def test_preserve_instance_keeps_deploy_instance_only(self) -> None:
         client = FakeLinodeClient()
 

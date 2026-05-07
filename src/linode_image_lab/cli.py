@@ -241,6 +241,8 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.source_image = defaults["source_image"]
         if args.instance_type is None and ("type" in defaults or "instance_type" in defaults):
             args.instance_type = config_instance_type(defaults)
+        if getattr(args, "image_project_tag", None) is None and "image_project_tag" in defaults:
+            args.image_project_tag = defaults["image_project_tag"]
 
     if args.command == "deploy":
         if args.image_id is None and "image_id" in defaults:
@@ -397,6 +399,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             source_image=args.source_image,
             instance_type=args.instance_type,
             image_label=args.image_label,
+            image_project_tag=getattr(args, "image_project_tag", None),
             preserve_source=args.preserve_source,
         )
 
@@ -422,6 +425,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             execute=args.execute,
             source_image=args.source_image,
             instance_type=args.instance_type,
+            image_project_tag=getattr(args, "image_project_tag", None),
             firewall_id=args.firewall_id,
             authorized_keys=args.authorized_keys,
             user_data=args.user_data,

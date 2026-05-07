@@ -26,12 +26,13 @@ when they appear in a table that is not used by the selected command.
 
 Supported config values are limited to region defaults, TTL, source image,
 existing custom image id, Linode type, an existing firewall id for deploy
-instances, explicit public SSH authorized keys for deploy instances, and an
-explicit `[deploy].user_data_file` path for deploy metadata user data. Config
-cannot set `--execute`, `--discover`, preservation flags, run ids, image labels,
-tokens, passwords, private SSH keys, root passwords, inline metadata, inline
-cloud-init data, or inline user-data. Raw authorized key contents and raw or
-Base64-encoded user data are not serialized in CLI output.
+instances, explicit public SSH authorized keys for deploy instances, an
+explicit `[deploy].user_data_file` path for deploy metadata user data, and an
+artifact-facing image project tag value for captured custom images. Config
+cannot set `--execute`, `--discover`, preservation flags, run ids, lifecycle tag
+keys, image labels, tokens, passwords, private SSH keys, root passwords, inline
+metadata, inline cloud-init data, or inline user-data. Raw authorized key
+contents and raw or Base64-encoded user data are not serialized in CLI output.
 
 Config loading and validation happen before token lookup. Execute mode and
 `cleanup --discover` still require `LINODE_TOKEN` from the environment or
@@ -98,8 +99,9 @@ attempts.
 
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
-resources use `component=deploy`. The custom image is preserved by default.
-Temporary Linodes are deleted only when all required tags match the current run.
+resources use `component=deploy`. The custom image is preserved by default and
+uses separate artifact tags. Temporary Linodes are deleted only when all
+required lifecycle tags match the current run.
 
 Standalone `cleanup --execute` deletes only expired temporary Linodes with the
 complete managed tag set: `project`, `run_id`, `mode`, `component`, and `ttl`.

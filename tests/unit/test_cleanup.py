@@ -232,6 +232,22 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
 
+    def test_artifact_project_tag_is_not_cleanup_ownership(self) -> None:
+        resource = linode_resource()
+        resource["tags"] = [
+            "project=customer-image-lab",
+            "run_id=run-test",
+            "mode=capture",
+            "component=capture",
+            "ttl=2026-01-01T00:00:00Z",
+        ]
+        client = FakeCleanupClient([resource])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
+
     def test_provider_ids_are_redacted_in_serialized_manifest(self) -> None:
         client = FakeCleanupClient([linode_resource(linode_id=987)])
 
