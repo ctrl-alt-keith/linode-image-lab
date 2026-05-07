@@ -707,6 +707,7 @@ class CliTests(unittest.TestCase):
             ttl = "2031-01-01T00:00:00Z"
             source_image = "linode/alpine3.23"
             type = "g6-nanode-1"
+            image_project_tag = "customer-image-lab"
             """
         )
 
@@ -738,6 +739,7 @@ class CliTests(unittest.TestCase):
                 "source_image": "linode/alpine3.23",
                 "ttl": "2031-01-01T00:00:00Z",
                 "type": "g6-nanode-1",
+                "image_project_tag": "customer-image-lab",
             },
         )
         self.assertEqual(
@@ -747,8 +749,76 @@ class CliTests(unittest.TestCase):
                 {"field": "ttl", "source": "[capture].ttl"},
                 {"field": "source_image", "source": "[capture].source_image"},
                 {"field": "type", "source": "[capture].type"},
+                {"field": "image_project_tag", "source": "[capture].image_project_tag"},
             ],
         )
+
+    def test_capture_config_image_project_tag_only_changes_artifact_tags(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            image_project_tag = "customer-image-lab"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["--config", config_path, "capture"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["artifact_tags"], ["project=customer-image-lab"])
+        self.assertIn("project=linode-image-lab", payload["lifecycle_tags"])
+        self.assertIn("run_id=", "\n".join(payload["lifecycle_tags"]))
+        self.assertNotIn("run_id=", "\n".join(payload["artifact_tags"]))
+
+    def test_capture_deploy_config_accepts_image_project_tag(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture-deploy]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            image_project_tag = "customer-image-lab"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["--config", config_path, "capture-deploy"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["artifact_tags"], ["project=customer-image-lab"])
+        self.assertIn("project=linode-image-lab", payload["component_tags"]["capture"])
+        self.assertIn("project=linode-image-lab", payload["component_tags"]["deploy"])
+
+    def test_config_rejects_image_project_tag_lifecycle_override(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture]
+            region = "us-east"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            image_project_tag = "project=other"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["--config", config_path, "capture"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("must not configure internal lifecycle tag key: project", error.getvalue())
 
     def test_config_validate_never_reads_linode_token(self) -> None:
         config_path = self.write_config(

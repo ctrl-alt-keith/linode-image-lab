@@ -179,13 +179,16 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
-`instance_type`, `firewall_id`, `authorized_keys`, and
-`authorized_keys_file`, depending on the command. `[deploy].user_data_file`
-can provide deploy-scoped Linode metadata user data. `firewall_id`, authorized
-keys, and user data apply only to deploy instances from `deploy` and
-`capture-deploy`. File inputs are explicit; the tool never discovers keys or
-user data. `[deploy]` authorized keys and user data also apply to the deploy
-phase of `capture-deploy`; `[capture-deploy]` can add command-specific keys.
+`instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`, and
+`authorized_keys_file`, depending on the command. `[capture].image_project_tag`
+and `[capture-deploy].image_project_tag` set only the captured custom image's
+artifact-facing `project=<value>` tag; temporary Linode lifecycle tags remain
+owned by `linode-image-lab`. `[deploy].user_data_file` can provide
+deploy-scoped Linode metadata user data. `firewall_id`, authorized keys, and
+user data apply only to deploy instances from `deploy` and `capture-deploy`.
+File inputs are explicit; the tool never discovers keys or user data.
+`[deploy]` authorized keys and user data also apply to the deploy phase of
+`capture-deploy`; `[capture-deploy]` can add command-specific keys.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -321,12 +324,20 @@ Modeled resources use rediscoverable tags:
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
 
+Captured custom images use separate artifact tags. By default the artifact tag
+is `project=linode-image-lab`; `[capture].image_project_tag` or
+`[capture-deploy].image_project_tag` can change the value after `project=`
+without changing temporary Linode cleanup ownership.
+
 ## Manifest Output
 
 Execute manifests use consistent top-level `status`, `steps`, `resources`,
 `validation`, and `cleanup` fields. For single-region `capture-deploy`,
 top-level `resources`, `validation`, and `cleanup` summarize the combined run,
 while nested `capture` and `deploy` blocks show phase-specific details.
+Manifests expose internal cleanup ownership as `lifecycle_tags` and captured
+custom image identity as `artifact_tags`; the legacy top-level `tags` field is
+the lifecycle tag list.
 Multi-region `capture-deploy --execute` emits one combined manifest with
 top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each

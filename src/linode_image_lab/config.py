@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
+from .manifest import normalize_image_project_tag
 from .regions import parse_regions
 from .user_data import DeployUserData, UserDataError, load_user_data_file
 
@@ -27,7 +28,7 @@ ROOT_KEYS = {
 }
 TABLE_FIELDS = {
     "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
-    "capture": {"region", "regions", "source_image", "type", "instance_type", "ttl"},
+    "capture": {"region", "regions", "source_image", "type", "instance_type", "ttl", "image_project_tag"},
     "deploy": {
         "region",
         "regions",
@@ -48,6 +49,7 @@ TABLE_FIELDS = {
         "instance_type",
         "firewall_id",
         "ttl",
+        "image_project_tag",
         "authorized_keys",
         "authorized_keys_file",
     },
@@ -56,9 +58,18 @@ TABLE_FIELDS = {
 COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
-    "capture": ("regions", "ttl", "source_image", "type"),
+    "capture": ("regions", "ttl", "source_image", "type", "image_project_tag"),
     "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys", "user_data"),
-    "capture-deploy": ("regions", "ttl", "source_image", "type", "firewall_id", "authorized_keys", "user_data"),
+    "capture-deploy": (
+        "regions",
+        "ttl",
+        "source_image",
+        "type",
+        "image_project_tag",
+        "firewall_id",
+        "authorized_keys",
+        "user_data",
+    ),
     "cleanup": ("ttl",),
 }
 CLI_SOURCE_LABELS = {
@@ -208,6 +219,13 @@ def validate_value(table: str, key: str, value: Any) -> None:
             normalize_authorized_key(item, f"config [{table}].authorized_keys[{index}]")
         return
 
+    if key == "image_project_tag":
+        try:
+            normalize_image_project_tag(value, f"config [{table}].image_project_tag")
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        return
+
     if key in {"authorized_keys_file", "user_data_file"}:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"config [{table}].{key} must be a non-empty string")
@@ -233,6 +251,10 @@ def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any
             table["authorized_keys_file"] = str(resolve_config_path(table["authorized_keys_file"], base_dir=base_dir))
         if "user_data_file" in table:
             table["user_data_file"] = str(resolve_config_path(table["user_data_file"], base_dir=base_dir))
+        if "image_project_tag" in table:
+            table["image_project_tag"] = normalize_image_project_tag(
+                table["image_project_tag"], f"config [{key}].image_project_tag"
+            )
         normalized[key] = table
     return normalized
 
@@ -510,6 +532,8 @@ def normalize_default_value(field: str, value: Any) -> Any:
         return regions
     if field == "firewall_id":
         return normalize_firewall_id(value, "firewall_id")
+    if field == "image_project_tag":
+        return normalize_image_project_tag(value)
     return value
 
 

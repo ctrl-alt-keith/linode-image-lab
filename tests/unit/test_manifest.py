@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 import unittest
 
-from linode_image_lab.manifest import create_manifest, generate_tags, serialize_manifest, validate_mode
+from linode_image_lab.manifest import (
+    create_manifest,
+    generate_artifact_tags,
+    generate_tags,
+    serialize_manifest,
+    validate_mode,
+)
 
 
 class ManifestTests(unittest.TestCase):
@@ -42,6 +48,15 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(parsed["project"], "linode-image-lab")
         self.assertEqual(parsed["planned_actions"][0]["region"], "us-east")
         self.assertFalse(parsed["planned_actions"][0]["mutates"])
+        self.assertEqual(parsed["tags"], parsed["lifecycle_tags"])
+        self.assertEqual(parsed["artifact_tags"], ["project=linode-image-lab"])
+
+    def test_generates_configured_artifact_project_tag(self) -> None:
+        self.assertEqual(generate_artifact_tags(image_project_tag="customer-image-lab"), ["project=customer-image-lab"])
+
+    def test_rejects_artifact_project_tag_lifecycle_key_override(self) -> None:
+        with self.assertRaisesRegex(ValueError, "internal lifecycle tag key: project"):
+            generate_artifact_tags(image_project_tag="project=other")
 
     def test_validates_current_modes(self) -> None:
         for mode in ("capture", "deploy", "capture-deploy"):
