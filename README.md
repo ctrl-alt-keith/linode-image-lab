@@ -394,3 +394,5 @@ or organization.
 
 It is designed as a public-safe workflow lab and does not use proprietary
 systems, data, or credentials.
+
+> AI-generated. Human-verified. Occasionally argued about.
