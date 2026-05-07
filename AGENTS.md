@@ -67,5 +67,5 @@ Repo-local rules take precedence only for repo-specific behavior.
 
 - Branch from current `origin/main`.
 - Follow the shared playbook branch naming guidance; use focused,
-  purpose-based names such as `docs/<short-name>` or `feature/<short-name>`.
+  purpose-based names such as `docs/<short-name>` or `feat/<short-name>`.
 - Open PRs against `main`.
