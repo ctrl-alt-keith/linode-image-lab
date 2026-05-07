@@ -32,6 +32,12 @@ Repo-local rules take precedence only for repo-specific behavior.
   validation runs, not infrastructure ownership.
 - Keep cleanup and validation first-class in any execution path.
 
+## Local Execution
+
+- Run commands from this repository working directory by default.
+- Keep temporary workflow state repo-local, including `.worktrees/`.
+- Prefer direct `gh ...` commands unless shell behavior is required.
+
 ## Provider Assumptions
 
 - Before changing behavior, docs, tests, or user-facing claims that depend on
