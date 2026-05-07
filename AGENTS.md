@@ -32,6 +32,14 @@ Repo-local rules take precedence only for repo-specific behavior.
   validation runs, not infrastructure ownership.
 - Keep cleanup and validation first-class in any execution path.
 
+## File Placement
+
+- Put source code under `src/linode_image_lab/`.
+- Put unit tests under `tests/unit/`.
+- Put repo documentation under `docs/`.
+- Put example config files under `examples/config/`.
+- Put sanitized fixtures under `tests/fixtures/sanitized/`.
+
 ## Local Execution
 
 - Run commands from this repository working directory by default.
