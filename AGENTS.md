@@ -44,7 +44,7 @@ Repo-local rules take precedence only for repo-specific behavior.
 
 - Run commands from this repository working directory by default.
 - Keep temporary workflow state repo-local, for example `.worktrees/`.
-- Prefer direct `gh ...` commands unless shell behavior is required.
+- Prefer direct `git ...` and `gh ...` commands unless shell behavior is required.
 
 ## Provider Assumptions
 
