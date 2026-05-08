@@ -6,6 +6,8 @@ RELEASE_TAG = v$(RELEASE_VERSION)
 
 .PHONY: help check test security-check smoke check-gh-env release-notes release-check release-recover release-create-from-tag release-publish
 
+.DEFAULT_GOAL := check
+
 help: ## List available repo-local Makefile targets with short descriptions.
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
