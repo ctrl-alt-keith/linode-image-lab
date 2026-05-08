@@ -116,6 +116,7 @@ SECRET_KEY_FRAGMENTS = (
 SECRET_POINTER_KEYS = {
     "user_data_file",
 }
+AUTHORIZED_KEYS_FILE_MAX_BYTES = 256 * 1024
 AUTHORIZED_KEY_TYPES = (
     "ssh-rsa",
     "ssh-ed25519",
@@ -462,12 +463,19 @@ def normalize_authorized_keys(values: list[Any], label: str) -> list[str]:
 def load_authorized_keys_file(path: str, label: str) -> list[str]:
     key_path = Path(path).expanduser()
     try:
-        text = key_path.read_text(encoding="utf-8")
+        with key_path.open("rb") as handle:
+            data = handle.read(AUTHORIZED_KEYS_FILE_MAX_BYTES + 1)
     except FileNotFoundError as exc:
         raise ConfigError(f"{label} file not found") from exc
     except OSError as exc:
         raise ConfigError(f"{label} file could not be read") from exc
 
+    if len(data) > AUTHORIZED_KEYS_FILE_MAX_BYTES:
+        raise ConfigError(f"{label} file is too large; limit is {AUTHORIZED_KEYS_FILE_MAX_BYTES} bytes")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"{label} must be a UTF-8 text file") from exc
     if not text:
         raise ConfigError(f"{label} must contain at least one public SSH key")
     return [normalize_authorized_key(line, f"{label} line {index}") for index, line in enumerate(text.splitlines(), 1)]

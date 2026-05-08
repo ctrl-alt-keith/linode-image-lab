@@ -28,6 +28,11 @@ class RedactionTests(unittest.TestCase):
             {"linode_id": REDACTION, "image_id": REDACTION, "run_id": "run-test"},
         )
 
+    def test_keeps_source_image_visible_while_redacting_provider_image_id(self) -> None:
+        payload = {"source_image": "linode/debian12", "image_id": "private/123"}
+
+        self.assertEqual(redact(payload), {"source_image": "linode/debian12", "image_id": REDACTION})
+
     def test_redacts_raw_user_data_but_keeps_safe_metadata(self) -> None:
         payload = {
             "metadata": {"user_data": "I2Nsb3VkLWNvbmZpZwo="},

@@ -11,6 +11,9 @@ class UserDataError(ValueError):
     """Raised when user-data input cannot safely be loaded."""
 
 
+USER_DATA_FILE_MAX_BYTES = 256 * 1024
+
+
 @dataclass(frozen=True)
 class DeployUserData:
     encoded: str = field(repr=False)
@@ -21,12 +24,15 @@ class DeployUserData:
 def load_user_data_file(path: str, label: str) -> DeployUserData:
     user_data_path = Path(path).expanduser()
     try:
-        data = user_data_path.read_bytes()
+        with user_data_path.open("rb") as handle:
+            data = handle.read(USER_DATA_FILE_MAX_BYTES + 1)
     except FileNotFoundError as exc:
         raise UserDataError(f"{label} file not found") from exc
     except OSError as exc:
         raise UserDataError(f"{label} file could not be read") from exc
 
+    if len(data) > USER_DATA_FILE_MAX_BYTES:
+        raise UserDataError(f"{label} file is too large; limit is {USER_DATA_FILE_MAX_BYTES} bytes")
     if not data:
         raise UserDataError(f"{label} must not be empty")
     if b"\x00" in data:

@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from linode_image_lab.cli import build_parser, main
+from linode_image_lab.config import AUTHORIZED_KEYS_FILE_MAX_BYTES
+from linode_image_lab.user_data import USER_DATA_FILE_MAX_BYTES
 
 PUBLIC_KEY_ONE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA one@example"
 PUBLIC_KEY_TWO = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA two@example"
@@ -551,6 +553,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("must be text user data, not binary data", error.getvalue())
         self.assertNotIn("secret", error.getvalue())
 
+    def test_user_data_file_too_large_fails_before_loading_contents(self) -> None:
+        user_data_path = self.write_bytes(b"x" * (USER_DATA_FILE_MAX_BYTES + 1), name="large-cloud-init.yaml")
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--region", "us-east", "--user-data-file", user_data_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn(f"file is too large; limit is {USER_DATA_FILE_MAX_BYTES} bytes", error.getvalue())
+
     def test_config_validate_shows_firewall_cli_override_precedence(self) -> None:
         config_path = self.write_config(
             """
@@ -907,6 +919,44 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("must not contain secrets", error.getvalue())
 
+    def test_config_validate_rejects_unsupported_cli_overrides_by_command(self) -> None:
+        config_path = self.write_config("schema_version = 1\n")
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        keys_path = self.write_file(f"{PUBLIC_KEY_ONE}\n")
+
+        cases = [
+            ("plan", ["--source-image", "linode/alpine3.23"], "--source-image"),
+            ("plan", ["--image-id", "private/example-custom-image"], "--image-id"),
+            ("plan", ["--type", "g6-nanode-1"], "--type"),
+            ("plan", ["--firewall-id", "123"], "--firewall-id"),
+            ("plan", ["--authorized-key", PUBLIC_KEY_ONE], "--authorized-key"),
+            ("plan", ["--authorized-keys-file", keys_path], "--authorized-keys-file"),
+            ("plan", ["--user-data-file", user_data_path], "--user-data-file"),
+            ("capture", ["--image-id", "private/example-custom-image"], "--image-id"),
+            ("capture", ["--firewall-id", "123"], "--firewall-id"),
+            ("capture", ["--authorized-key", PUBLIC_KEY_ONE], "--authorized-key"),
+            ("capture", ["--authorized-keys-file", keys_path], "--authorized-keys-file"),
+            ("capture", ["--user-data-file", user_data_path], "--user-data-file"),
+            ("deploy", ["--source-image", "linode/alpine3.23"], "--source-image"),
+            ("capture-deploy", ["--image-id", "private/example-custom-image"], "--image-id"),
+            ("cleanup", ["--region", "us-east"], "--region"),
+            ("cleanup", ["--source-image", "linode/alpine3.23"], "--source-image"),
+            ("cleanup", ["--image-id", "private/example-custom-image"], "--image-id"),
+            ("cleanup", ["--type", "g6-nanode-1"], "--type"),
+            ("cleanup", ["--firewall-id", "123"], "--firewall-id"),
+            ("cleanup", ["--authorized-key", PUBLIC_KEY_ONE], "--authorized-key"),
+            ("cleanup", ["--authorized-keys-file", keys_path], "--authorized-keys-file"),
+            ("cleanup", ["--user-data-file", user_data_path], "--user-data-file"),
+        ]
+        for command, args, option in cases:
+            with self.subTest(command=command, option=option):
+                error = StringIO()
+                with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                    main(["config", "validate", "--config", config_path, "--command", command, *args])
+
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(f"{option} is not supported for {command} config defaults", error.getvalue())
+
     def test_config_validate_rejects_unsupported_cli_override_for_command(self) -> None:
         config_path = self.write_config(
             """
@@ -1089,6 +1139,45 @@ class CliTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("must be a valid OpenSSH public key", error.getvalue())
         self.assertNotIn("not-a-public-key", error.getvalue())
+
+    def test_authorized_keys_file_too_large_fails_before_parsing_contents(self) -> None:
+        keys_path = self.write_bytes(b"x" * (AUTHORIZED_KEYS_FILE_MAX_BYTES + 1), name="authorized_keys")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [deploy]
+            region = "us-east"
+            image_id = "private/example-custom-image"
+            type = "g6-nanode-1"
+            authorized_keys_file = "{keys_path}"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn(f"file is too large; limit is {AUTHORIZED_KEYS_FILE_MAX_BYTES} bytes", error.getvalue())
+
+    def test_config_validate_preserves_ttl_without_semantic_parsing(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [cleanup]
+            ttl = "not-a-timestamp"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["config", "validate", "--config", config_path, "--command", "cleanup"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["ttl"], "not-a-timestamp")
 
     def test_unknown_config_key_fails_clearly(self) -> None:
         config_path = self.write_config(
