@@ -240,6 +240,20 @@ Top-level `resources` and `validation` summarize the whole run. Nested
 `capture.resources`, `deploy.resources`, `capture.validation`, and
 `deploy.validation` are phase-specific slices of that same lifecycle.
 
+Manifest lifecycle tags and artifact tags are intentionally separate.
+`lifecycle_tags` are the required cleanup and validation tags for temporary
+Linodes. `artifact_tags` are applied to captured custom images. The legacy
+top-level `tags` field is retained as a schema-v1 compatibility alias for
+`lifecycle_tags`; it is not an image/artifact tag list.
+
+Capture-deploy manifests expose `component_tags.capture` and
+`component_tags.deploy` for the per-component lifecycle tag sets. These fields
+are present in dry-run, single-region execute, and multi-region execute
+manifests. Multi-region execute also includes the same top-level
+`lifecycle_tags` and compatibility `tags` values for consumers that identify
+the aggregate run by its capture component, but nested phase manifests remain
+the authoritative source for resources created by each component.
+
 Multi-region capture-deploy execute manifests expose a top-level `status`,
 `regions`, `capture`, `deploy_results`, and `summary`. `capture` is the single
 capture manifest from the first requested region. Each value in

@@ -7,6 +7,7 @@ from linode_image_lab.manifest import (
     create_manifest,
     generate_artifact_tags,
     generate_tags,
+    lifecycle_tags_from_manifest,
     serialize_manifest,
     validate_mode,
 )
@@ -50,6 +51,19 @@ class ManifestTests(unittest.TestCase):
         self.assertFalse(parsed["planned_actions"][0]["mutates"])
         self.assertEqual(parsed["tags"], parsed["lifecycle_tags"])
         self.assertEqual(parsed["artifact_tags"], ["project=linode-image-lab"])
+
+    def test_legacy_tags_remain_lifecycle_compatibility_alias(self) -> None:
+        manifest = {"tags": ["project=linode-image-lab", "run_id=run-test"]}
+
+        self.assertEqual(lifecycle_tags_from_manifest(manifest), manifest["tags"])
+
+    def test_lifecycle_tags_take_precedence_over_legacy_tags(self) -> None:
+        manifest = {
+            "tags": ["project=legacy"],
+            "lifecycle_tags": ["project=linode-image-lab", "run_id=run-test"],
+        }
+
+        self.assertEqual(lifecycle_tags_from_manifest(manifest), manifest["lifecycle_tags"])
 
     def test_generates_configured_artifact_project_tag(self) -> None:
         self.assertEqual(generate_artifact_tags(image_project_tag="customer-image-lab"), ["project=customer-image-lab"])

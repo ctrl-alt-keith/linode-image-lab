@@ -19,7 +19,7 @@ from .deploy import (
     execute_deploy,
 )
 from .linode_api import LinodeClient, LinodeClientProtocol
-from .manifest import create_manifest, generate_tags
+from .manifest import create_manifest, generate_tags, lifecycle_tags_from_manifest
 from .user_data import DeployUserData
 from .validation_results import combined_validation
 
@@ -343,6 +343,7 @@ def multi_region_manifest(options: CaptureDeployOptions) -> dict[str, Any]:
         "tags": base["tags"],
         "lifecycle_tags": base["lifecycle_tags"],
         "artifact_tags": base["artifact_tags"],
+        "component_tags": component_lifecycle_tags(run_id=base["run_id"], ttl=base["ttl"]),
         "capture": {},
         "deploy_results": {},
         "summary": {
@@ -507,7 +508,7 @@ def cleanup_deferred_capture(client: LinodeClientProtocol, capture_manifest: dic
             client,
             capture_source=capture_manifest["capture_source"],
             preserve_source=False,
-            required_tags=list(capture_manifest["tags"]),
+            required_tags=lifecycle_tags_from_manifest(capture_manifest),
         )
     except Exception:
         capture_manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
@@ -600,23 +601,28 @@ def add_region_error_context(manifest: dict[str, Any], *, region: str) -> None:
     manifest["errors"] = [error if str(error).startswith(prefix) else f"{prefix}{error}" for error in errors]
 
 
-def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> None:
-    capture_tags = generate_tags(
-        run_id=manifest["run_id"],
-        mode="capture-deploy",
-        component="capture",
-        ttl=manifest["ttl"],
-    )
-    deploy_tags = generate_tags(
-        run_id=manifest["run_id"],
-        mode="capture-deploy",
-        component="deploy",
-        ttl=manifest["ttl"],
-    )
-    manifest["component_tags"] = {
-        "capture": capture_tags,
-        "deploy": deploy_tags,
+def component_lifecycle_tags(*, run_id: str, ttl: str) -> dict[str, list[str]]:
+    return {
+        "capture": generate_tags(
+            run_id=run_id,
+            mode="capture-deploy",
+            component="capture",
+            ttl=ttl,
+        ),
+        "deploy": generate_tags(
+            run_id=run_id,
+            mode="capture-deploy",
+            component="deploy",
+            ttl=ttl,
+        ),
     }
+
+
+def apply_capture_deploy_shape(manifest: dict[str, Any], *, mutates: bool) -> None:
+    component_tags = component_lifecycle_tags(run_id=manifest["run_id"], ttl=manifest["ttl"])
+    capture_tags = component_tags["capture"]
+    deploy_tags = component_tags["deploy"]
+    manifest["component_tags"] = component_tags
     manifest["planned_actions"] = [
         {
             "action": action,
@@ -646,14 +652,14 @@ def run_deferred_cleanup(
         client,
         capture_source=capture_manifest["capture_source"],
         preserve_source=False,
-        required_tags=list(capture_manifest["tags"]),
+        required_tags=lifecycle_tags_from_manifest(capture_manifest),
     )
     cleanup_deploy_instance(
         deploy_manifest,
         client,
         deploy_instance=deploy_manifest["deploy_instance"],
         preserve_instance=preserve_instance,
-        required_tags=list(deploy_manifest["tags"]),
+        required_tags=lifecycle_tags_from_manifest(deploy_manifest),
     )
 
 
@@ -671,7 +677,7 @@ def try_cleanup_after_failure(
                 client,
                 capture_source=capture_manifest["capture_source"],
                 preserve_source=False,
-                required_tags=list(capture_manifest["tags"]),
+                required_tags=lifecycle_tags_from_manifest(capture_manifest),
             )
         except Exception:
             capture_manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}
@@ -683,7 +689,7 @@ def try_cleanup_after_failure(
                 client,
                 deploy_instance=deploy_manifest["deploy_instance"],
                 preserve_instance=preserve_instance,
-                required_tags=list(deploy_manifest["tags"]),
+                required_tags=lifecycle_tags_from_manifest(deploy_manifest),
             )
         except Exception:
             deploy_manifest["cleanup"] = {"status": "failed", "deleted": [], "preserved": []}

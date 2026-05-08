@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
-from .manifest import REQUIRED_TAG_KEYS, create_manifest, tags_to_dict
+from .manifest import REQUIRED_TAG_KEYS, create_manifest, lifecycle_tags_from_manifest, tags_to_dict
 from .user_data import DeployUserData
 from .validation_results import finish_validation, record_validation_check, start_validation
 
@@ -129,7 +129,7 @@ def execute_deploy(
         run_client.preflight()
         finish_step(manifest, "preflight_api_access", client=run_client)
 
-        tags = list(manifest["tags"])
+        tags = lifecycle_tags_from_manifest(manifest)
         region = options.regions[0]
         image_id = required_text(options.image_id)
         instance_type = required_text(options.instance_type)
@@ -217,7 +217,7 @@ def execute_deploy(
                     run_client,
                     deploy_instance=deploy_instance,
                     preserve_instance=options.preserve_instance,
-                    required_tags=list(manifest["tags"]),
+                    required_tags=lifecycle_tags_from_manifest(manifest),
                 )
             except Exception:
                 mark_running_step_failed(manifest, client=run_client)
