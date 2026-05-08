@@ -86,15 +86,17 @@ sanitized serialization, which redacts provider identifiers before printing.
 Config is opt-in through `--config PATH`, either before or after the command,
 and uses TOML `schema_version = 1`. The config file can provide execution
 defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`, and
-`[cleanup]` tables. CLI flags take precedence over command-specific config,
-command-specific config takes precedence over `[defaults]`, and existing
-generated defaults remain last.
+`[cleanup]` tables. Most scalar defaults use override precedence: CLI flags,
+then command-specific config, then `[defaults]`, then existing generated
+defaults. Deploy metadata fields have narrower rules described below.
 
 `config validate --config PATH --command COMMAND` provides the non-mutating
 inspection path for config files. It validates the TOML schema and safety rules,
 then emits redacted JSON containing the selected command's `precedence`,
-`effective_defaults`, and `sources`. Supported CLI default flags passed to
-`config validate` are included only for precedence inspection; the command does
+`effective_defaults`, and `sources`. The `precedence` list names the source
+classes considered for the selected command; `sources` is the per-field record
+of the source or sources used. Supported CLI default flags passed to
+`config validate` are included only for resolution inspection; the command does
 not execute workflows, call Linode, or read `LINODE_TOKEN`.
 
 Supported config values are intentionally narrow:
@@ -113,7 +115,8 @@ Supported config values are intentionally narrow:
   instances.
 
 `image_project_tag` config is a value for the captured image's
-`project=<value>` artifact tag, not a way to configure lifecycle tag keys.
+`project=<value>` artifact tag, not a way to configure lifecycle tag keys, and
+has no CLI override.
 `--execute`, preservation flags, run id fields, image labels, tokens,
 passwords, private SSH keys, root passwords, inline metadata, and inline
 cloud-init or user-data values are not configurable. Unknown keys and
@@ -122,10 +125,17 @@ files are explicit paths supplied by config or CLI; the tool does not discover
 keys from `~/.ssh` or user-data files. Raw authorized key contents and raw or
 Base64-encoded user data are never serialized in manifests or config validation
 output.
-`[deploy]` authorized keys are deploy-scoped and also feed the deploy phase of
-`capture-deploy`; `[capture-deploy]` can add command-specific keys. `[deploy]`
-user data is deploy-scoped and also feeds only the deploy phase of
-`capture-deploy`.
+
+Config precedence is field-specific for deploy metadata. Scalar fields such as
+`regions`, `ttl`, `source_image`, `image_id`, `type`, `image_project_tag`, and
+`firewall_id` use override precedence. Authorized keys are additive:
+`authorized_keys`, `authorized_keys_file`, `--authorized-key`, and
+`--authorized-keys-file` inputs are merged and deduped. For `capture-deploy`,
+authorized keys from `[deploy]` feed the deploy phase before
+`[capture-deploy]` adds command-specific keys. `[deploy].user_data_file` is
+deploy-scoped and feeds `deploy` and only the deploy phase of `capture-deploy`;
+`--user-data-file` overrides it when provided, and
+`[capture-deploy].user_data_file` is not supported.
 
 Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
