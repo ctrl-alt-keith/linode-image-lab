@@ -168,7 +168,8 @@ identifiers.
 ## Config Defaults
 
 Pass `--config` before or after the command to load optional TOML execution
-defaults. Config values fill omitted CLI flags; explicit CLI flags always win.
+defaults. Most scalar config values fill omitted CLI flags; explicit CLI flags
+override those scalar defaults.
 
 ```sh
 linode-image-lab --config examples/config/capture-deploy-smoke.toml capture-deploy
@@ -179,16 +180,25 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
-`instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`, and
-`authorized_keys_file`, depending on the command. `[capture].image_project_tag`
-and `[capture-deploy].image_project_tag` set only the captured custom image's
+`instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
+`authorized_keys_file`, and `user_data_file`, depending on the command and
+table. `[capture].image_project_tag` and
+`[capture-deploy].image_project_tag` set only the captured custom image's
 artifact-facing `project=<value>` tag; temporary Linode lifecycle tags remain
-owned by `linode-image-lab`. `[deploy].user_data_file` can provide
-deploy-scoped Linode metadata user data. `firewall_id`, authorized keys, and
-user data apply only to deploy instances from `deploy` and `capture-deploy`.
-File inputs are explicit; the tool never discovers keys or user data.
-`[deploy]` authorized keys and user data also apply to the deploy phase of
-`capture-deploy`; `[capture-deploy]` can add command-specific keys.
+owned by `linode-image-lab`. `image_project_tag` is config-only and has no CLI
+override.
+
+Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
+for deploy instances. Authorized keys are additive: configured
+`authorized_keys`, configured `authorized_keys_file`, repeated
+`--authorized-key`, and `--authorized-keys-file` inputs are merged and deduped
+instead of replacing each other. `[deploy].authorized_keys` and
+`[deploy].authorized_keys_file` also feed the deploy phase of `capture-deploy`;
+`[capture-deploy]` can add command-specific keys. `[deploy].user_data_file`
+provides deploy-scoped Linode metadata user data for `deploy` and for the
+deploy phase of `capture-deploy`; `--user-data-file` overrides it when provided.
+There is no `[capture-deploy].user_data_file`. File inputs are explicit; the
+tool never discovers keys or user data.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -202,14 +212,20 @@ only.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
-`effective_defaults`, and `sources`. Precedence is explicit CLI values first,
-then the selected command table, then `[defaults]`. You can pass supported CLI
-default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
-`--type` to preview how they override the config for the selected command.
-For deploy defaults, `--firewall-id`, `--authorized-key`,
-`--authorized-keys-file`, and `--user-data-file` can also be previewed.
-Authorized key and user-data output reports safe metadata such as count, source,
-and byte count only.
+`effective_defaults`, and `sources`. The `precedence` list names the source
+classes considered for the selected command, and `sources` shows which source
+fed each effective field. It is not a single override rule for every field:
+scalar fields use override precedence, authorized-key inputs merge and dedupe
+additively, and user data remains deploy-scoped. For `capture-deploy`, scalar
+defaults come from explicit CLI flags, then `[capture-deploy]`, then
+`[defaults]`; authorized keys can come from `[deploy]`, `[capture-deploy]`, and
+CLI key inputs; user data can come from `[deploy].user_data_file` or
+`--user-data-file`. You can pass supported CLI default flags such as `--region`,
+`--ttl`, `--source-image`, `--image-id`, or `--type` to preview config
+resolution for the selected command. For deploy defaults, `--firewall-id`,
+`--authorized-key`, `--authorized-keys-file`, and `--user-data-file` can also be
+previewed. Authorized key and user-data output reports safe metadata such as
+count, source, and byte count only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, private SSH keys, inline cloud-init data, `execute`,
@@ -224,7 +240,8 @@ still come from the environment or approved environment injection.
   `capture-deploy`, and `cleanup`.
 - Provider behavior assumptions are tracked in
   [docs/provider-assumptions.md](docs/provider-assumptions.md).
-- Config values only fill omitted command options; CLI flags override config.
+- Scalar config values fill omitted command options; CLI scalar flags override
+  config, while authorized-key inputs merge and dedupe additively.
 - Execute runs use temporary resources and clean them up automatically unless a
   preservation flag is used.
 - Execute runs verify the requested region, Linode type, source or deploy
