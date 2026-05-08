@@ -88,6 +88,13 @@ def tags_to_dict(tags: list[str] | dict[str, str]) -> dict[str, str]:
     return parsed
 
 
+def lifecycle_tags_from_manifest(manifest: dict[str, Any]) -> list[str]:
+    """Return lifecycle tags, accepting legacy schema-v1 manifests."""
+    if "lifecycle_tags" in manifest:
+        return list(manifest["lifecycle_tags"])
+    return list(manifest["tags"])
+
+
 def component_for_mode(mode: str) -> str:
     return "deploy" if mode == "deploy" else "capture"
 
@@ -133,6 +140,7 @@ def create_manifest(
         "ttl": manifest_ttl,
         "dry_run": dry_run,
         "status": status,
+        # `tags` is a schema-v1 compatibility alias for `lifecycle_tags`.
         "tags": lifecycle_tags,
         "lifecycle_tags": lifecycle_tags,
         "artifact_tags": artifact_tags,

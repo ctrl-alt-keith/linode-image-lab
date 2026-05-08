@@ -337,17 +337,22 @@ top-level `resources`, `validation`, and `cleanup` summarize the combined run,
 while nested `capture` and `deploy` blocks show phase-specific details.
 Manifests expose internal cleanup ownership as `lifecycle_tags` and captured
 custom image identity as `artifact_tags`; the legacy top-level `tags` field is
-the lifecycle tag list.
+kept as a compatibility alias for `lifecycle_tags`. Consumers should treat
+`lifecycle_tags` as the cleanup/validation tag contract and must not treat
+`tags` as captured custom image tags.
 Multi-region `capture-deploy --execute` emits one combined manifest with
 top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each
 `deploy_results.<region>` value is the deploy manifest for that requested
-region. When a firewall is configured, deploy manifests include
-`deploy_config.firewall`; when authorized keys are configured, deploy manifests
-include `deploy_config.authorized_keys` count metadata only; when user data is
-configured, deploy manifests include `deploy_config.user_data` source and byte
-count metadata only. Provider identifiers, raw key material, and raw or encoded
-user data remain redacted in normal stdout.
+region. Capture-deploy manifests include `component_tags.capture` and
+`component_tags.deploy` so consumers can distinguish the lifecycle tag sets for
+the capture-source and deploy-validation Linodes. When a firewall is
+configured, deploy manifests include `deploy_config.firewall`; when authorized
+keys are configured, deploy manifests include `deploy_config.authorized_keys`
+count metadata only; when user data is configured, deploy manifests include
+`deploy_config.user_data` source and byte count metadata only. Provider
+identifiers, raw key material, and raw or encoded user data remain redacted in
+normal stdout.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or

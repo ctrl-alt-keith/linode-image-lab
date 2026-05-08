@@ -403,7 +403,7 @@ class DeployExecutionTests(unittest.TestCase):
             client=client,
         )
 
-        expected_tags = manifest["tags"]
+        expected_tags = manifest["lifecycle_tags"]
         self.assertEqual(client.create_tags, expected_tags)
         self.assertIn("mode=deploy", expected_tags)
         self.assertIn("component=deploy", expected_tags)

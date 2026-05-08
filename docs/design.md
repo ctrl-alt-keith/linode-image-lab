@@ -65,7 +65,10 @@ outcomes.
 Manifests are plain JSON-compatible dictionaries. They include schema version,
 project, command, mode, regions, timestamps, dry-run status, lifecycle tags,
 artifact tags, and planned actions. Serialized manifests use stable JSON
-formatting and redacted provider identifiers.
+formatting and redacted provider identifiers. `lifecycle_tags` are the
+cleanup/validation tag contract for temporary Linodes. `artifact_tags` are the
+captured custom image tag contract. The schema-v1 `tags` field is a
+compatibility alias for `lifecycle_tags`, not a generic tag bag.
 
 M2 capture execution adds `execution_mode`, ordered `steps`, `resources`,
 `capture_source`, `custom_image`, `validation`, and `cleanup` fields. M3 deploy
