@@ -4,17 +4,22 @@ export PYTHONPATH := src
 RELEASE_VERSION = $(patsubst v%,%,$(VERSION))
 RELEASE_TAG = v$(RELEASE_VERSION)
 
-.PHONY: check test security-check smoke check-gh-env release-notes release-check release-recover release-create-from-tag release-publish
+.PHONY: help check test security-check smoke check-gh-env release-notes release-check release-recover release-create-from-tag release-publish
 
-check: security-check test
+.DEFAULT_GOAL := check
 
-test:
+help: ## List available repo-local Makefile targets with short descriptions.
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+check: security-check test ## Run canonical local validation.
+
+test: ## Run unit tests.
 	$(PYTHON) -m unittest discover -s tests/unit -p 'test_*.py'
 
-security-check:
+security-check: ## Run repository safety validation.
 	$(PYTHON) -m linode_image_lab.validation .
 
-smoke:
+smoke: ## Run manual Linode capture-deploy smoke validation.
 	@if [ -z "$${LINODE_TOKEN:-}" ]; then \
 		echo "Error: LINODE_TOKEN is required for make smoke." >&2; \
 		exit 1; \
@@ -27,11 +32,11 @@ smoke:
 	@echo "WARNING: This will create and delete temporary Linodes"
 	linode-image-lab capture-deploy --config examples/config/capture-deploy-smoke.toml --region "$(REGION)" --execute
 
-check-gh-env:
+check-gh-env: ## Verify GitHub CLI availability and authentication.
 	@command -v gh >/dev/null 2>&1 || { echo "Error: GitHub CLI (gh) is required but is not installed." >&2; exit 1; }
 	@gh auth status >/dev/null 2>&1 || { echo "Error: GitHub CLI authentication is required. Run 'gh auth login' and try again." >&2; exit 1; }
 
-release-notes:
+release-notes: ## Print release notes for VERSION.
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: VERSION is required. Usage: make release-publish VERSION=0.1.0" >&2; \
 		exit 1; \
@@ -56,7 +61,7 @@ release-notes:
 			} \
 		}' CHANGELOG.md
 
-release-check: check-gh-env
+release-check: check-gh-env ## Run local release readiness checks for VERSION.
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: VERSION is required. Usage: make release-publish VERSION=0.1.0" >&2; \
 		exit 1; \
@@ -113,7 +118,7 @@ release-check: check-gh-env
 	fi
 	@echo "Release checks passed for $(RELEASE_TAG)."
 
-release-recover: check-gh-env
+release-recover: check-gh-env ## Inspect partial release state for VERSION.
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: VERSION is required. Usage: make release-recover VERSION=0.1.0" >&2; \
 		exit 1; \
@@ -168,7 +173,7 @@ release-recover: check-gh-env
 		echo "No partial release publish state was found for $(RELEASE_TAG)."; \
 	fi
 
-release-create-from-tag: check-gh-env
+release-create-from-tag: check-gh-env ## Create a missing GitHub release from an existing tag.
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: VERSION is required. Usage: make release-create-from-tag VERSION=0.1.0" >&2; \
 		exit 1; \
@@ -203,7 +208,7 @@ release-create-from-tag: check-gh-env
 	gh release create "$(RELEASE_TAG)" --title "$(RELEASE_TAG)" --notes-file "$$notes_file" --verify-tag; \
 	echo "Created GitHub release $(RELEASE_TAG) from existing remote tag."
 
-release-publish: release-check
+release-publish: release-check ## Publish VERSION as a tag and GitHub release.
 	@set -e; \
 	notes_file=$$(mktemp); \
 	trap 'rm -f "$$notes_file"' EXIT; \
