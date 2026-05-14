@@ -80,9 +80,15 @@ class LinodeClientProtocol(Protocol):
 
     def list_managed_linodes(self) -> list[dict[str, Any]]: ...
 
+    def list_managed_images(self) -> list[dict[str, Any]]: ...
+
     def get_instance(self, linode_id: int) -> dict[str, Any]: ...
 
+    def get_image(self, image_id: str) -> dict[str, Any]: ...
+
     def delete_instance(self, linode_id: int) -> dict[str, Any]: ...
+
+    def delete_image(self, image_id: str) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -233,13 +239,43 @@ class LinodeClient:
                 return resources
             page += 1
 
+    def list_managed_images(self) -> list[dict[str, Any]]:
+        resources: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = urlencode({"page": page, "page_size": 100})
+            response = self._request("GET", f"/images?{query}", retry=True, operation="list_managed_images")
+            data = response.get("data", []) if isinstance(response, dict) else []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                resource = self._image_resource(item)
+                tags = tags_to_dict(resource.get("tags", []))
+                if tags.get("project") == PROJECT:
+                    resources.append(resource)
+
+            pages = response.get("pages", page) if isinstance(response, dict) else page
+            if not isinstance(pages, int) or page >= pages:
+                return resources
+            page += 1
+
     def get_instance(self, linode_id: int) -> dict[str, Any]:
         response = self._request("GET", f"/linode/instances/{linode_id}", retry=True, operation="get_instance")
         return self._instance_resource(response)
 
+    def get_image(self, image_id: str) -> dict[str, Any]:
+        escaped = quote(image_id, safe="")
+        response = self._request("GET", f"/images/{escaped}", retry=True, operation="get_image")
+        return self._image_resource(response)
+
     def delete_instance(self, linode_id: int) -> dict[str, Any]:
         self._request("DELETE", f"/linode/instances/{linode_id}", retry=False, operation="delete_instance")
         return {"linode_id": linode_id, "deleted": True}
+
+    def delete_image(self, image_id: str) -> dict[str, Any]:
+        escaped = quote(image_id, safe="")
+        self._request("DELETE", f"/images/{escaped}", retry=False, operation="delete_image")
+        return {"image_id": image_id, "deleted": True}
 
     def _preflight_resource(self, path: str, unavailable_message: str) -> None:
         try:

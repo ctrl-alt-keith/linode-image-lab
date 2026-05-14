@@ -234,10 +234,11 @@ include a sanitized `reason`; the custom image uses `deliverable`.
 
 Standalone `cleanup` is dry-run by default. Plain `cleanup` emits a
 non-mutating manifest preview and never reads `LINODE_TOKEN` or calls Linode.
-`cleanup --discover` requires `LINODE_TOKEN`, performs read-only managed Linode
-discovery, and reports expired eligible Linodes in `cleanup_candidates` without
-deleting them. `cleanup --execute` requires `LINODE_TOKEN`, performs the same
-discovery, and deletes only expired Linodes carrying all required managed tags:
+`cleanup --discover` requires `LINODE_TOKEN`, performs read-only managed
+resource discovery, and reports expired eligible Linodes and lab-owned custom
+images in `cleanup_candidates` without deleting them. `cleanup --execute`
+requires `LINODE_TOKEN`, performs the same discovery, and deletes only expired
+resources carrying all required managed tags:
 
 - `project=linode-image-lab`
 - `run_id=...`
@@ -248,10 +249,11 @@ discovery, and deletes only expired Linodes carrying all required managed tags:
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
 
-Standalone cleanup never deletes custom images, untagged resources, or broader
-account resources. Malformed TTL values, future TTL values, missing required
-tags, invalid tag values, and optional `--run-id` filter mismatches preserve
-the Linode and report a sanitized reason. Execute cleanup re-fetches each
-candidate before one DELETE attempt. A failed DELETE attempt is not retried
-blindly; it is reported as `reason=delete_status_unknown`, and later candidates
+Standalone cleanup never deletes untagged resources, broader account resources,
+or deliverable custom images with a non-default project tag. Malformed TTL
+values, future TTL values, missing required tags, invalid tag values, and
+optional `--run-id` filter mismatches preserve the resource and report a
+sanitized reason. Execute cleanup re-fetches each candidate before one DELETE
+attempt. A failed DELETE attempt is not retried blindly; it is reported as
+`reason=delete_status_unknown`, and later candidates
 are still evaluated.

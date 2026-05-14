@@ -214,20 +214,22 @@ If tags are missing or do not match, cleanup preserves the resource and records
 
 Standalone `cleanup` is also dry-run by default. Plain `cleanup` emits a local
 manifest preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
---discover` requires `LINODE_TOKEN`, lists managed Linodes, and reports expired
-eligible resources without deleting them. `cleanup --execute` requires
-`LINODE_TOKEN` and deletes only expired temporary Linodes with the complete
-required tag set. It does not delete custom images, untagged resources, or
+--discover` requires `LINODE_TOKEN`, lists managed resources, and reports
+expired eligible resources without deleting them. `cleanup --execute` requires
+`LINODE_TOKEN` and deletes only expired temporary Linodes and lab-owned custom
+images with the complete required tag set. It does not delete untagged
+resources, deliverable custom images with a non-default project tag, or
 resources with malformed or unexpired TTL values.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
-`preserved`, and `failed`. `deleted` lists temporary Linodes removed after
-required tags matched. `preserved` lists resources kept by request or kept
-because required tags did not match, with a `reason` such as `requested`,
-`tag_mismatch`, or `deliverable`. Standalone cleanup re-fetches each candidate
-before one DELETE attempt; if that attempt fails, the resource is reported in
-`failed` with `reason=delete_status_unknown` because the provider-side state
-cannot be confirmed safely. In capture-deploy, top-level cleanup is the
+`preserved`, and `failed`. `deleted` lists temporary Linodes and lab-owned
+custom images removed after required tags matched. `preserved` lists resources
+kept by request or kept because required tags did not match, with a `reason`
+such as `requested`, `tag_mismatch`, or `deliverable`. Standalone cleanup
+re-fetches each candidate before one DELETE attempt; if that attempt fails, the
+resource is reported in `failed` with `reason=delete_status_unknown` because
+the provider-side state cannot be confirmed safely. In capture-deploy,
+top-level cleanup is the
 combined summary; `capture.cleanup` and `deploy.cleanup` are the phase-specific
 results.
 

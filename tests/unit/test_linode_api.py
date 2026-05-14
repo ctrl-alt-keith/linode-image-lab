@@ -625,6 +625,55 @@ class LinodeClientTests(unittest.TestCase):
             },
         )
 
+    def test_get_image_uses_expected_path_and_maps_response(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": "private/789",
+                    "label": "lil-run-image",
+                    "status": "available",
+                    "tags": ["project=linode-image-lab"],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.get_image("private/789")
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "GET")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/images/private%2F789")
+        self.assertIsNone(getattr(requests[0], "data"))
+        self.assertEqual(
+            resource,
+            {
+                "image_id": "private/789",
+                "label": "lil-run-image",
+                "status": "available",
+                "tags": ["project=linode-image-lab"],
+            },
+        )
+
+    def test_delete_image_uses_expected_path(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse({})
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.delete_image("private/789")
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "DELETE")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/images/private%2F789")
+        self.assertIsNone(getattr(requests[0], "data"))
+        self.assertEqual(resource, {"image_id": "private/789", "deleted": True})
+
     def test_list_managed_linodes_maps_project_tagged_instances(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         responses = [
@@ -684,6 +733,63 @@ class LinodeClientTests(unittest.TestCase):
             ],
         )
         self.assertEqual([resource["linode_id"] for resource in resources], [123, 456])
+
+    def test_list_managed_images_maps_project_tagged_images(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        responses = [
+            FakeHTTPResponse(
+                {
+                    "page": 1,
+                    "pages": 2,
+                    "data": [
+                        {
+                            "id": "private/123",
+                            "label": "lil-run-image",
+                            "status": "available",
+                            "tags": ["project=linode-image-lab"],
+                        },
+                        {
+                            "id": "private/999",
+                            "label": "deliverable",
+                            "status": "available",
+                            "tags": ["project=customer-image-lab"],
+                        },
+                    ],
+                }
+            ),
+            FakeHTTPResponse(
+                {
+                    "page": 2,
+                    "pages": 2,
+                    "data": [
+                        {
+                            "id": "private/456",
+                            "label": "lil-run-image-old",
+                            "status": "available",
+                            "tags": ["project=linode-image-lab"],
+                        }
+                    ],
+                }
+            ),
+        ]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return responses.pop(0)
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resources = client.list_managed_images()
+
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                f"{API_BASE_URL}/images?page=1&page_size=100",
+                f"{API_BASE_URL}/images?page=2&page_size=100",
+            ],
+        )
+        self.assertEqual([resource["image_id"] for resource in resources], ["private/123", "private/456"])
 
     def test_wait_instance_ready_polls_until_running(self) -> None:
         client = LinodeClient(
