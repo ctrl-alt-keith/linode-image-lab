@@ -217,8 +217,8 @@ manifest preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
 --discover` requires `LINODE_TOKEN`, lists managed resources, and reports
 expired eligible resources without deleting them. `cleanup --execute` requires
 `LINODE_TOKEN` and deletes only expired temporary Linodes and lab-owned custom
-images with the complete required tag set. It does not delete untagged
-resources, deliverable custom images with a non-default project tag, or
+images with the complete required tag set. It ignores images outside the
+default lab-owned project tag and does not delete untagged resources or
 resources with malformed or unexpired TTL values.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
@@ -226,10 +226,12 @@ Cleanup manifests use the same fields across commands: `status`, `deleted`,
 custom images removed after required tags matched. `preserved` lists resources
 kept by request or kept because required tags did not match, with a `reason`
 such as `requested`, `tag_mismatch`, or `deliverable`. Standalone cleanup
-re-fetches each candidate before one DELETE attempt; if that attempt fails, the
-resource is reported in `failed` with `reason=delete_status_unknown` because
-the provider-side state cannot be confirmed safely. In capture-deploy,
-top-level cleanup is the
+re-fetches each discovered candidate before one DELETE attempt; if that attempt
+fails, the resource is reported in `failed` with
+`reason=delete_status_unknown` because the provider-side state cannot be
+confirmed safely. Only discovered lab-owned images can appear as deleted,
+preserved, or failed standalone cleanup entries. In capture-deploy, top-level
+cleanup is the
 combined summary; `capture.cleanup` and `deploy.cleanup` are the phase-specific
 results.
 

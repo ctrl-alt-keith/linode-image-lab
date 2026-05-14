@@ -59,9 +59,10 @@ In Linode scope terms, this generally means `linodes:read_write` and
 `images:read_write`, plus `firewall:read_only` when firewall preflight is
 configured, and account permissions or grants that allow Linode creation and
 tagging. Deploy execution from an existing image does not create a custom image,
-and standalone cleanup does not create or delete custom images. If tags cannot
-be applied or later verified, execution fails safely because cleanup depends on
-rediscoverable tags.
+and standalone cleanup does not create custom images. Standalone cleanup can
+delete only discovered lab-owned images with the default project tag and a
+complete expired cleanup tag set. If tags cannot be applied or later verified,
+execution fails safely because cleanup depends on rediscoverable tags.
 
 ## Public-Safety Scan
 
@@ -100,19 +101,20 @@ attempts.
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
 resources use `component=deploy`. The custom image uses separate artifact tags;
-operators can preserve deliverable images outside standalone cleanup ownership
-with a non-default `image_project_tag`. Temporary Linodes are deleted only when
-all required lifecycle tags match the current run.
+operators can place deliverable images outside standalone cleanup ownership and
+discovery with a non-default `image_project_tag`. Temporary Linodes are deleted
+only when all required lifecycle tags match the current run.
 
 Standalone `cleanup --execute` deletes only expired temporary Linodes and
 lab-owned custom images with the complete managed tag set: `project`, `run_id`,
 `mode`, `component`, and `ttl`. The `ttl` value is a project-internal cleanup
 tag used by this tool; Linode does not enforce it as a provider-side expiration
-policy. Cleanup preserves untagged resources, deliverable custom images with a
-non-default project tag, resources with missing or mismatched tags, resources
-with malformed or unexpired TTL values, and resources outside an optional
-`--run-id` filter. Preserved entries use sanitized reason strings and normal
-stdout redacts provider identifiers.
+policy. Cleanup ignores images outside the default lab-owned project tag and
+preserves discovered untagged resources, resources with missing or mismatched
+tags, resources with malformed or unexpired TTL values, and resources outside
+an optional `--run-id` filter. Only discovered lab-owned images can appear as
+deleted, preserved, or failed cleanup entries. Preserved entries use sanitized
+reason strings and normal stdout redacts provider identifiers.
 
 Transient Linode API retries are limited to read-only API calls, polling reads,
 and managed resource discovery. Cleanup DELETE requests are single-attempt

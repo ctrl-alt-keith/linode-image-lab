@@ -250,10 +250,12 @@ resources carrying all required managed tags:
 enforce it as a provider-side expiration policy.
 
 Standalone cleanup never deletes untagged resources, broader account resources,
-or deliverable custom images with a non-default project tag. Malformed TTL
-values, future TTL values, missing required tags, invalid tag values, and
-optional `--run-id` filter mismatches preserve the resource and report a
-sanitized reason. Execute cleanup re-fetches each candidate before one DELETE
+or images outside the default lab-owned project tag. Those out-of-scope images
+are ignored by standalone cleanup discovery. Malformed TTL values, future TTL
+values, missing required tags, invalid tag values, and optional `--run-id`
+filter mismatches preserve discovered resources and report a sanitized reason.
+Only discovered lab-owned images can appear as deleted, preserved, or failed
+cleanup entries. Execute cleanup re-fetches each candidate before one DELETE
 attempt. A failed DELETE attempt is not retried blindly; it is reported as
 `reason=delete_status_unknown`, and later candidates
 are still evaluated.
