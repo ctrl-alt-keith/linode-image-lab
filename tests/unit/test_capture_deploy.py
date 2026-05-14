@@ -804,12 +804,18 @@ class CaptureDeployExecutionTests(unittest.TestCase):
             client=client,
         )
 
-        self.assertEqual(client.image_tags, ["project=customer-image-lab"])
-        self.assertEqual(manifest["artifact_tags"], ["project=customer-image-lab"])
-        self.assertEqual(manifest["capture"]["custom_image"]["tags"], ["project=customer-image-lab"])
+        expected_image_tags = [
+            "project=customer-image-lab",
+            "run_id=run-test",
+            "mode=capture-deploy",
+            "component=capture",
+            "ttl=2030-01-01T00:00:00Z",
+        ]
+        self.assertEqual(client.image_tags, expected_image_tags)
+        self.assertEqual(manifest["artifact_tags"], expected_image_tags)
+        self.assertEqual(manifest["capture"]["custom_image"]["tags"], expected_image_tags)
         self.assertIn("project=linode-image-lab", client.capture_tags)
         self.assertIn("project=linode-image-lab", client.deploy_tags)
-        self.assertNotIn("run_id=run-test", client.image_tags)
 
     def test_preserve_instance_keeps_deploy_instance_only(self) -> None:
         client = FakeLinodeClient()

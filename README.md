@@ -185,8 +185,9 @@ Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 table. `[capture].image_project_tag` and
 `[capture-deploy].image_project_tag` set only the captured custom image's
 artifact-facing `project=<value>` tag; temporary Linode lifecycle tags remain
-owned by `linode-image-lab`. `image_project_tag` is config-only and has no CLI
-override.
+owned by `linode-image-lab`. A non-default image project tag places the
+captured image outside standalone cleanup ownership and discovery.
+`image_project_tag` is config-only and has no CLI override.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -249,9 +250,11 @@ still come from the environment or approved environment injection.
   resource creation.
 - Deploy user data is read only from explicit files, Base64 encoded for Linode
   `metadata.user_data`, and omitted from manifests except for safe metadata.
-- Custom images are preserved as deliverables.
+- A non-default `image_project_tag` keeps deliverable custom images outside
+  standalone cleanup ownership and discovery.
 - `cleanup` is independently runnable, dry-run by default, and can delete
-  expired tagged temporary Linodes only with `--execute`.
+  expired tagged temporary Linodes and lab-owned custom images only with
+  `--execute`.
 - Normal stdout is redacted for public-safe review.
 
 ## What This Does
@@ -323,10 +326,11 @@ LINODE_TOKEN='<your-linode-api-token>' linode-image-lab cleanup --execute
 
 Plain `cleanup` never reads `LINODE_TOKEN`, calls Linode, or deletes resources.
 `cleanup --discover` requires `LINODE_TOKEN`, performs read-only Linode
-discovery, and reports expired eligible Linodes in `cleanup_candidates` without
-deleting them. `cleanup --execute` requires `LINODE_TOKEN`, lists managed
-Linodes, and deletes only expired Linodes carrying the complete required tag
-set. Use `--run-id` to restrict discovery or deletion to one run.
+resource discovery, and reports expired eligible Linodes and lab-owned custom
+images in `cleanup_candidates` without deleting them. `cleanup --execute`
+requires `LINODE_TOKEN`, lists managed resources, and deletes only expired
+resources carrying the complete required tag set. Use `--run-id` to restrict
+discovery or deletion to one run.
 
 ## Required Tags
 
@@ -341,10 +345,13 @@ Modeled resources use rediscoverable tags:
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
 
-Captured custom images use separate artifact tags. By default the artifact tag
-is `project=linode-image-lab`; `[capture].image_project_tag` or
-`[capture-deploy].image_project_tag` can change the value after `project=`
-without changing temporary Linode cleanup ownership.
+Captured custom images use separate artifact tags with the same `run_id`,
+`mode`, `component`, and `ttl` metadata. By default the artifact project tag is
+`project=linode-image-lab`, making expired images eligible for explicit
+standalone cleanup. `[capture].image_project_tag` or
+`[capture-deploy].image_project_tag` can change the value after `project=`.
+Images outside the default lab-owned project tag are ignored by standalone
+cleanup discovery and are not deleted by standalone cleanup.
 
 ## Manifest Output
 
@@ -385,10 +392,12 @@ deleted, `preserved` means a resource was kept or skipped for safety,
 `completed` means combined cleanup finished, and `failed` means cleanup did not
 complete.
 
-Standalone `cleanup --execute` does not delete custom images, untagged
-resources, or resources with missing, malformed, unexpired, or mismatched
-managed tags. It re-fetches each candidate before a single DELETE attempt.
-Preserved and failed entries include a sanitized `reason`, such as
+Standalone `cleanup --execute` does not delete untagged resources, images
+outside the default lab-owned project tag, or resources with missing,
+malformed, unexpired, or mismatched managed tags. It re-fetches each discovered
+candidate before a single DELETE attempt. Only discovered lab-owned images can
+appear as deleted, preserved, or failed cleanup entries. Preserved and failed
+entries include `resource_type` plus a sanitized `reason`, such as
 `ttl_not_expired`, `ttl_parse_failed`, `missing_required_tags`, or
 `delete_status_unknown`.
 

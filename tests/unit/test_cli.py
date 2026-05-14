@@ -784,10 +784,13 @@ class CliTests(unittest.TestCase):
 
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(payload["artifact_tags"], ["project=customer-image-lab"])
+        self.assertEqual(payload["artifact_tags"][0], "project=customer-image-lab")
+        self.assertIn("run_id=", "\n".join(payload["artifact_tags"]))
+        self.assertIn("mode=capture", payload["artifact_tags"])
+        self.assertIn("component=capture", payload["artifact_tags"])
+        self.assertIn("ttl=", "\n".join(payload["artifact_tags"]))
         self.assertIn("project=linode-image-lab", payload["lifecycle_tags"])
         self.assertIn("run_id=", "\n".join(payload["lifecycle_tags"]))
-        self.assertNotIn("run_id=", "\n".join(payload["artifact_tags"]))
 
     def test_capture_deploy_config_accepts_image_project_tag(self) -> None:
         config_path = self.write_config(
@@ -808,7 +811,11 @@ class CliTests(unittest.TestCase):
 
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(payload["artifact_tags"], ["project=customer-image-lab"])
+        self.assertEqual(payload["artifact_tags"][0], "project=customer-image-lab")
+        self.assertIn("run_id=", "\n".join(payload["artifact_tags"]))
+        self.assertIn("mode=capture-deploy", payload["artifact_tags"])
+        self.assertIn("component=capture", payload["artifact_tags"])
+        self.assertIn("ttl=", "\n".join(payload["artifact_tags"]))
         self.assertIn("project=linode-image-lab", payload["component_tags"]["capture"])
         self.assertIn("project=linode-image-lab", payload["component_tags"]["deploy"])
 

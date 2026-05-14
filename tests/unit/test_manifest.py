@@ -50,7 +50,16 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(parsed["planned_actions"][0]["region"], "us-east")
         self.assertFalse(parsed["planned_actions"][0]["mutates"])
         self.assertEqual(parsed["tags"], parsed["lifecycle_tags"])
-        self.assertEqual(parsed["artifact_tags"], ["project=linode-image-lab"])
+        self.assertEqual(
+            parsed["artifact_tags"],
+            [
+                "project=linode-image-lab",
+                "run_id=run-test",
+                "mode=capture",
+                "component=capture",
+                "ttl=2030-01-01T00:00:00Z",
+            ],
+        )
 
     def test_legacy_tags_remain_lifecycle_compatibility_alias(self) -> None:
         manifest = {"tags": ["project=linode-image-lab", "run_id=run-test"]}
@@ -66,11 +75,32 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(lifecycle_tags_from_manifest(manifest), manifest["lifecycle_tags"])
 
     def test_generates_configured_artifact_project_tag(self) -> None:
-        self.assertEqual(generate_artifact_tags(image_project_tag="customer-image-lab"), ["project=customer-image-lab"])
+        self.assertEqual(
+            generate_artifact_tags(
+                run_id="run-test",
+                mode="capture",
+                component="capture",
+                ttl="2030-01-01T00:00:00Z",
+                image_project_tag="customer-image-lab",
+            ),
+            [
+                "project=customer-image-lab",
+                "run_id=run-test",
+                "mode=capture",
+                "component=capture",
+                "ttl=2030-01-01T00:00:00Z",
+            ],
+        )
 
     def test_rejects_artifact_project_tag_lifecycle_key_override(self) -> None:
         with self.assertRaisesRegex(ValueError, "internal lifecycle tag key: project"):
-            generate_artifact_tags(image_project_tag="project=other")
+            generate_artifact_tags(
+                run_id="run-test",
+                mode="capture",
+                component="capture",
+                ttl="2030-01-01T00:00:00Z",
+                image_project_tag="project=other",
+            )
 
     def test_validates_current_modes(self) -> None:
         for mode in ("capture", "deploy", "capture-deploy"):

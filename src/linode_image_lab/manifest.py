@@ -69,10 +69,25 @@ def normalize_image_project_tag(value: object, label: str = "image_project_tag")
     return normalized
 
 
-def generate_artifact_tags(*, image_project_tag: str | None = None) -> list[str]:
+def generate_artifact_tags(
+    *,
+    run_id: str,
+    mode: str,
+    component: str,
+    ttl: str,
+    image_project_tag: str | None = None,
+) -> list[str]:
     """Generate tags for captured custom image artifacts."""
+    validate_mode(mode)
+    validate_component(component)
     project_tag = normalize_image_project_tag(image_project_tag or PROJECT)
-    return [f"project={project_tag}"]
+    return [
+        f"project={project_tag}",
+        f"run_id={run_id}",
+        f"mode={mode}",
+        f"component={component}",
+        f"ttl={ttl}",
+    ]
 
 
 def tags_to_dict(tags: list[str] | dict[str, str]) -> dict[str, str]:
@@ -127,7 +142,13 @@ def create_manifest(
         component=manifest_component,
         ttl=manifest_ttl,
     )
-    artifact_tags = generate_artifact_tags(image_project_tag=image_project_tag)
+    artifact_tags = generate_artifact_tags(
+        run_id=manifest_run_id,
+        mode=mode,
+        component=manifest_component,
+        ttl=manifest_ttl,
+        image_project_tag=image_project_tag,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
