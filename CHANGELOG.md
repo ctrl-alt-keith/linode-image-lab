@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Add deploy config and execution support for firewall IDs, authorized SSH
+  keys, and file-based metadata user data.
+- Add bounded parallel multi-region `capture-deploy --execute`.
+- Clarify manifest lifecycle tags and configurable image project tags.
+- Add release recovery helpers and polish release-process documentation.
+- Update provider assumptions, security guidance, and redaction documentation.
+- Add CI, Dependabot, license, Makefile help, and repo workflow hygiene updates.
+- Expand unit test coverage for config, deploy, capture-deploy, provider, and
+  redaction paths.
+
 ## 0.2.0
 
 - Require Python 3.12 or newer.
@@ -12,8 +24,8 @@
 - Add structured validation results to execution manifests.
 - Add bounded retries for read/list/poll operations, including `Retry-After`
   and `X-RateLimit-Reset` support for `429` responses.
-- Add bounded parallel multi-region `capture-deploy --execute`, capturing once
-  and deploying the resulting custom image to each requested region.
+- Add sequential multi-region `capture-deploy --execute`, capturing once and
+  deploying the resulting custom image to each requested region in order.
 - Add authoritative-source checking and provider-assumptions documentation for
   public API claims.
 - Add a human-gated live smoke target with configurable smoke region.
