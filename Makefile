@@ -71,18 +71,14 @@ release-check: check-gh-env ## Run local release readiness checks for VERSION.
 		exit 1; \
 	fi
 	@$(MAKE) --no-print-directory release-notes VERSION='$(RELEASE_VERSION)' >/dev/null
-	@if [ "$$(git branch --show-current)" != "main" ]; then \
-		echo "Error: release must run from main after the release PR is merged." >&2; \
-		exit 1; \
-	fi
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Error: working tree must be clean before release." >&2; \
 		git status --short; \
 		exit 1; \
 	fi
 	@git fetch origin main >/dev/null
-	@if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]; then \
-		echo "Error: local main must match origin/main. Run 'git pull --ff-only origin main' and retry." >&2; \
+	@if ! git merge-base --is-ancestor origin/main HEAD; then \
+		echo "Error: current branch must include origin/main before release." >&2; \
 		exit 1; \
 	fi
 	@echo "Running validation: make check"
@@ -209,6 +205,20 @@ release-create-from-tag: check-gh-env ## Create a missing GitHub release from an
 	echo "Created GitHub release $(RELEASE_TAG) from existing remote tag."
 
 release-publish: release-check ## Publish VERSION as a tag and GitHub release.
+	@if [ "$$(git branch --show-current)" != "main" ]; then \
+		echo "Error: release publish must run from main after the release PR is merged." >&2; \
+		exit 1; \
+	fi
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree must be clean before release." >&2; \
+		git status --short; \
+		exit 1; \
+	fi
+	@git fetch origin main >/dev/null
+	@if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]; then \
+		echo "Error: local main must match origin/main. Run 'git pull --ff-only origin main' and retry." >&2; \
+		exit 1; \
+	fi
 	@set -e; \
 	notes_file=$$(mktemp); \
 	trap 'rm -f "$$notes_file"' EXIT; \
