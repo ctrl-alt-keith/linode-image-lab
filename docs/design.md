@@ -249,6 +249,14 @@ resources carrying all required managed tags:
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
 
+Cleanup discovery entries expose machine-readable expiration metadata derived
+from valid `ttl` tags. Expired entries include `expired_at`, the parsed UTC TTL
+timestamp, and `expired_for_seconds`, the integer number of seconds elapsed
+since expiration. Unexpired preserved entries include `expires_in_seconds`, the
+integer number of seconds remaining until expiration. Entries with
+`reason=ttl_parse_failed` omit all derived time fields. `cleanup_candidates` are
+ordered deterministically with the longest-expired candidate first.
+
 Standalone cleanup never deletes untagged resources, broader account resources,
 or images outside the default lab-owned project tag. Those out-of-scope images
 are ignored by standalone cleanup discovery. Malformed TTL values, future TTL

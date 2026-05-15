@@ -113,7 +113,9 @@ def cleanup_plan(
         manifest["resources"] = [resource_summary(resource) for resource in resources]
 
         assessments = assess_cleanup(resources, run_id=run_id, now=now)
-        manifest["cleanup_candidates"] = [item["resource"] for item in assessments if item["action"] == "delete"]
+        manifest["cleanup_candidates"] = sorted_cleanup_candidates(
+            [item["resource"] for item in assessments if item["action"] == "delete"]
+        )
         manifest["cleanup"]["preserved"] = [
             item["resource"] for item in assessments if item["action"] == "preserve"
         ]
@@ -242,11 +244,34 @@ def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: dateti
         summary["reason"] = "ttl_parse_failed"
         return {"action": "preserve", "resource": summary, "provider_id": provider_id}
     if ttl > now:
+        summary["expires_in_seconds"] = seconds_between(now, ttl)
         summary["reason"] = "ttl_not_expired"
         return {"action": "preserve", "resource": summary, "provider_id": provider_id}
 
+    summary["expired_at"] = format_utc_timestamp(ttl)
+    summary["expired_for_seconds"] = seconds_between(ttl, now)
     summary["reason"] = "expired_ttl"
     return {"action": "delete", "resource": summary, "provider_id": provider_id}
+
+
+def sorted_cleanup_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(candidates, key=cleanup_candidate_sort_key)
+
+
+def cleanup_candidate_sort_key(candidate: dict[str, Any]) -> tuple[object, ...]:
+    return (
+        -int(candidate.get("expired_for_seconds", 0)),
+        str(candidate.get("resource_type", "")),
+        str(candidate.get("linode_id", candidate.get("image_id", ""))),
+    )
+
+
+def seconds_between(start: datetime, end: datetime) -> int:
+    return int((end - start).total_seconds())
+
+
+def format_utc_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def resource_summary(resource: dict[str, Any]) -> dict[str, Any]:
