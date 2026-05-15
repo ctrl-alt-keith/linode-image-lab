@@ -164,6 +164,52 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(client.list_count, 1)
         self.assertEqual(client.image_list_count, 1)
 
+    def test_discover_reports_expiration_metadata_and_orders_longest_expired_first(self) -> None:
+        client = FakeCleanupClient(
+            [
+                linode_resource(linode_id=101, ttl="2026-05-01T00:00:00Z"),
+                linode_resource(linode_id=202, ttl="2026-04-30T23:00:00Z"),
+                linode_resource(linode_id=303, ttl="2026-05-01T01:00:00Z"),
+                linode_resource(linode_id=404, ttl="not-a-timestamp"),
+            ]
+        )
+
+        manifest = cleanup_plan(discover=True, client=client, now=NOW)
+
+        self.assertEqual([item["linode_id"] for item in manifest["cleanup_candidates"]], [202, 101])
+        self.assertEqual(
+            manifest["cleanup_candidates"][0],
+            {
+                "resource_type": "linode",
+                "linode_id": 202,
+                "label": "lil-run-test",
+                "region": "us-east",
+                "status": "running",
+                "tags": [
+                    "project=linode-image-lab",
+                    "run_id=run-test",
+                    "mode=capture-deploy",
+                    "component=capture",
+                    "ttl=2026-04-30T23:00:00Z",
+                ],
+                "expired_at": "2026-04-30T23:00:00Z",
+                "expired_for_seconds": 3600,
+                "reason": "expired_ttl",
+            },
+        )
+        self.assertEqual(manifest["cleanup_candidates"][1]["expired_at"], "2026-05-01T00:00:00Z")
+        self.assertEqual(manifest["cleanup_candidates"][1]["expired_for_seconds"], 0)
+
+        unexpired = next(item for item in manifest["cleanup"]["preserved"] if item["reason"] == "ttl_not_expired")
+        self.assertEqual(unexpired["expires_in_seconds"], 3600)
+        self.assertNotIn("expired_at", unexpired)
+        self.assertNotIn("expired_for_seconds", unexpired)
+
+        malformed = next(item for item in manifest["cleanup"]["preserved"] if item["reason"] == "ttl_parse_failed")
+        self.assertNotIn("expired_at", malformed)
+        self.assertNotIn("expired_for_seconds", malformed)
+        self.assertNotIn("expires_in_seconds", malformed)
+
     def test_execute_deletes_expired_tagged_linode(self) -> None:
         client = FakeCleanupClient([linode_resource(linode_id=456)])
 
