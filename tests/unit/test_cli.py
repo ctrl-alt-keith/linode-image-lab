@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from linode_image_lab.cli import build_parser, main
 from linode_image_lab.config import AUTHORIZED_KEYS_FILE_MAX_BYTES
+from linode_image_lab.linode_api import LinodeTokenError
 from linode_image_lab.user_data import USER_DATA_FILE_MAX_BYTES
 
 PUBLIC_KEY_ONE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA one@example"
@@ -100,6 +101,150 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(payload["command"], command)
                 self.assertEqual(payload["mode"], command)
                 self.assertTrue(payload["dry_run"])
+
+    def test_manifest_file_matches_stdout_for_supported_commands(self) -> None:
+        cases = [
+            [
+                "capture",
+                "--region",
+                "us-east",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+            ],
+            [
+                "deploy",
+                "--region",
+                "us-east",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+                "--image-id",
+                "private/789",
+                "--type",
+                "g6-nanode-1",
+            ],
+            [
+                "capture-deploy",
+                "--region",
+                "us-east",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+                "--source-image",
+                "linode/debian12",
+                "--type",
+                "g6-nanode-1",
+            ],
+            [
+                "cleanup",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+            ],
+        ]
+
+        for argv in cases:
+            with self.subTest(command=argv[0]):
+                directory = tempfile.TemporaryDirectory()
+                self.addCleanup(directory.cleanup)
+                manifest_path = Path(directory.name) / "manifest.json"
+                output = StringIO()
+
+                with redirect_stdout(output):
+                    code = main([*argv, "--manifest-file", str(manifest_path)])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(manifest_path.read_text(encoding="utf-8"), output.getvalue())
+                self.assertEqual(json.loads(output.getvalue())["command"], argv[0])
+
+    def test_manifest_file_dash_uses_stdout_only(self) -> None:
+        output = StringIO()
+
+        with redirect_stdout(output):
+            code = main(["cleanup", "--manifest-file", "-"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())["command"], "cleanup")
+
+    def test_manifest_file_missing_parent_fails_before_mutation(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manifest_path = Path(directory.name) / "missing" / "manifest.json"
+        output = StringIO()
+        error = StringIO()
+
+        with (
+            patch("linode_image_lab.capture.LinodeClient.from_env", side_effect=AssertionError("token lookup")) as token,
+            redirect_stdout(output),
+            redirect_stderr(error),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main(
+                [
+                    "capture",
+                    "--execute",
+                    "--region",
+                    "us-east",
+                    "--source-image",
+                    "linode/debian12",
+                    "--type",
+                    "g6-nanode-1",
+                    "--manifest-file",
+                    str(manifest_path),
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("--manifest-file parent directory does not exist", error.getvalue())
+        token.assert_not_called()
+
+    def test_manifest_file_persists_partial_failure_manifest(self) -> None:
+        class InvalidTokenClient:
+            def preflight(self) -> None:
+                raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API")
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manifest_path = Path(directory.name) / "failed-manifest.json"
+        output = StringIO()
+        error = StringIO()
+
+        with (
+            patch("linode_image_lab.capture.LinodeClient.from_env", return_value=InvalidTokenClient()),
+            redirect_stdout(output),
+            redirect_stderr(error),
+        ):
+            code = main(
+                [
+                    "capture",
+                    "--execute",
+                    "--region",
+                    "us-east",
+                    "--run-id",
+                    "run-test",
+                    "--ttl",
+                    "2030-01-01T00:00:00Z",
+                    "--source-image",
+                    "linode/debian12",
+                    "--type",
+                    "g6-nanode-1",
+                    "--manifest-file",
+                    str(manifest_path),
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(manifest_path.read_text(encoding="utf-8"), output.getvalue())
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["steps"][0]["name"], "preflight_api_access")
+        self.assertIn("capture --execute failed", error.getvalue())
 
     def test_legacy_commands_are_not_retained(self) -> None:
         legacy_commands = ("fr" + "eeze", "th" + "aw", "fr" + "eeze-" + "th" + "aw")

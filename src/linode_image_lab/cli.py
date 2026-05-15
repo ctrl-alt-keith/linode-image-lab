@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -83,6 +85,13 @@ def add_user_data_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--user-data-file",
         help="Explicit file containing deploy user data to send as Linode metadata.user_data.",
+    )
+
+
+def add_manifest_file_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--manifest-file",
+        help="Optional path for an atomic copy of the redacted JSON manifest. Use '-' for stdout only.",
     )
 
 
@@ -166,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_config_arg(capture, dest="command_config")
     add_region_args(capture, required=True)
     capture.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    add_manifest_file_arg(capture)
     capture.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
     capture.add_argument("--type", dest="instance_type", help="Linode type for the temporary capture Linode.")
     capture.add_argument("--image-label", help="Optional label for the captured custom image.")
@@ -180,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_config_arg(deploy, dest="command_config")
     add_region_args(deploy, required=True)
     deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    add_manifest_file_arg(deploy)
     deploy.add_argument("--image-id", help="Custom image id for the temporary deploy Linode.")
     deploy.add_argument("--type", dest="instance_type", help="Linode type for the temporary deploy Linode.")
     add_firewall_arg(deploy)
@@ -196,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_config_arg(capture_deploy, dest="command_config")
     add_region_args(capture_deploy, required=True)
     capture_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    add_manifest_file_arg(capture_deploy)
     capture_deploy.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
     capture_deploy.add_argument(
         "--type",
@@ -217,6 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_mode = cleanup.add_mutually_exclusive_group()
     cleanup_mode.add_argument("--discover", action="store_true", help="Opt into read-only Linode resource discovery.")
     cleanup_mode.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
+    add_manifest_file_arg(cleanup)
     cleanup.add_argument("--run-id", help="Optional run id filter for cleanup selection.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
@@ -443,10 +456,89 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
     raise ValueError(f"unsupported command: {args.command}")
 
 
+def manifest_file_path(args: argparse.Namespace) -> Path | None:
+    value = getattr(args, "manifest_file", None)
+    if value in (None, "-"):
+        return None
+    return Path(value)
+
+
+def preflight_manifest_file(args: argparse.Namespace) -> None:
+    path = manifest_file_path(args)
+    if path is None:
+        return
+
+    parent = path.parent if path.parent != Path("") else Path(".")
+    if not parent.exists():
+        raise ValueError(f"--manifest-file parent directory does not exist: {parent}")
+    if not parent.is_dir():
+        raise ValueError(f"--manifest-file parent path is not a directory: {parent}")
+    if path.exists() and path.is_dir():
+        raise ValueError(f"--manifest-file path is a directory: {path}")
+
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write("")
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+    except OSError as exc:
+        raise ValueError(f"--manifest-file path is not writable: {path}") from exc
+    finally:
+        if temp_path is not None:
+            try:
+                Path(temp_path).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def write_manifest_file(args: argparse.Namespace, serialized: str) -> None:
+    path = manifest_file_path(args)
+    if path is None:
+        return
+
+    parent = path.parent if path.parent != Path("") else Path(".")
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(serialized)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                Path(temp_path).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def emit_manifest(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
+    serialized = serialize_manifest(manifest)
+    write_manifest_file(args, serialized)
+    sys.stdout.write(serialized)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        preflight_manifest_file(args)
         if args.command == "config":
             manifest = config_validate_manifest(args)
         else:
@@ -454,31 +546,31 @@ def main(argv: list[str] | None = None) -> int:
             manifest = command_manifest(args)
     except CaptureError as exc:
         if exc.manifest is not None:
-            sys.stdout.write(serialize_manifest(exc.manifest))
+            emit_manifest(args, exc.manifest)
             sys.stderr.write("capture --execute failed\n")
             return 1
         parser.error(str(exc))
     except DeployError as exc:
         if exc.manifest is not None:
-            sys.stdout.write(serialize_manifest(exc.manifest))
+            emit_manifest(args, exc.manifest)
             sys.stderr.write("deploy --execute failed\n")
             return 1
         parser.error(str(exc))
     except CaptureDeployError as exc:
         if exc.manifest is not None:
-            sys.stdout.write(serialize_manifest(exc.manifest))
+            emit_manifest(args, exc.manifest)
             sys.stderr.write("capture-deploy --execute failed\n")
             return 1
         parser.error(str(exc))
     except CleanupError as exc:
         if exc.manifest is not None:
-            sys.stdout.write(serialize_manifest(exc.manifest))
+            emit_manifest(args, exc.manifest)
             sys.stderr.write(f"{exc}\n")
             return 1
         parser.error(str(exc))
     except (ConfigError, ValueError) as exc:
         parser.error(str(exc))
-    sys.stdout.write(serialize_manifest(manifest))
+    emit_manifest(args, manifest)
     return 0
 
 
