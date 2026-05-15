@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add TTL-aware lab artifact tags to custom images produced during capture
+  flows so cleanup can identify expired image artifacts.
+- Extend cleanup discovery to include expired lab-owned custom images and allow
+  standalone `cleanup --execute` to delete those disposable artifacts.
+- Preserve cleanup ownership boundaries when `image_project_tag` is customized
+  by selecting only matching lab-owned images and skipping untagged, malformed,
+  mismatched, or deliverable-tagged images.
+
 ## 0.3.0
 
 - Add deploy config and execution support for firewall IDs, authorized SSH
