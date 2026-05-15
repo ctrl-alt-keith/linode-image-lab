@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .linode_api import LinodeClient, LinodeClientProtocol
-from .manifest import PROJECT, REQUIRED_TAG_KEYS, VALID_COMPONENTS, VALID_MODES, tags_to_dict
+from .manifest import PROJECT, REQUIRED_TAG_KEYS, VALID_COMPONENTS, VALID_MODES, tags_to_dict, validate_run_id
 
 IMAGE_CLEANUP_COMPONENTS = {"capture"}
 
@@ -49,6 +49,8 @@ def is_cleanup_candidate(resource: dict[str, Any], *, now: datetime | None = Non
         return False
     if tags["project"] != PROJECT:
         return False
+    if not has_valid_run_id(tags["run_id"]):
+        return False
     if tags["mode"] not in VALID_MODES:
         return False
     if tags["component"] not in VALID_COMPONENTS:
@@ -81,6 +83,8 @@ def cleanup_plan(
     client: LinodeClientProtocol | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    if run_id is not None:
+        validate_run_id(run_id)
     options = CleanupOptions(run_id=run_id, ttl=ttl, discover=discover, execute=execute)
     manifest = base_cleanup_manifest(options)
     if not discover and not execute:
@@ -229,6 +233,9 @@ def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: dateti
     if tags["project"] != PROJECT:
         summary["reason"] = "tag_mismatch"
         return {"action": "preserve", "resource": summary, "provider_id": provider_id}
+    if not has_valid_run_id(tags["run_id"]):
+        summary["reason"] = "invalid_run_id"
+        return {"action": "preserve", "resource": summary, "provider_id": provider_id}
     if run_id is not None and tags["run_id"] != run_id:
         summary["reason"] = "run_id_filter_mismatch"
         return {"action": "preserve", "resource": summary, "provider_id": provider_id}
@@ -272,6 +279,14 @@ def seconds_between(start: datetime, end: datetime) -> int:
 
 def format_utc_timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def has_valid_run_id(value: str) -> bool:
+    try:
+        validate_run_id(value)
+    except ValueError:
+        return False
+    return True
 
 
 def resource_summary(resource: dict[str, Any]) -> dict[str, Any]:

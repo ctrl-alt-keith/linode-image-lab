@@ -26,7 +26,7 @@ from .config import (
     normalize_authorized_key,
 )
 from .deploy import DeployError, deploy_plan
-from .manifest import PROJECT, create_manifest, serialize_manifest
+from .manifest import PROJECT, create_manifest, serialize_manifest, validate_run_id
 from .regions import parse_regions
 
 PACKAGE_NAME = "linode-image-lab"
@@ -56,7 +56,7 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
         required=False,
         help="Linode region id. May be repeated or comma-separated.",
     )
-    parser.add_argument("--run-id", help="Optional run id for deterministic planning.")
+    parser.add_argument("--run-id", type=run_id_value, help="Optional run id for deterministic planning.")
     parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
 
@@ -106,6 +106,13 @@ def authorized_key_value(value: str) -> str:
     try:
         return normalize_authorized_key(value, "--authorized-key")
     except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def run_id_value(value: str) -> str:
+    try:
+        return validate_run_id(value, "--run-id")
+    except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
@@ -230,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_mode.add_argument("--discover", action="store_true", help="Opt into read-only Linode resource discovery.")
     cleanup_mode.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
     add_manifest_file_arg(cleanup)
-    cleanup.add_argument("--run-id", help="Optional run id filter for cleanup selection.")
+    cleanup.add_argument("--run-id", type=run_id_value, help="Optional run id filter for cleanup selection.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
     return parser

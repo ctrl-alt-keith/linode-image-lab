@@ -246,6 +246,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["steps"][0]["name"], "preflight_api_access")
         self.assertIn("capture --execute failed", error.getvalue())
 
+    def test_invalid_run_id_fails_before_manifest_generation(self) -> None:
+        cases = (
+            ("plan", ["plan", "--region", "us-east"]),
+            ("capture", ["capture", "--region", "us-east"]),
+            ("deploy", ["deploy", "--region", "us-east"]),
+            ("capture-deploy", ["capture-deploy", "--region", "us-east"]),
+            ("cleanup", ["cleanup"]),
+        )
+        for command, args in cases:
+            with self.subTest(command=command):
+                error = StringIO()
+                with (
+                    patch("linode_image_lab.cli.command_manifest", side_effect=AssertionError("manifest generation")),
+                    redirect_stderr(error),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    main([*args, "--run-id", "run=private"])
+
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("--run-id must be 1-64 characters", error.getvalue())
+                self.assertNotIn("run=private", error.getvalue())
+
     def test_legacy_commands_are_not_retained(self) -> None:
         legacy_commands = ("fr" + "eeze", "th" + "aw", "fr" + "eeze-" + "th" + "aw")
         for command in legacy_commands:

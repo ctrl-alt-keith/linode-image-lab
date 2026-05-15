@@ -257,6 +257,13 @@ integer number of seconds remaining until expiration. Entries with
 `reason=ttl_parse_failed` omit all derived time fields. `cleanup_candidates` are
 ordered deterministically with the longest-expired candidate first.
 
+Explicit `--run-id` values must match
+`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`: 1 to 64 characters, starting with a
+letter or digit, followed only by letters, digits, dot, underscore, or hyphen.
+The CLI validates supplied run IDs before manifest generation, discovery, or
+execution. Cleanup applies the same validator to discovered `run_id` tags and
+preserves resources whose run ID tag is malformed.
+
 Standalone cleanup never deletes untagged resources, broader account resources,
 or images outside the default lab-owned project tag. Those out-of-scope images
 are ignored by standalone cleanup discovery. Malformed TTL values, future TTL
