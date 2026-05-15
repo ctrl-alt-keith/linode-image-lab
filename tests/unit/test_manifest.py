@@ -10,6 +10,7 @@ from linode_image_lab.manifest import (
     lifecycle_tags_from_manifest,
     serialize_manifest,
     validate_mode,
+    validate_run_id,
 )
 
 
@@ -32,6 +33,45 @@ class ManifestTests(unittest.TestCase):
                 "ttl=2030-01-01T00:00:00Z",
             ],
         )
+
+    def test_validates_supported_run_ids(self) -> None:
+        valid_run_ids = (
+            "run-test",
+            "run_test.01",
+            "run-m3-smoke",
+            "A",
+            "a" * 64,
+        )
+
+        for run_id in valid_run_ids:
+            with self.subTest(run_id=run_id):
+                self.assertEqual(validate_run_id(run_id), run_id)
+
+    def test_rejects_invalid_run_ids(self) -> None:
+        invalid_run_ids = (
+            "",
+            " run",
+            "run test",
+            "run,test",
+            "run=test",
+            "-run",
+            "a" * 65,
+            "run\nid",
+        )
+
+        for run_id in invalid_run_ids:
+            with self.subTest(run_id=run_id):
+                with self.assertRaisesRegex(ValueError, "run_id must be 1-64 characters"):
+                    validate_run_id(run_id)
+
+    def test_tag_generation_rejects_invalid_run_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "run_id must be 1-64 characters"):
+            generate_tags(
+                run_id="run,bad",
+                mode="capture",
+                component="capture",
+                ttl="2030-01-01T00:00:00Z",
+            )
 
     def test_creates_serializable_manifest(self) -> None:
         manifest = create_manifest(

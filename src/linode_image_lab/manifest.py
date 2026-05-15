@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,8 @@ VALID_MODES = {"capture", "deploy", "capture-deploy"}
 VALID_COMPONENTS = {"capture", "deploy"}
 REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
 RESERVED_TAG_KEYS = frozenset((*REQUIRED_TAG_KEYS, "lifecycle"))
+RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+RUN_ID_RE = re.compile(RUN_ID_PATTERN)
 
 
 def utc_now() -> datetime:
@@ -44,8 +47,18 @@ def validate_component(component: str) -> str:
     return component
 
 
+def validate_run_id(value: str, label: str = "run_id") -> str:
+    if not isinstance(value, str) or RUN_ID_RE.fullmatch(value) is None:
+        raise ValueError(
+            f"{label} must be 1-64 characters, start with a letter or digit, "
+            "and contain only letters, digits, dot, underscore, or hyphen"
+        )
+    return value
+
+
 def generate_tags(*, run_id: str, mode: str, component: str, ttl: str) -> list[str]:
     """Generate rediscoverable tags for every modeled resource."""
+    validate_run_id(run_id)
     validate_mode(mode)
     validate_component(component)
     return [
@@ -78,6 +91,7 @@ def generate_artifact_tags(
     image_project_tag: str | None = None,
 ) -> list[str]:
     """Generate tags for captured custom image artifacts."""
+    validate_run_id(run_id)
     validate_mode(mode)
     validate_component(component)
     project_tag = normalize_image_project_tag(image_project_tag or PROJECT)
@@ -132,7 +146,7 @@ def create_manifest(
         raise ValueError("at least one non-empty --region is required")
 
     created_at = format_timestamp(utc_now())
-    manifest_run_id = run_id or f"run-{uuid4().hex[:12]}"
+    manifest_run_id = validate_run_id(run_id) if run_id is not None else f"run-{uuid4().hex[:12]}"
     manifest_ttl = ttl or default_ttl()
     manifest_component = component or component_for_mode(mode)
     validate_component(manifest_component)

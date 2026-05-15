@@ -135,6 +135,21 @@ class CleanupSelectionTests(unittest.TestCase):
 
         self.assertEqual([resource["id"] for resource in selected], ["resource-expired"])
 
+    def test_select_cleanup_candidates_rejects_invalid_run_id_tag(self) -> None:
+        resource = linode_resource()
+        resource["id"] = "resource-invalid-run-id"
+        resource["tags"] = [
+            "project=linode-image-lab",
+            "run_id=run,bad",
+            "mode=capture-deploy",
+            "component=capture",
+            "ttl=2026-01-01T00:00:00Z",
+        ]
+
+        selected = select_cleanup_candidates([resource], now=NOW)
+
+        self.assertEqual(selected, [])
+
     def test_plain_cleanup_does_not_discover_or_delete(self) -> None:
         client = FakeCleanupClient([linode_resource()])
 
@@ -413,6 +428,32 @@ class CleanupSelectionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "tag_mismatch")
+
+    def test_invalid_discovered_run_id_is_preserved(self) -> None:
+        resource = linode_resource()
+        resource["tags"] = [
+            "project=linode-image-lab",
+            "run_id=run=bad",
+            "mode=capture-deploy",
+            "component=capture",
+            "ttl=2026-01-01T00:00:00Z",
+        ]
+        client = FakeCleanupClient([resource])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "invalid_run_id")
+
+    def test_invalid_run_id_filter_fails_before_discovery(self) -> None:
+        client = FakeCleanupClient([linode_resource()])
+
+        with self.assertRaisesRegex(ValueError, "run_id must be 1-64 characters"):
+            cleanup_plan(run_id="run=bad", discover=True, client=client, now=NOW)
+
+        self.assertEqual(client.preflight_count, 0)
+        self.assertEqual(client.list_count, 0)
+        self.assertEqual(client.image_list_count, 0)
 
     def test_artifact_project_tag_is_not_cleanup_ownership(self) -> None:
         resource = linode_resource()
