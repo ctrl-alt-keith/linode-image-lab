@@ -256,6 +256,9 @@ still come from the environment or approved environment injection.
   expired tagged temporary Linodes and lab-owned custom images only with
   `--execute`.
 - Normal stdout is redacted for public-safe review.
+- `--manifest-file PATH` writes an atomic copy of the same redacted manifest
+  emitted on stdout for `capture`, `deploy`, `capture-deploy`, and `cleanup`;
+  `--manifest-file -` keeps stdout-only behavior.
 
 ## What This Does
 
@@ -364,6 +367,10 @@ custom image identity as `artifact_tags`; the legacy top-level `tags` field is
 kept as a compatibility alias for `lifecycle_tags`. Consumers should treat
 `lifecycle_tags` as the cleanup/validation tag contract and must not treat
 `tags` as captured custom image tags.
+Use `--manifest-file PATH` with `capture`, `deploy`, `capture-deploy`, or
+`cleanup` to persist the exact redacted JSON string emitted on stdout. The
+parent directory must already exist, and partial failure manifests are written
+when execution has a manifest to report.
 Multi-region `capture-deploy --execute` emits one combined manifest with
 top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each
