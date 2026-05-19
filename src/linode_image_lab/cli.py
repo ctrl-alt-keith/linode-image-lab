@@ -26,6 +26,7 @@ from .config import (
     normalize_authorized_key,
 )
 from .deploy import DeployError, deploy_plan
+from .firewall_sync import FirewallSyncError, firewall_sync_plan
 from .manifest import PROJECT, create_manifest, serialize_manifest, validate_run_id
 from .regions import parse_regions
 
@@ -85,6 +86,23 @@ def add_user_data_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--user-data-file",
         help="Explicit file containing deploy user data to send as Linode metadata.user_data.",
+    )
+
+
+def add_registry_firewall_sync_args(parser: argparse.ArgumentParser) -> None:
+    add_firewall_arg(parser)
+    parser.add_argument("--registry-endpoint-url", help="Linode Object Storage HTTPS endpoint URL.")
+    parser.add_argument("--registry-bucket", help="Object Storage bucket containing the trusted registry.")
+    parser.add_argument("--registry-object-key", help="Object Storage object key for the trusted registry JSON.")
+    parser.add_argument("--registry-region", help="Optional Object Storage signing region.")
+    parser.add_argument(
+        "--protocol",
+        help="Managed inbound firewall rule protocol. Defaults to TCP.",
+    )
+    parser.add_argument("--ports", help="Managed inbound firewall rule ports for TCP or UDP.")
+    parser.add_argument(
+        "--managed-label",
+        help="Exact Linode firewall rule label owned by this sync.",
     )
 
 
@@ -240,6 +258,16 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--run-id", type=run_id_value, help="Optional run id filter for cleanup selection.")
     cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
+    firewall_sync = subparsers.add_parser(
+        "firewall-sync",
+        help="Sync a managed Linode firewall allowlist rule from a trusted registry.",
+    )
+    add_version_arg(firewall_sync, version_text)
+    add_config_arg(firewall_sync, dest="command_config")
+    firewall_sync.add_argument("--execute", action="store_true", help="Opt into Linode firewall rule mutation.")
+    add_manifest_file_arg(firewall_sync)
+    add_registry_firewall_sync_args(firewall_sync)
+
     return parser
 
 
@@ -253,7 +281,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
         if not parse_regions(args.region):
             raise ValueError("at least one non-empty --region is required")
 
-    if args.ttl is None and "ttl" in defaults:
+    if hasattr(args, "ttl") and args.ttl is None and "ttl" in defaults:
         args.ttl = defaults["ttl"]
 
     if args.command in {"capture", "capture-deploy"}:
@@ -279,6 +307,32 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
         args.user_data = resolved_user_data(defaults, args)
+
+    if args.command == "firewall-sync":
+        for field in (
+            "firewall_id",
+            "registry_endpoint_url",
+            "registry_bucket",
+            "registry_object_key",
+            "registry_region",
+            "protocol",
+            "ports",
+            "managed_label",
+        ):
+            if getattr(args, field) is None and field in defaults:
+                setattr(args, field, defaults[field])
+        missing = [
+            option
+            for field, option in (
+                ("firewall_id", "--firewall-id"),
+                ("registry_endpoint_url", "--registry-endpoint-url"),
+                ("registry_bucket", "--registry-bucket"),
+                ("registry_object_key", "--registry-object-key"),
+            )
+            if getattr(args, field) is None
+        ]
+        if missing:
+            raise ValueError(f"firewall-sync requires {', '.join(missing)}")
 
 
 def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
@@ -321,6 +375,13 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "type": args.instance_type,
         "firewall_id": args.firewall_id,
         "user_data": args.user_data_file,
+        "registry_endpoint_url": getattr(args, "registry_endpoint_url", None),
+        "registry_bucket": getattr(args, "registry_bucket", None),
+        "registry_object_key": getattr(args, "registry_object_key", None),
+        "registry_region": getattr(args, "registry_region", None),
+        "protocol": getattr(args, "protocol", None),
+        "ports": getattr(args, "ports", None),
+        "managed_label": getattr(args, "managed_label", None),
     }
     option_names = {
         "regions": "--region",
@@ -460,6 +521,20 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             execute=args.execute,
         )
 
+    if args.command == "firewall-sync":
+        return firewall_sync_plan(
+            firewall_id=args.firewall_id,
+            registry_endpoint_url=args.registry_endpoint_url,
+            registry_bucket=args.registry_bucket,
+            registry_object_key=args.registry_object_key,
+            registry_region=args.registry_region,
+            protocol=args.protocol or "TCP",
+            ports=args.ports,
+            managed_label=args.managed_label or "tnr-allowlist",
+            execute=args.execute,
+            plan_reporter=sys.stderr.write,
+        )
+
     raise ValueError(f"unsupported command: {args.command}")
 
 
@@ -570,6 +645,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         parser.error(str(exc))
     except CleanupError as exc:
+        if exc.manifest is not None:
+            emit_manifest(args, exc.manifest)
+            sys.stderr.write(f"{exc}\n")
+            return 1
+        parser.error(str(exc))
+    except FirewallSyncError as exc:
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)
             sys.stderr.write(f"{exc}\n")

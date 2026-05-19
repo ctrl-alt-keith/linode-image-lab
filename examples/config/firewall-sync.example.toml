@@ -1,0 +1,8 @@
+schema_version = 1
+
+[firewall-sync]
+firewall_id = 12345
+registry_endpoint_url = "https://us-east-1.linodeobjects.com"
+registry_bucket = "example-bucket"
+registry_object_key = "registry.json"
+ports = "22"

@@ -44,6 +44,10 @@ class LinodeClientProtocol(Protocol):
 
     def preflight_firewall(self, firewall_id: int) -> None: ...
 
+    def get_firewall_rules(self, firewall_id: int) -> dict[str, Any]: ...
+
+    def update_firewall_rules(self, firewall_id: int, rules: dict[str, Any]) -> dict[str, Any]: ...
+
     def create_instance(
         self,
         *,
@@ -144,6 +148,25 @@ class LinodeClient:
     def preflight_firewall(self, firewall_id: int) -> None:
         escaped = quote(str(firewall_id), safe="")
         self._preflight_resource(f"/networking/firewalls/{escaped}", "requested firewall is unavailable")
+
+    def get_firewall_rules(self, firewall_id: int) -> dict[str, Any]:
+        escaped = quote(str(firewall_id), safe="")
+        return self._request(
+            "GET",
+            f"/networking/firewalls/{escaped}/rules",
+            retry=True,
+            operation="get_firewall_rules",
+        )
+
+    def update_firewall_rules(self, firewall_id: int, rules: dict[str, Any]) -> dict[str, Any]:
+        escaped = quote(str(firewall_id), safe="")
+        return self._request(
+            "PUT",
+            f"/networking/firewalls/{escaped}/rules",
+            rules,
+            retry=False,
+            operation="update_firewall_rules",
+        )
 
     def create_instance(
         self,

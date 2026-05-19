@@ -141,6 +141,36 @@ class LinodeClientTests(unittest.TestCase):
         self.assertNotIn("12345", str(raised.exception))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
+    def test_firewall_rules_get_and_update_use_documented_paths(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+        payload = {
+            "inbound": [],
+            "outbound": [],
+            "inbound_policy": "DROP",
+            "outbound_policy": "ACCEPT",
+        }
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(payload)
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            fetched = client.get_firewall_rules(12345)
+            updated = client.update_firewall_rules(12345, payload)
+
+        self.assertEqual(fetched, payload)
+        self.assertEqual(updated, payload)
+        self.assertEqual([request.get_method() for request in requests], ["GET", "PUT"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                f"{API_BASE_URL}/networking/firewalls/12345/rules",
+                f"{API_BASE_URL}/networking/firewalls/12345/rules",
+            ],
+        )
+        self.assertEqual(request_payload(requests[1]), payload)
+
     def test_read_retries_transient_http_failures_with_deterministic_backoff(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,

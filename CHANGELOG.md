@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `firewall-sync` to consume a private trusted network registry and sync
+  one managed Linode firewall allowlist rule with dry-run-first behavior.
 - Add TTL-aware lab artifact tags to custom images produced during capture
   flows so cleanup can identify expired image artifacts.
 - Extend cleanup discovery to include expired lab-owned custom images and allow
