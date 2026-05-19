@@ -12,7 +12,7 @@ The command is dry-run by default. It mutates the firewall only when
 Non-secret inputs can come from CLI flags or `[firewall-sync]` config:
 
 - `firewall_id`
-- `registry_endpoint_url`
+- `registry_endpoint_url`, HTTPS only
 - `registry_bucket`
 - `registry_object_key`
 - `registry_region`, optional when the region can be inferred from the endpoint

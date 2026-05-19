@@ -91,6 +91,41 @@ class TrustedRegistryTests(unittest.TestCase):
         self.assertEqual(requests[0].full_url, "https://us-east-1.linodeobjects.com/example-bucket/registry.json")
         self.assertIn("AWS4-HMAC-SHA256", requests[0].get_header("Authorization"))
 
+    def test_https_endpoint_is_accepted(self) -> None:
+        with patch("linode_image_lab.trusted_registry.urlopen", return_value=FakeHTTPResponse(registry_payload())):
+            payload = fetch_registry_from_object_storage(
+                endpoint_url="https://us-east-1.linodeobjects.com/",
+                bucket="example-bucket",
+                object_key="registry.json",
+                environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+            )
+
+        self.assertEqual(payload["schema_version"], 1)
+
+    def test_http_endpoint_is_rejected_before_fetch(self) -> None:
+        with patch("linode_image_lab.trusted_registry.urlopen") as fetch:
+            with self.assertRaisesRegex(RegistryFetchError, "must use https"):
+                fetch_registry_from_object_storage(
+                    endpoint_url="http://us-east-1.linodeobjects.com",
+                    bucket="example-bucket",
+                    object_key="registry.json",
+                    environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+                )
+
+        fetch.assert_not_called()
+
+    def test_endpoint_with_path_is_rejected_before_fetch(self) -> None:
+        with patch("linode_image_lab.trusted_registry.urlopen") as fetch:
+            with self.assertRaisesRegex(RegistryFetchError, "endpoint URL is invalid"):
+                fetch_registry_from_object_storage(
+                    endpoint_url="https://us-east-1.linodeobjects.com/prefix",
+                    bucket="example-bucket",
+                    object_key="registry.json",
+                    environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+                )
+
+        fetch.assert_not_called()
+
     def test_registry_fetch_failure_fails_closed(self) -> None:
         error = HTTPError("https://example.invalid", 403, "forbidden", {}, None)
         self.addCleanup(error.close)

@@ -237,7 +237,7 @@ values, passwords, private SSH keys, inline cloud-init data, `execute`,
 still come from the environment or approved environment injection.
 
 `firewall-sync` adds non-secret registry fields under `[firewall-sync]`:
-`registry_endpoint_url`, `registry_bucket`, `registry_object_key`,
+`registry_endpoint_url` (HTTPS only), `registry_bucket`, `registry_object_key`,
 `registry_region`, `protocol`, `ports`, and `managed_label`. Object Storage
 credentials must come only from `LINODE_OBJ_ACCESS_KEY` and
 `LINODE_OBJ_SECRET_KEY`.

@@ -91,7 +91,7 @@ def add_user_data_arg(parser: argparse.ArgumentParser) -> None:
 
 def add_registry_firewall_sync_args(parser: argparse.ArgumentParser) -> None:
     add_firewall_arg(parser)
-    parser.add_argument("--registry-endpoint-url", help="Linode Object Storage endpoint URL.")
+    parser.add_argument("--registry-endpoint-url", help="Linode Object Storage HTTPS endpoint URL.")
     parser.add_argument("--registry-bucket", help="Object Storage bucket containing the trusted registry.")
     parser.add_argument("--registry-object-key", help="Object Storage object key for the trusted registry JSON.")
     parser.add_argument("--registry-region", help="Optional Object Storage signing region.")

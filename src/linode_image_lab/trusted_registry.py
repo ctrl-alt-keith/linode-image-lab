@@ -159,7 +159,9 @@ def _required_env_value(environ: Mapping[str, str], name: str) -> str:
 
 def _parse_endpoint(endpoint_url: str) -> ParseResult:
     parsed = urlparse(endpoint_url)
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc or parsed.path not in {"", "/"}:
+    if parsed.scheme != "https":
+        raise RegistryFetchError("registry Object Storage endpoint URL must use https")
+    if not parsed.netloc or parsed.path not in {"", "/"}:
         raise RegistryFetchError("registry Object Storage endpoint URL is invalid")
     return parsed
 
