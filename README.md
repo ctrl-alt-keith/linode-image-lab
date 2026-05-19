@@ -15,7 +15,8 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 Requires Python 3.12 or newer.
 
 Set `LINODE_TOKEN` first; execute mode reads it from the environment.
-Plain dry-run commands do not need it.
+Plain dry-run commands do not need it, except `firewall-sync` because it reads
+the target firewall before planning changes.
 
 ```sh
 python3 -m venv .venv
@@ -178,7 +179,8 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 ```
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
-`[deploy]`, `[capture-deploy]`, and `[cleanup]` tables. Supported values are
+`[deploy]`, `[capture-deploy]`, `[cleanup]`, and `[firewall-sync]` tables.
+Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
 `authorized_keys_file`, and `user_data_file`, depending on the command and
@@ -234,11 +236,45 @@ values, passwords, private SSH keys, inline cloud-init data, `execute`,
 `cleanup --discover` must still be passed explicitly, and `LINODE_TOKEN` must
 still come from the environment or approved environment injection.
 
+`firewall-sync` adds non-secret registry fields under `[firewall-sync]`:
+`registry_endpoint_url`, `registry_bucket`, `registry_object_key`,
+`registry_region`, `protocol`, `ports`, and `managed_label`. Object Storage
+credentials must come only from `LINODE_OBJ_ACCESS_KEY` and
+`LINODE_OBJ_SECRET_KEY`.
+
+## Trusted Registry Firewall Sync
+
+`firewall-sync` consumes a private Trusted Network Registry JSON document from
+Linode Object Storage and plans one managed inbound allow rule on an existing
+Linode Cloud Firewall. It validates the registry before use, rejects stale
+registries, supports IPv4 and IPv6 CIDRs, rejects universal allow CIDRs, and
+does not fall back to stale or local defaults.
+
+Dry-run example:
+
+```sh
+export LINODE_TOKEN='<linode-api-token>'
+export LINODE_OBJ_ACCESS_KEY='<object-storage-access-key>'
+export LINODE_OBJ_SECRET_KEY='<object-storage-secret-key>'
+linode-image-lab --config examples/config/firewall-sync.example.toml firewall-sync
+```
+
+Execute requires an explicit flag:
+
+```sh
+linode-image-lab --config examples/config/firewall-sync.example.toml firewall-sync --execute
+```
+
+The managed firewall rule is identified by exact label and description. Rules
+outside that marker are preserved; ambiguous ownership fails closed. See
+[docs/trusted-registry-firewall-sync.md](docs/trusted-registry-firewall-sync.md)
+for rollback notes, stale-registry behavior, and log-safety cautions.
+
 ## Behavior Clarifications
 
 - All commands are dry-run by default.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`,
-  `capture-deploy`, and `cleanup`.
+  `capture-deploy`, `cleanup`, and `firewall-sync`.
 - Provider behavior assumptions are tracked in
   [docs/provider-assumptions.md](docs/provider-assumptions.md).
 - Scalar config values fill omitted command options; CLI scalar flags override

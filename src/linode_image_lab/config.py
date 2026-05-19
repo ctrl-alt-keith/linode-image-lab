@@ -25,6 +25,7 @@ ROOT_KEYS = {
     "deploy",
     "capture-deploy",
     "cleanup",
+    "firewall-sync",
 }
 TABLE_FIELDS = {
     "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
@@ -54,8 +55,18 @@ TABLE_FIELDS = {
         "authorized_keys_file",
     },
     "cleanup": {"ttl"},
+    "firewall-sync": {
+        "firewall_id",
+        "registry_endpoint_url",
+        "registry_bucket",
+        "registry_object_key",
+        "registry_region",
+        "protocol",
+        "ports",
+        "managed_label",
+    },
 }
-COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup"}
+COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup", "firewall-sync"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type", "image_project_tag"),
@@ -71,6 +82,16 @@ COMMAND_DEFAULT_FIELDS = {
         "user_data",
     ),
     "cleanup": ("ttl",),
+    "firewall-sync": (
+        "firewall_id",
+        "registry_endpoint_url",
+        "registry_bucket",
+        "registry_object_key",
+        "registry_region",
+        "protocol",
+        "ports",
+        "managed_label",
+    ),
 }
 CLI_SOURCE_LABELS = {
     "regions": "cli --region",
@@ -81,6 +102,13 @@ CLI_SOURCE_LABELS = {
     "firewall_id": "cli --firewall-id",
     "authorized_keys": "cli authorized key inputs",
     "user_data": "cli --user-data-file",
+    "registry_endpoint_url": "cli --registry-endpoint-url",
+    "registry_bucket": "cli --registry-bucket",
+    "registry_object_key": "cli --registry-object-key",
+    "registry_region": "cli --registry-region",
+    "protocol": "cli --protocol",
+    "ports": "cli --ports",
+    "managed_label": "cli --managed-label",
 }
 PROHIBITED_KEYS = {
     "discover",
