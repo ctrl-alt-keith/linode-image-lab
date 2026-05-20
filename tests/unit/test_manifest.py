@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 from linode_image_lab.manifest import (
     create_manifest,
     generate_artifact_tags,
     generate_tags,
+    resolve_ttl,
     lifecycle_tags_from_manifest,
     serialize_manifest,
     validate_mode,
@@ -100,6 +103,38 @@ class ManifestTests(unittest.TestCase):
                 "ttl=2030-01-01T00:00:00Z",
             ],
         )
+
+    def test_resolves_relative_ttl_to_utc_timestamp(self) -> None:
+        now = datetime(2026, 5, 20, 12, 30, 45, tzinfo=UTC)
+
+        self.assertEqual(resolve_ttl("1 day", now=now), "2026-05-21T12:30:45Z")
+        self.assertEqual(resolve_ttl("90 minutes", now=now), "2026-05-20T14:00:45Z")
+
+    def test_normalizes_absolute_ttl_to_utc_timestamp(self) -> None:
+        self.assertEqual(
+            resolve_ttl("2030-01-01T02:30:00+02:30"),
+            "2030-01-01T00:00:00Z",
+        )
+
+    def test_relative_ttl_is_resolved_before_tag_generation(self) -> None:
+        now = datetime(2026, 5, 20, 12, 30, 45, tzinfo=UTC)
+        with patch("linode_image_lab.manifest.utc_now", return_value=now):
+            manifest = create_manifest(
+                command="plan",
+                mode="capture",
+                regions=["us-east"],
+                run_id="run-test",
+                ttl="1 day",
+            )
+
+        self.assertEqual(manifest["created_at"], "2026-05-20T12:30:45Z")
+        self.assertEqual(manifest["ttl"], "2026-05-21T12:30:45Z")
+        self.assertIn("ttl=2026-05-21T12:30:45Z", manifest["lifecycle_tags"])
+        self.assertIn("ttl=2026-05-21T12:30:45Z", manifest["artifact_tags"])
+
+    def test_rejects_invalid_ttl_input_for_manifest_tags(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute ISO-8601 timestamp"):
+            resolve_ttl("not-a-timestamp")
 
     def test_legacy_tags_remain_lifecycle_compatibility_alias(self) -> None:
         manifest = {"tags": ["project=linode-image-lab", "run_id=run-test"]}

@@ -59,7 +59,7 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
         help="Linode region id. May be repeated or comma-separated.",
     )
     parser.add_argument("--run-id", type=run_id_value, help="Optional run id for deterministic planning.")
-    parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
+    parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp or relative duration like '1 day'.")
 
 
 def add_firewall_arg(parser: argparse.ArgumentParser) -> None:
