@@ -183,6 +183,9 @@ Config defaults can replace omitted `--region`, `--source-image`,
 The image project tag affects only captured custom image artifact tags, not
 temporary Linode lifecycle tags. Config defaults do not replace `--execute`,
 preservation flags, run ids, or environment-based token injection.
+`ttl` may be an absolute ISO-8601 timestamp or a relative duration such as
+`"1 day"`, `"30m"`, or `"24h"`; relative values are resolved at command
+runtime and emitted as absolute UTC manifest TTLs and `ttl=...` tags.
 Use `linode-image-lab config validate --config PATH --command COMMAND` to
 validate a config file and inspect the effective defaults before a smoke run.
 The report is non-mutating, does not read `LINODE_TOKEN`, and labels precedence
@@ -198,7 +201,7 @@ required tags are present:
 - `run_id=<unique-id>`
 - `mode=<capture|deploy|capture-deploy>`
 - `component=<capture|deploy>`
-- `ttl=<timestamp>`
+- `ttl=<absolute-utc-timestamp>`
 
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.

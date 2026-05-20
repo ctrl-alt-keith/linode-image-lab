@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -387,6 +388,34 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["regions"], ["us-east"])
         self.assertEqual(payload["ttl"], "2030-01-01T00:00:00Z")
+
+    def test_relative_config_ttl_resolves_at_manifest_runtime(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            region = "us-east"
+            ttl = "1 day"
+
+            [capture-deploy]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        now = datetime(2026, 5, 20, 12, 30, 45, tzinfo=UTC)
+        with patch("linode_image_lab.manifest.utc_now", return_value=now), redirect_stdout(output):
+            code = main(["capture-deploy", "--config", config_path])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["created_at"], "2026-05-20T12:30:45Z")
+        self.assertEqual(payload["ttl"], "2026-05-21T12:30:45Z")
+        self.assertIn("ttl=2026-05-21T12:30:45Z", payload["lifecycle_tags"])
+        self.assertIn("ttl=2026-05-21T12:30:45Z", payload["component_tags"]["capture"])
+        self.assertIn("ttl=2026-05-21T12:30:45Z", payload["component_tags"]["deploy"])
 
     def test_duplicate_global_and_command_local_config_fails_clearly(self) -> None:
         global_config_path = self.write_config(

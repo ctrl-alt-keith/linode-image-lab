@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resolve relative TTL inputs such as `"1 day"` at command runtime while
+  preserving absolute UTC TTL values in manifests and cleanup tags.
 - Add `replicate` to dry-run and explicitly execute custom image replication
   while preserving dry-run-first and mutation-gated behavior.
 - Add `firewall-sync` to consume a private trusted network registry and sync

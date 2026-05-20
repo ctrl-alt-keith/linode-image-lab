@@ -18,6 +18,30 @@ REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
 RESERVED_TAG_KEYS = frozenset((*REQUIRED_TAG_KEYS, "lifecycle"))
 RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 RUN_ID_RE = re.compile(RUN_ID_PATTERN)
+RELATIVE_TTL_RE = re.compile(r"^\s*(?P<amount>[1-9][0-9]*)\s*(?P<unit>[A-Za-z]+)\s*$")
+RELATIVE_TTL_UNITS = {
+    "s": "seconds",
+    "second": "seconds",
+    "seconds": "seconds",
+    "sec": "seconds",
+    "secs": "seconds",
+    "m": "minutes",
+    "minute": "minutes",
+    "minutes": "minutes",
+    "min": "minutes",
+    "mins": "minutes",
+    "h": "hours",
+    "hour": "hours",
+    "hours": "hours",
+    "hr": "hours",
+    "hrs": "hours",
+    "d": "days",
+    "day": "days",
+    "days": "days",
+    "w": "weeks",
+    "week": "weeks",
+    "weeks": "weeks",
+}
 
 
 def utc_now() -> datetime:
@@ -31,6 +55,44 @@ def format_timestamp(value: datetime) -> str:
 def default_ttl(now: datetime | None = None) -> str:
     base = now or utc_now()
     return format_timestamp(base + timedelta(hours=4))
+
+
+def resolve_ttl(value: str | None, *, now: datetime | None = None) -> str:
+    """Resolve absolute or relative TTL input to the UTC tag contract."""
+    base = now or utc_now()
+    if value is None:
+        return default_ttl(base)
+
+    text = value.strip()
+    relative = parse_relative_ttl(text)
+    if relative is not None:
+        return format_timestamp(base + relative)
+
+    absolute = parse_absolute_ttl(text)
+    if absolute is not None:
+        return format_timestamp(absolute)
+
+    raise ValueError("ttl must be an absolute ISO-8601 timestamp or a relative duration like '1 day' or '24h'")
+
+
+def parse_relative_ttl(value: str) -> timedelta | None:
+    match = RELATIVE_TTL_RE.fullmatch(value)
+    if match is None:
+        return None
+    unit = RELATIVE_TTL_UNITS.get(match.group("unit").lower())
+    if unit is None:
+        return None
+    return timedelta(**{unit: int(match.group("amount"))})
+
+
+def parse_absolute_ttl(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def validate_mode(mode: str) -> str:
@@ -147,9 +209,10 @@ def create_manifest(
     if not regions and command != "cleanup":
         raise ValueError("at least one non-empty --region is required")
 
-    created_at = format_timestamp(utc_now())
+    created_now = utc_now()
+    created_at = format_timestamp(created_now)
     manifest_run_id = validate_run_id(run_id) if run_id is not None else f"run-{uuid4().hex[:12]}"
-    manifest_ttl = ttl or default_ttl()
+    manifest_ttl = resolve_ttl(ttl, now=created_now)
     manifest_component = component or component_for_mode(mode)
     validate_component(manifest_component)
     lifecycle_tags = generate_tags(
