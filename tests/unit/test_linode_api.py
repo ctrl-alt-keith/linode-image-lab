@@ -724,6 +724,40 @@ class LinodeClientTests(unittest.TestCase):
             },
         )
 
+    def test_get_image_details_ignores_odd_region_payload_entries(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse(
+                {
+                    "id": "private/789",
+                    "status": "available",
+                    "regions": [
+                        {"region": "us-east", "status": "available"},
+                        {"region": "", "status": "ignored"},
+                        {"region": 123, "status": "ignored"},
+                        {"status": "missing region"},
+                        {"region": "us-west", "status": 123},
+                        "not a mapping",
+                    ],
+                }
+            ),
+        ):
+            resource = client.get_image_details("private/789")
+
+        self.assertEqual(
+            resource,
+            {
+                "image_id": "private/789",
+                "status": "available",
+                "regions": [
+                    {"region": "us-east", "status": "available"},
+                    {"region": "us-west"},
+                ],
+            },
+        )
+
     def test_replicate_image_posts_regions_without_retrying_mutation(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,

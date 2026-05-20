@@ -84,7 +84,7 @@ phase-specific views. Top-level `validation` and `cleanup` are combined
 summaries; nested validation and cleanup blocks preserve phase-specific status.
 M6 replicate execution adds `execution_mode`, ordered `steps`,
 `replication_source`, `replication_request`, `replication_result`,
-`validation`, and `replica_status_polling` fields.
+`provider_response_summary`, `validation`, and `replica_status_polling` fields.
 Validation checks record `name`, `status`, a symbolic `target`, and a sanitized
 `failure_reason` when a check fails. Internal manifests may carry provider
 resource identifiers required for cleanup and debugging. Normal stdout uses
@@ -215,8 +215,8 @@ The execute flow is intentionally bounded:
 4. preflight each requested region with non-mutating API calls,
 5. submit one image replication request to `POST /images/{imageId}/regions`,
    using the existing image regions plus the requested regions,
-6. record provider/API-level validation and sanitized replication response
-   details.
+6. record provider/API-level validation, sanitized replication response
+   details, and a response summary of returned region statuses.
 
 The provider replication request uses a complete region set for the image. To
 avoid accidentally removing an existing image region, execute mode preserves

@@ -48,7 +48,7 @@ def replicate_plan(
     client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
     options = ReplicateOptions(
-        regions=regions,
+        regions=unique_region_ids(regions),
         run_id=run_id,
         ttl=ttl,
         execute=execute,
@@ -76,7 +76,7 @@ def dry_run_manifest(options: ReplicateOptions) -> dict[str, Any]:
     manifest["tag_application"] = "not_applicable"
     manifest["replication_intent"] = {
         "image_id": options.image_id,
-        "requested_regions": list(options.regions),
+        "requested_regions": unique_region_ids(options.regions),
         "provider_request": "execute mode submits existing image regions plus requested regions",
     }
     return manifest
@@ -104,10 +104,11 @@ def execute_replicate(
     manifest["replication_source"] = {"image_id": required_text(options.image_id)}
     manifest["replication_request"] = {
         "image_id": required_text(options.image_id),
-        "requested_regions": list(options.regions),
+        "requested_regions": unique_region_ids(options.regions),
         "submitted_regions": [],
     }
     manifest["replication_result"] = {}
+    manifest["provider_response_summary"] = {}
     manifest["validation"] = start_validation(REPLICATE_VALIDATION_CHECKS)
     manifest["replica_status_polling"] = "not_attempted"
     manifest["tag_application"] = "not_applicable"
@@ -135,17 +136,19 @@ def execute_replicate(
         record_validation_check(manifest["validation"], "image_available", validate_image)
 
         def validate_requested_regions() -> None:
-            for region in options.regions:
+            for region in unique_region_ids(options.regions):
                 run_client.preflight_region(region)
 
         record_validation_check(manifest["validation"], "requested_regions_valid", validate_requested_regions)
+        existing_regions = image_region_entries(image_details)
         submitted_regions = merge_regions(existing_region_ids(image_details), options.regions)
-        manifest["replication_source"]["existing_regions"] = image_details["regions"]
+        manifest["replication_source"]["existing_regions"] = existing_regions
         manifest["replication_request"]["submitted_regions"] = submitted_regions
         finish_step(manifest, "preflight_provider_inputs", client=run_client)
 
         append_step(manifest, "submit_image_replication", mutates=True, status="running")
         manifest["replication_result"] = run_client.replicate_image(image_id=image_id, regions=submitted_regions)
+        manifest["provider_response_summary"] = provider_response_summary(manifest["replication_result"])
         mark_validation_check_succeeded(manifest["validation"], "replication_submitted")
         finish_step(manifest, "submit_image_replication", client=run_client)
 
@@ -181,10 +184,14 @@ def validate_existing_regions_present(image: dict[str, Any]) -> None:
 
 
 def existing_region_ids(image: dict[str, Any]) -> list[str]:
+    return [entry["region"] for entry in image_region_entries(image)]
+
+
+def image_region_entries(image: dict[str, Any]) -> list[dict[str, str]]:
     regions = image.get("regions", [])
     if not isinstance(regions, list):
         return []
-    values: list[str] = []
+    values: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in regions:
         if not isinstance(item, dict):
@@ -196,20 +203,37 @@ def existing_region_ids(image: dict[str, Any]) -> list[str]:
         if normalized in seen:
             continue
         seen.add(normalized)
-        values.append(normalized)
+        entry = {"region": normalized}
+        status = item.get("status")
+        if isinstance(status, str) and status.strip():
+            entry["status"] = status.strip()
+        values.append(entry)
     return values
 
 
 def merge_regions(existing_regions: list[str], requested_regions: list[str]) -> list[str]:
+    return unique_region_ids([*existing_regions, *requested_regions])
+
+
+def unique_region_ids(regions: list[str]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
-    for region in [*existing_regions, *requested_regions]:
+    for region in regions:
         normalized = region.strip().lower()
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
         merged.append(normalized)
     return merged
+
+
+def provider_response_summary(image: dict[str, Any]) -> dict[str, Any]:
+    regions = image_region_entries(image)
+    return {
+        "image_status": image.get("status"),
+        "region_count": len(regions),
+        "regions": regions,
+    }
 
 
 def append_step(
