@@ -210,16 +210,18 @@ default, the command returns a dry-run manifest and performs no Linode action.
 
 Execution steps:
 
-1. capture a custom image in the first requested region,
-2. read the captured image and require provider-reported `available` status
+1. read each requested replication target region and require the provider
+   `Object Storage` capability,
+2. capture a custom image in the first requested region,
+3. read the captured image and require provider-reported `available` status
    plus exposed existing image regions,
-3. submit one image replication request containing existing image regions plus
+4. submit one image replication request containing existing image regions plus
    all requested deploy regions,
-4. wait with bounded read-only polling until requested deploy regions report
+5. wait with bounded read-only polling until requested deploy regions report
    replica status `available`,
-5. deploy from the captured image to each requested region,
-6. clean up temporary capture-source and deploy validation Linodes by tag,
-7. preserve the captured custom image as the workflow deliverable.
+6. deploy from the captured image to each requested region,
+7. clean up temporary capture-source and deploy validation Linodes by tag,
+8. preserve the captured custom image as the workflow deliverable.
 
 The command treats `regions` as deploy regions; the first region is also the
 capture region. Dry-run manifests show the capture region, deploy regions,
@@ -227,10 +229,12 @@ replication target regions, planned capture/replication/deploy phases, cleanup
 expectations, and no provider calls.
 
 Execute manifests include the capture result, replication request/result,
-replica status checks, per-region deploy results, validation summary, cleanup
-summary, and final `status`. If the replication POST fails, the manifest also
-includes sanitized provider error details such as status code and provider
-reason or field values when the API response exposes them. The command fails
+replication target capability checks, replica status checks, per-region deploy
+results, validation summary, cleanup summary, and final `status`. If the
+replication POST fails, the manifest also includes sanitized provider error
+details such as status code and provider reason or field values when the API
+response exposes them. The command fails closed before capture if a requested
+replication target lacks the provider `Object Storage` capability. It fails
 closed before deploy if existing image regions are not exposed, replication
 submission fails, or requested replicas do not report `available` before the
 bounded wait expires. It records only the emitted manifest, performs no
@@ -246,7 +250,7 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-regions = ["us-sea", "us-east", "us-west"]
+regions = ["us-sea", "us-east"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345

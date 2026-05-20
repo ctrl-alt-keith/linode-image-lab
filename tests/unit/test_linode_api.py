@@ -6,7 +6,13 @@ import unittest
 from unittest.mock import call, patch
 from urllib.error import HTTPError
 
-from linode_image_lab.linode_api import LinodeApiError, LinodeClient, LinodePreflightError, LinodeTokenError
+from linode_image_lab.linode_api import (
+    LinodeApiError,
+    LinodeClient,
+    LinodePreflightError,
+    LinodeTokenError,
+    region_capabilities,
+)
 
 TOKEN_VALUE = "test-" + "token-value"
 API_BASE_URL = "https://api.example/v4"
@@ -105,6 +111,59 @@ class LinodeClientTests(unittest.TestCase):
                 f"{API_BASE_URL}/images/linode%2Fdebian12",
                 f"{API_BASE_URL}/networking/firewalls/12345",
             ],
+        )
+
+    def test_get_region_details_returns_sanitized_capabilities(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": "us-west",
+                    "capabilities": [
+                        "Linodes",
+                        " Object Storage ",
+                        "Object Storage",
+                        "",
+                        123,
+                    ],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            details = client.get_region_details("us-west")
+
+        self.assertEqual(details, {"region": "us-west", "capabilities": ["Linodes", "Object Storage"]})
+        self.assertEqual([request.get_method() for request in requests], ["GET"])
+        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/regions/us-west"])
+
+    def test_preflight_region_capability_requires_provider_capability(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        responses = [
+            FakeHTTPResponse({"id": "us-east", "capabilities": ["Linodes", "Object Storage"]}),
+            FakeHTTPResponse({"id": "us-west", "capabilities": ["Linodes"]}),
+        ]
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            return responses.pop(0)
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            details = client.preflight_region_capability("us-east", "Object Storage")
+            with self.assertRaises(LinodePreflightError) as raised:
+                client.preflight_region_capability("us-west", "Object Storage")
+
+        self.assertEqual(details, {"region": "us-east", "capabilities": ["Linodes", "Object Storage"]})
+        self.assertEqual(
+            str(raised.exception),
+            "requested region us-west is missing required capability: Object Storage",
+        )
+
+    def test_region_capabilities_ignores_non_string_values(self) -> None:
+        self.assertEqual(
+            region_capabilities({"capabilities": ["Linodes", "Linodes", 123, "", "Object Storage"]}),
+            ["Linodes", "Object Storage"],
         )
 
     def test_provider_preflight_failure_uses_sanitized_message(self) -> None:

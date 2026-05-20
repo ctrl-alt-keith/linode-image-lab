@@ -22,6 +22,7 @@ class FakeCaptureReplicateDeployClient:
         fail_replica_wait: bool = False,
         fail_deploy_regions: set[str] | None = None,
         fail_capture_disk: bool = False,
+        region_capabilities: dict[str, list[str]] | None = None,
     ) -> None:
         self.calls: list[str] = []
         self.image_regions = image_regions if image_regions is not None else [{"region": "us-east", "status": "available"}]
@@ -29,6 +30,7 @@ class FakeCaptureReplicateDeployClient:
         self.fail_replica_wait = fail_replica_wait
         self.fail_deploy_regions = fail_deploy_regions or set()
         self.fail_capture_disk = fail_capture_disk
+        self.region_capabilities = region_capabilities or {}
         self.capture_tags: list[str] = []
         self.image_tags: list[str] = []
         self.submitted_regions: list[str] = []
@@ -49,6 +51,21 @@ class FakeCaptureReplicateDeployClient:
     def preflight_region(self, region: str) -> None:
         self.calls.append(f"preflight_region:{region}")
         self.current_region = region
+
+    def get_region_details(self, region: str) -> dict[str, object]:
+        self.calls.append(f"get_region_details:{region}")
+        return {
+            "region": region,
+            "capabilities": self.region_capabilities.get(region, ["Linodes", "Object Storage"]),
+        }
+
+    def preflight_region_capability(self, region: str, capability: str) -> dict[str, object]:
+        self.calls.append(f"preflight_region_capability:{region}:{capability}")
+        details = self.get_region_details(region)
+        capabilities = details.get("capabilities", [])
+        if not isinstance(capabilities, list) or capability not in capabilities:
+            raise LinodePreflightError(f"requested region {region} is missing required capability: {capability}")
+        return details
 
     def preflight_instance_type(self, instance_type: str) -> None:
         self.calls.append(f"preflight_instance_type:{instance_type}")
@@ -228,11 +245,80 @@ class CaptureReplicateDeployTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "succeeded")
         self.assertEqual(manifest["summary"]["capture_region"], "us-sea")
         self.assertEqual(client.created_regions[0], "us-sea")
+        self.assertEqual(
+            manifest["replication"]["region_capability_checks"],
+            {
+                "required_capability": "Object Storage",
+                "checks": [
+                    {"region": "us-sea", "capability": "Object Storage", "status": "succeeded"},
+                    {"region": "us-east", "capability": "Object Storage", "status": "succeeded"},
+                ],
+            },
+        )
         self.assertEqual(client.submitted_regions, ["us-east", "us-west", "us-sea"])
         self.assertLess(client.calls.index("wait_image_regions_available"), client.calls.index("create_deploy_instance:us-sea"))
         self.assertEqual(set(manifest["deploy_results"]), {"us-sea", "us-east"})
         self.assertEqual(manifest["replication"]["replica_status_checks"]["status"], "succeeded")
+        self.assertEqual(manifest["validation"]["replication"]["status"], "succeeded")
+        self.assertEqual(
+            manifest["validation"]["replication"]["region_capability_checks"],
+            manifest["replication"]["region_capability_checks"],
+        )
         self.assertEqual(manifest["capture"]["cleanup"]["preserved"][0]["reason"], "deliverable")
+
+    def test_unsupported_replication_region_fails_before_capture(self) -> None:
+        client = FakeCaptureReplicateDeployClient(
+            region_capabilities={
+                "us-sea": ["Linodes", "Object Storage"],
+                "us-west": ["Linodes"],
+            }
+        )
+
+        with self.assertRaises(CaptureReplicateDeployError) as raised:
+            capture_replicate_deploy_plan(
+                regions=["us-sea", "us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/alpine3.23",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(
+            manifest["errors"],
+            [
+                "requested replication target region us-west is missing required capability: "
+                "Object Storage"
+            ],
+        )
+        self.assertEqual(
+            manifest["replication"]["region_capability_checks"],
+            {
+                "required_capability": "Object Storage",
+                "checks": [
+                    {"region": "us-sea", "capability": "Object Storage", "status": "succeeded"},
+                    {
+                        "region": "us-west",
+                        "capability": "Object Storage",
+                        "status": "failed",
+                        "missing_capability": "Object Storage",
+                    },
+                ],
+            },
+        )
+        self.assertEqual(manifest["validation"]["replication"]["status"], "failed")
+        self.assertEqual(manifest["capture"], {})
+        self.assertEqual(manifest["deploy_results"], {})
+        self.assertEqual(client.created_regions, [])
+        self.assertNotIn("create_capture_source:us-sea", client.calls)
+        self.assertNotIn("capture_image", client.calls)
+        self.assertNotIn("replicate_image", client.calls)
+        self.assertNotIn("create_deploy_instance:us-sea", client.calls)
 
     def test_execute_fails_closed_when_existing_image_regions_are_missing(self) -> None:
         client = FakeCaptureReplicateDeployClient(image_regions=[])

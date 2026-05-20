@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
+from .linode_api import (
+    LinodeApiError,
+    LinodeClient,
+    LinodeClientProtocol,
+    LinodePreflightError,
+    region_capabilities,
+)
 from .manifest import create_manifest
 from .validation_results import (
     finish_validation,
@@ -14,6 +20,7 @@ from .validation_results import (
     start_validation,
 )
 
+REPLICATION_REGION_CAPABILITY = "Object Storage"
 REPLICATE_VALIDATION_CHECKS = (
     ("image_available", "replication_source"),
     ("requested_regions_valid", "replication_regions"),
@@ -27,6 +34,14 @@ class ReplicateError(ValueError):
     def __init__(self, message: str, manifest: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.manifest = manifest
+
+
+class ReplicationRegionCapabilityError(ReplicateError):
+    """Raised when a requested replication target lacks required capability."""
+
+    def __init__(self, message: str, capability_checks: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.capability_checks = capability_checks
 
 
 @dataclass(frozen=True)
@@ -106,6 +121,10 @@ def execute_replicate(
         "image_id": required_text(options.image_id),
         "requested_regions": unique_region_ids(options.regions),
         "submitted_regions": [],
+        "region_capability_checks": {
+            "required_capability": REPLICATION_REGION_CAPABILITY,
+            "checks": [],
+        },
     }
     manifest["replication_result"] = {}
     manifest["provider_response_summary"] = {}
@@ -136,8 +155,10 @@ def execute_replicate(
         record_validation_check(manifest["validation"], "image_available", validate_image)
 
         def validate_requested_regions() -> None:
-            for region in unique_region_ids(options.regions):
-                run_client.preflight_region(region)
+            manifest["replication_request"]["region_capability_checks"] = validate_replication_region_capabilities(
+                run_client,
+                unique_region_ids(options.regions),
+            )
 
         record_validation_check(manifest["validation"], "requested_regions_valid", validate_requested_regions)
         existing_regions = image_region_entries(image_details)
@@ -159,6 +180,8 @@ def execute_replicate(
         mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
+        if isinstance(exc, ReplicationRegionCapabilityError):
+            manifest["replication_request"]["region_capability_checks"] = exc.capability_checks
         if isinstance(exc, LinodeApiError):
             provider_error = exc.provider_error_details()
             if provider_error is not None:
@@ -185,6 +208,40 @@ def validate_existing_regions_present(image: dict[str, Any]) -> None:
         raise ReplicateError(
             "requested image did not expose existing regions; refusing replication to avoid removing existing replicas"
         )
+
+
+def validate_replication_region_capabilities(
+    client: LinodeClientProtocol,
+    regions: list[str],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "required_capability": REPLICATION_REGION_CAPABILITY,
+        "checks": [],
+    }
+    for region in unique_region_ids(regions):
+        details = client.get_region_details(region)
+        if REPLICATION_REGION_CAPABILITY not in region_capabilities(details):
+            result["checks"].append(
+                {
+                    "region": region,
+                    "capability": REPLICATION_REGION_CAPABILITY,
+                    "status": "failed",
+                    "missing_capability": REPLICATION_REGION_CAPABILITY,
+                }
+            )
+            raise ReplicationRegionCapabilityError(
+                f"requested replication target region {region} is missing required capability: "
+                f"{REPLICATION_REGION_CAPABILITY}",
+                result,
+            )
+        result["checks"].append(
+            {
+                "region": region,
+                "capability": REPLICATION_REGION_CAPABILITY,
+                "status": "succeeded",
+            }
+        )
+    return result
 
 
 def existing_region_ids(image: dict[str, Any]) -> list[str]:

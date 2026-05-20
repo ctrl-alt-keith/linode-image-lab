@@ -9,6 +9,8 @@
   replicas to report available, and deploy with cleanup-first manifests.
 - Include sanitized provider status and reason details when image replication
   submission fails.
+- Validate explicit image replication targets for the provider `Object Storage`
+  capability before capture-replicate-deploy creates temporary Linodes.
 - Add `replicate` to dry-run and explicitly execute custom image replication
   while preserving dry-run-first and mutation-gated behavior.
 - Add `firewall-sync` to consume a private trusted network registry and sync

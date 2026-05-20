@@ -171,7 +171,9 @@ replication request. Replicate config can provide `region`, `regions`,
 `image_id`, and `ttl`.
 `capture-replicate-deploy --execute` accepts multiple regions, captures in the
 first region, treats the full region list as the deploy and replication target
-set, and can receive the same deploy metadata defaults as `capture-deploy`.
+set, verifies requested replication targets expose the provider `Object Storage`
+capability before capture, and can receive the same deploy metadata defaults as
+`capture-deploy`.
 
 ## Capture Execution Boundary
 
@@ -231,7 +233,8 @@ The execute flow is intentionally bounded:
 1. preflight the token with non-mutating API calls,
 2. read the requested image and require provider-reported `available` status,
 3. require the image response to expose existing image regions,
-4. preflight each requested region with non-mutating API calls,
+4. read each requested region and require the provider `Object Storage`
+   capability needed for explicit image replication,
 5. submit one image replication request to `POST /images/{imageId}/regions`,
    using the existing image regions plus the requested regions,
 6. record provider/API-level validation, sanitized replication response
@@ -241,6 +244,9 @@ The provider replication request uses a complete region set for the image. To
 avoid accidentally removing an existing image region, execute mode preserves
 the provider-reported existing regions in the submitted request. If existing
 regions are not exposed, the command fails before mutation.
+If a requested replication target region lacks the provider `Object Storage`
+capability, the command fails before the replication POST and records the
+failed capability check in the manifest.
 
 Replicate execution does not poll replica convergence, repair replicas, clean
 up replicas, or take ownership of regional image placement. The manifest
@@ -288,22 +294,25 @@ The execute flow is bounded and has no durable ownership model:
 
 1. run capture in the first requested region with
    `mode=capture-replicate-deploy` and `component=capture`,
-2. read the captured image details and require `available` status plus exposed
+2. before capture, read each requested replication target region and require
+   the provider `Object Storage` capability,
+3. read the captured image details and require `available` status plus exposed
    existing image regions,
-3. submit one replication request for existing image regions plus all requested
+4. submit one replication request for existing image regions plus all requested
    deploy regions,
-4. perform a bounded read-only wait until the requested deploy regions report
+5. perform a bounded read-only wait until the requested deploy regions report
    image replica status `available`,
-5. deploy from the captured image to each requested region with bounded
+6. deploy from the captured image to each requested region with bounded
    deploy fan-out,
-6. clean up temporary capture and deploy Linodes by current-run tags,
-7. preserve the captured custom image as the workflow deliverable.
+7. clean up temporary capture and deploy Linodes by current-run tags,
+8. preserve the captured custom image as the workflow deliverable.
 
-The workflow fails closed before deploy if existing image regions are not
-exposed or if requested replica statuses do not report `available` before the
-bounded wait expires. It does not retry the replication mutation, repair
-replicas, reconcile desired regions, run a scheduler, write state, or own image
-placement after the run.
+The workflow fails closed before capture if a requested replication target
+region lacks the provider `Object Storage` capability. It fails closed before
+deploy if existing image regions are not exposed or if requested replica
+statuses do not report `available` before the bounded wait expires. It does
+not retry the replication mutation, repair replicas, reconcile desired regions,
+run a scheduler, write state, or own image placement after the run.
 
 ## Cleanup Semantics
 

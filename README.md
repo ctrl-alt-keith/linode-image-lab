@@ -227,21 +227,26 @@ only.
 `replicate --execute` accepts multiple regions and submits one explicit custom
 image replication request. Because the Linode API request represents the
 complete region set for an image, execute mode first reads the image's existing
-regions and submits existing-plus-requested regions. If existing regions are
-not exposed, the command fails before mutation. Replicate dry-run output
-models the requested regions and records that execute mode will preserve
+regions and verifies that each requested replication target exposes the
+provider `Object Storage` capability, then submits existing-plus-requested
+regions. If existing regions are not exposed, or a requested target lacks that
+capability, the command fails before mutation. Replicate dry-run output models
+the requested regions and records that execute mode will preserve
 provider-reported existing regions, but it does not read `LINODE_TOKEN` or call
 Linode.
 
 `capture-replicate-deploy --execute` captures one custom image in the first
 requested region, submits explicit replication for the deploy region list, then
 deploys from the captured image only after bounded read-only status checks show
-the requested image regions are `available`. The replication request preserves
-provider-reported existing image regions plus requested deploy regions. If the
-image response does not expose existing regions, or if requested replicas do not
-report available before the bounded wait expires, the workflow fails closed,
-cleans up temporary resources, and does not deploy. The captured custom image
-remains the workflow deliverable under the same artifact-tag semantics as
+the requested image regions are `available`. Before creating the capture
+Linode, it verifies that each requested replication target exposes the provider
+`Object Storage` capability. The replication request preserves
+provider-reported existing image regions plus requested deploy regions. If a
+requested target lacks that capability, the image response does not expose
+existing regions, or requested replicas do not report available before the
+bounded wait expires, the workflow fails closed, cleans up temporary resources
+when any were created, and does not deploy. The captured custom image remains
+the workflow deliverable under the same artifact-tag semantics as
 capture-deploy.
 
 `config validate` parses the TOML file, applies the same safety checks as
@@ -398,7 +403,6 @@ Execute capture, explicit replication, and deploy validation:
 linode-image-lab capture-replicate-deploy \
   --region us-sea \
   --region us-east \
-  --region us-west \
   --source-image linode/alpine3.23 \
   --type g6-nanode-1 \
   --firewall-id "$FIREWALL_ID" \
@@ -477,9 +481,10 @@ top-level `capture`, `replication`, `deploy_results`, `validation`, `cleanup`,
 and `summary` blocks. Dry-run manifests show the capture region, deploy
 regions, replication target regions, planned capture/replication/deploy phases,
 cleanup expectations, and `provider_calls: "not_attempted"`. Execute manifests
-record the capture result, replication request/result, replica status checks,
-deploy results by region, validation summary, cleanup summary, and final
-`status` of `succeeded`, `partial`, or `failed`.
+record the capture result, replication capability checks, replication
+request/result, replica status checks, deploy results by region, validation
+summary, cleanup summary, and final `status` of `succeeded`, `partial`, or
+`failed`.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or
@@ -513,6 +518,8 @@ entries include `resource_type` plus a sanitized `reason`, such as
 - Replica readiness waits: `capture-replicate-deploy --execute` waits only for
   provider/API image region statuses to report `available`; it does not repair,
   retry, or own replicas after the run.
+- Replication target eligibility: explicit image replication requires requested
+  target regions to expose the provider `Object Storage` capability.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

@@ -64,6 +64,14 @@ class LinodeClientProtocol(Protocol):
 
     def preflight_region(self, region: str) -> None: ...
 
+    def get_region_details(self, region: str) -> dict[str, Any]: ...
+
+    def preflight_region_capability(
+        self,
+        region: str,
+        capability: str,
+    ) -> dict[str, Any]: ...
+
     def preflight_instance_type(self, instance_type: str) -> None: ...
 
     def preflight_image(self, image_id: str) -> None: ...
@@ -161,6 +169,25 @@ class LinodeClient:
     def preflight_region(self, region: str) -> None:
         escaped = quote(region, safe="")
         self._preflight_resource(f"/regions/{escaped}", "requested region is unavailable")
+
+    def get_region_details(self, region: str) -> dict[str, Any]:
+        escaped = quote(region, safe="")
+        try:
+            response = self._request("GET", f"/regions/{escaped}", retry=True, operation="get_region_details")
+        except LinodeTokenError:
+            raise
+        except LinodeApiError as exc:
+            raise LinodePreflightError("requested region is unavailable") from exc
+        return self._region_resource(response)
+
+    def preflight_region_capability(self, region: str, capability: str) -> dict[str, Any]:
+        details = self.get_region_details(region)
+        capabilities = region_capabilities(details)
+        if capability not in capabilities:
+            raise LinodePreflightError(
+                f"requested region {region} is missing required capability: {capability}"
+            )
+        return details
 
     def preflight_instance_type(self, instance_type: str) -> None:
         escaped = quote(instance_type, safe="")
@@ -691,3 +718,27 @@ class LinodeClient:
                 entry["status"] = status
             regions.append(entry)
         return regions
+
+    @staticmethod
+    def _region_resource(response: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "region": response.get("id"),
+            "capabilities": region_capabilities(response),
+        }
+
+
+def region_capabilities(region: dict[str, Any]) -> list[str]:
+    value = region.get("capabilities", [])
+    if not isinstance(value, list):
+        return []
+    capabilities: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        capability = item.strip()
+        if capability in seen:
+            continue
+        seen.add(capability)
+        capabilities.append(capability)
+    return capabilities

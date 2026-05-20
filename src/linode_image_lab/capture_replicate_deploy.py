@@ -17,12 +17,14 @@ from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol
 from .manifest import create_manifest, generate_tags
 from .replicate import (
     ReplicateError,
+    ReplicationRegionCapabilityError,
     existing_region_ids,
     image_region_entries,
     merge_regions,
     provider_response_summary,
     validate_existing_regions_present,
     validate_image_available,
+    validate_replication_region_capabilities,
 )
 from .user_data import DeployUserData
 
@@ -133,6 +135,21 @@ def execute_capture_replicate_deploy(
     capture_manifest: dict[str, Any] | None = None
 
     try:
+        append_step(manifest, "preflight_api_access", mutates=False, status="running")
+        run_client.preflight()
+        finish_step(manifest, "preflight_api_access")
+
+        append_step(manifest, "preflight_replication_target_regions", mutates=False, status="running")
+        manifest["replication"]["region_capability_checks"] = validate_replication_region_capabilities(
+            run_client,
+            options.regions,
+        )
+        manifest["validation"]["replication"] = {
+            "status": "succeeded",
+            "region_capability_checks": manifest["replication"]["region_capability_checks"],
+        }
+        finish_step(manifest, "preflight_replication_target_regions")
+
         append_step(manifest, "run_capture_phase", mutates=True, status="running")
         capture_manifest = execute_capture(
             CaptureOptions(
@@ -196,6 +213,12 @@ def execute_capture_replicate_deploy(
         if isinstance(exc, CaptureError) and exc.manifest is not None:
             capture_manifest = exc.manifest
             manifest["capture"] = capture_manifest
+        if isinstance(exc, ReplicationRegionCapabilityError):
+            manifest["replication"]["region_capability_checks"] = exc.capability_checks
+            manifest["validation"]["replication"] = {
+                "status": "failed",
+                "region_capability_checks": exc.capability_checks,
+            }
         if capture_manifest is not None and cleanup_status(capture_manifest) == "deferred":
             cleanup_deferred_capture(run_client, capture_manifest)
             manifest["capture"] = capture_manifest
@@ -242,7 +265,7 @@ def run_replication_phase(
             manifest["replication"]["provider_error"] = provider_error
             manifest["provider_error"] = provider_error
         manifest["replication"]["status"] = "failed"
-        manifest["validation"]["replication"] = {"status": "failed"}
+        manifest["validation"]["replication"] = replication_validation_summary(manifest, status="failed")
         raise
     manifest["replication"]["result"] = replication_result
     manifest["replication"]["provider_response_summary"] = provider_response_summary(replication_result)
@@ -258,8 +281,16 @@ def run_replication_phase(
         "regions": image_region_entries(final_details),
     }
     manifest["replication"]["status"] = "available"
-    manifest["validation"]["replication"] = {"status": "succeeded"}
+    manifest["validation"]["replication"] = replication_validation_summary(manifest, status="succeeded")
     finish_step(manifest, "wait_replica_regions_available")
+
+
+def replication_validation_summary(manifest: dict[str, Any], *, status: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {"status": status}
+    capability_checks = manifest["replication"].get("region_capability_checks")
+    if capability_checks:
+        summary["region_capability_checks"] = capability_checks
+    return summary
 
 
 def base_manifest(options: CaptureReplicateDeployOptions, *, dry_run: bool, status: str) -> dict[str, Any]:
@@ -332,6 +363,10 @@ def empty_replication_block(options: CaptureReplicateDeployOptions) -> dict[str,
         "result": {},
         "provider_response_summary": {},
         "replica_status_checks": {"status": "not_started"},
+        "region_capability_checks": {
+            "required_capability": "Object Storage",
+            "checks": [],
+        },
     }
 
 
