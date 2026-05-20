@@ -687,6 +687,101 @@ class LinodeClientTests(unittest.TestCase):
             },
         )
 
+    def test_get_image_details_maps_region_replica_details_without_labels_or_tags(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": "private/789",
+                    "label": "operator-image-label",
+                    "status": "available",
+                    "tags": ["project=private"],
+                    "regions": [
+                        {"region": "us-east", "status": "available"},
+                        {"region": "us-west", "status": "pending replication"},
+                    ],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.get_image_details("private/789")
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "GET")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/images/private%2F789")
+        self.assertEqual(
+            resource,
+            {
+                "image_id": "private/789",
+                "status": "available",
+                "regions": [
+                    {"region": "us-east", "status": "available"},
+                    {"region": "us-west", "status": "pending replication"},
+                ],
+            },
+        )
+
+    def test_replicate_image_posts_regions_without_retrying_mutation(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=3,
+            retry_backoff_seconds=(),
+        )
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "id": "private/789",
+                    "status": "available",
+                    "regions": [{"region": "us-east", "status": "available"}],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            resource = client.replicate_image(image_id="private/789", regions=["us-east", "us-west"])
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "POST")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/images/private%2F789/regions")
+        self.assertEqual(request_payload(requests[0]), {"regions": ["us-east", "us-west"]})
+        self.assertEqual(
+            resource,
+            {
+                "image_id": "private/789",
+                "status": "available",
+                "regions": [{"region": "us-east", "status": "available"}],
+            },
+        )
+        self.assertEqual(client.consume_retry_events(), [])
+
+    def test_replicate_image_does_not_retry_transient_failure(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=3,
+            retry_backoff_seconds=(),
+        )
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            raise self.http_error(500, "server failed")
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(LinodeApiError) as raised:
+                client.replicate_image(image_id="private/789", regions=["us-east", "us-west"])
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_method(), "POST")
+        self.assertEqual(str(raised.exception), "Linode API request failed with status 500")
+        self.assertEqual(client.consume_retry_events(), [])
+
     def test_delete_image_uses_expected_path(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         requests: list[object] = []

@@ -41,7 +41,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "9.8.7\n")
 
     def test_version_after_subcommand_prints_package_version_and_exits(self) -> None:
-        for command in ("plan", "capture", "deploy", "capture-deploy", "cleanup"):
+        for command in ("plan", "capture", "deploy", "capture-deploy", "replicate", "cleanup"):
             with self.subTest(command=command):
                 output = StringIO()
                 with patch("linode_image_lab.cli.version", return_value="9.8.7"):
@@ -80,7 +80,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("project=linode-image-lab", payload["tags"])
 
     def test_exposes_capture_deploy_commands(self) -> None:
-        for command in ("capture", "deploy", "capture-deploy"):
+        for command in ("capture", "deploy", "capture-deploy", "replicate"):
             with self.subTest(command=command):
                 output = StringIO()
                 with redirect_stdout(output):
@@ -138,6 +138,17 @@ class CliTests(unittest.TestCase):
                 "linode/debian12",
                 "--type",
                 "g6-nanode-1",
+            ],
+            [
+                "replicate",
+                "--region",
+                "us-east",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+                "--image-id",
+                "private/789",
             ],
             [
                 "cleanup",
@@ -252,6 +263,7 @@ class CliTests(unittest.TestCase):
             ("capture", ["capture", "--region", "us-east"]),
             ("deploy", ["deploy", "--region", "us-east"]),
             ("capture-deploy", ["capture-deploy", "--region", "us-east"]),
+            ("replicate", ["replicate", "--region", "us-east"]),
             ("cleanup", ["cleanup"]),
         )
         for command, args in cases:
@@ -309,6 +321,14 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--type", error.getvalue())
+
+    def test_replicate_execute_requires_image_id_before_mutation(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["replicate", "--region", "us-east", "--execute"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--image-id for the custom image to replicate", error.getvalue())
 
     def test_missing_region_without_config_still_fails(self) -> None:
         error = StringIO()
@@ -426,6 +446,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["regions"], ["us-west"])
         self.assertEqual(payload["ttl"], "2031-01-01T00:00:00Z")
+
+    def test_replicate_config_fills_dry_run_defaults_without_token_lookup(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [replicate]
+            region = "us-west"
+            image_id = "private/example-custom-image"
+            ttl = "2030-01-01T00:00:00Z"
+            """
+        )
+
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            redirect_stdout(output),
+        ):
+            code = main(["replicate", "--config", config_path])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["regions"], ["us-west"])
+        self.assertEqual(payload["replication_intent"]["image_id"], "[REDACTED]")
 
     def test_deploy_config_fills_firewall_and_instance_type_alias_for_dry_run(self) -> None:
         config_path = self.write_config(

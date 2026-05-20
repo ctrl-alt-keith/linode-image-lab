@@ -82,6 +82,10 @@ class LinodeClientProtocol(Protocol):
 
     def wait_image_available(self, image_id: str) -> dict[str, Any]: ...
 
+    def get_image_details(self, image_id: str) -> dict[str, Any]: ...
+
+    def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, Any]: ...
+
     def list_managed_linodes(self) -> list[dict[str, Any]]: ...
 
     def list_managed_images(self) -> list[dict[str, Any]]: ...
@@ -241,6 +245,27 @@ class LinodeClient:
             return self._image_resource(response)
 
         return self._wait_until(current, lambda resource: resource.get("status") == "available")
+
+    def get_image_details(self, image_id: str) -> dict[str, Any]:
+        escaped = quote(image_id, safe="")
+        try:
+            response = self._request("GET", f"/images/{escaped}", retry=True, operation="get_image_details")
+        except LinodeTokenError:
+            raise
+        except LinodeApiError as exc:
+            raise LinodePreflightError("requested image is unavailable") from exc
+        return self._image_details_resource(response)
+
+    def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, Any]:
+        escaped = quote(image_id, safe="")
+        response = self._request(
+            "POST",
+            f"/images/{escaped}/regions",
+            {"regions": list(regions)},
+            retry=False,
+            operation="replicate_image",
+        )
+        return self._image_details_resource(response)
 
     def list_managed_linodes(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
@@ -547,3 +572,29 @@ class LinodeClient:
             "status": response.get("status"),
             "tags": response.get("tags", []),
         }
+
+    @staticmethod
+    def _image_details_resource(response: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "image_id": response.get("id"),
+            "status": response.get("status"),
+            "regions": LinodeClient._image_regions(response.get("regions", [])),
+        }
+
+    @staticmethod
+    def _image_regions(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        regions: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            region = item.get("region")
+            if not isinstance(region, str) or not region.strip():
+                continue
+            entry = {"region": region}
+            status = item.get("status")
+            if isinstance(status, str) and status.strip():
+                entry["status"] = status
+            regions.append(entry)
+        return regions
