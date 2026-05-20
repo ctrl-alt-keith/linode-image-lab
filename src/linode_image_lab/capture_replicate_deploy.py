@@ -234,7 +234,16 @@ def run_replication_phase(
     finish_step(manifest, "preflight_replication_inputs")
 
     append_step(manifest, "submit_image_replication", mutates=True, status="running")
-    replication_result = client.replicate_image(image_id=image_id, regions=submitted_regions)
+    try:
+        replication_result = client.replicate_image(image_id=image_id, regions=submitted_regions)
+    except LinodeApiError as exc:
+        provider_error = exc.provider_error_details()
+        if provider_error is not None:
+            manifest["replication"]["provider_error"] = provider_error
+            manifest["provider_error"] = provider_error
+        manifest["replication"]["status"] = "failed"
+        manifest["validation"]["replication"] = {"status": "failed"}
+        raise
     manifest["replication"]["result"] = replication_result
     manifest["replication"]["provider_response_summary"] = provider_response_summary(replication_result)
     manifest["replication"]["status"] = "submitted"

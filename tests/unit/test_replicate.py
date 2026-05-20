@@ -16,6 +16,7 @@ class FakeReplicateClient:
         image_regions: list[dict[str, object]] | None = None,
         fail_region: str | None = None,
         fail_submit: bool = False,
+        provider_error_submit: bool = False,
     ) -> None:
         self.calls: list[str] = []
         self.image_status = image_status
@@ -24,6 +25,7 @@ class FakeReplicateClient:
         )
         self.fail_region = fail_region
         self.fail_submit = fail_submit
+        self.provider_error_submit = provider_error_submit
         self.submitted_regions: list[str] = []
 
     def preflight(self) -> None:
@@ -45,6 +47,12 @@ class FakeReplicateClient:
     def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, object]:
         self.calls.append("replicate_image")
         self.submitted_regions = list(regions)
+        if self.provider_error_submit:
+            raise LinodeApiError(
+                "Linode API request failed with status 400",
+                status_code=400,
+                provider_errors=[{"reason": "Image private/789 is not allowed", "field": "regions"}],
+            )
         if self.fail_submit:
             raise LinodeApiError("Linode API request failed with status 500")
         return {
@@ -291,6 +299,28 @@ class ReplicateExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "failed")
         self.assertEqual(manifest["steps"][-1], {"name": "submit_image_replication", "mutates": True, "status": "failed"})
         self.assertEqual(manifest["errors"], ["Linode API request failed with status 500"])
+
+    def test_execute_submission_failure_records_sanitized_provider_error(self) -> None:
+        client = FakeReplicateClient(provider_error_submit=True)
+
+        with self.assertRaises(ReplicateError) as raised:
+            replicate_plan(
+                regions=["us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                image_id="private/789",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertEqual(
+            manifest["provider_error"],
+            {
+                "status_code": 400,
+                "errors": [{"reason": "Image [REDACTED] is not allowed", "field": "regions"}],
+            },
+        )
 
 
 if __name__ == "__main__":

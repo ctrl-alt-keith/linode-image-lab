@@ -18,12 +18,14 @@ class FakeCaptureReplicateDeployClient:
         self,
         *,
         image_regions: list[dict[str, object]] | None = None,
+        fail_replicate_submit: bool = False,
         fail_replica_wait: bool = False,
         fail_deploy_regions: set[str] | None = None,
         fail_capture_disk: bool = False,
     ) -> None:
         self.calls: list[str] = []
         self.image_regions = image_regions if image_regions is not None else [{"region": "us-east", "status": "available"}]
+        self.fail_replicate_submit = fail_replicate_submit
         self.fail_replica_wait = fail_replica_wait
         self.fail_deploy_regions = fail_deploy_regions or set()
         self.fail_capture_disk = fail_capture_disk
@@ -148,6 +150,17 @@ class FakeCaptureReplicateDeployClient:
     def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, object]:
         self.calls.append("replicate_image")
         self.submitted_regions = list(regions)
+        if self.fail_replicate_submit:
+            raise LinodeApiError(
+                "Linode API request failed with status 400",
+                status_code=400,
+                provider_errors=[
+                    {
+                        "reason": "Image private/789 cannot be replicated to requested region with token=secret",
+                        "field": "regions",
+                    }
+                ],
+            )
         return {
             "image_id": image_id,
             "status": "pending",
@@ -264,6 +277,44 @@ class CaptureReplicateDeployTests(unittest.TestCase):
         self.assertNotIn("create_deploy_instance:us-sea", client.calls)
         self.assertEqual(manifest["status"], "failed")
         self.assertEqual(manifest["capture"]["cleanup"]["deleted"][0]["linode_id"], 123)
+
+    def test_execute_records_provider_error_details_when_replication_submit_fails(self) -> None:
+        client = FakeCaptureReplicateDeployClient(fail_replicate_submit=True)
+
+        with self.assertRaises(CaptureReplicateDeployError) as raised:
+            capture_replicate_deploy_plan(
+                regions=["us-sea", "us-east"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                source_image="linode/alpine3.23",
+                instance_type="g6-nanode-1",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(client.calls.count("replicate_image"), 1)
+        self.assertNotIn("wait_image_regions_available", client.calls)
+        self.assertNotIn("create_deploy_instance:us-sea", client.calls)
+        self.assertEqual(manifest["replication"]["status"], "failed")
+        self.assertEqual(
+            manifest["replication"]["provider_error"],
+            {
+                "status_code": 400,
+                "errors": [
+                    {
+                        "reason": "Image [REDACTED] cannot be replicated to requested region with token=[REDACTED]",
+                        "field": "regions",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(manifest["provider_error"], manifest["replication"]["provider_error"])
+        self.assertEqual(manifest["capture"]["cleanup"]["deleted"][0]["linode_id"], 123)
+        self.assertEqual(manifest["deploy_results"], {})
+        self.assertNotIn("private/789", serialize_manifest(manifest))
 
     def test_execute_cleans_up_after_capture_failure(self) -> None:
         client = FakeCaptureReplicateDeployClient(fail_capture_disk=True)

@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .manifest import PROJECT, tags_to_dict
+from .redaction import redact
 
 TOKEN_ENV_NAME = "LINODE_TOKEN"
 DEFAULT_API_BASE_URL = "https://api.linode.com/v4"
@@ -23,6 +24,31 @@ RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 class LinodeApiError(ValueError):
     """Raised when the Linode API boundary cannot complete a requested action."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.provider_errors = []
+        for item in provider_errors or []:
+            redacted = redact(item)
+            if isinstance(redacted, dict):
+                self.provider_errors.append(redacted)
+
+    def provider_error_details(self) -> dict[str, Any] | None:
+        if self.status_code is None and not self.provider_errors:
+            return None
+        details: dict[str, Any] = {}
+        if self.status_code is not None:
+            details["status_code"] = self.status_code
+        if self.provider_errors:
+            details["errors"] = self.provider_errors
+        return details
 
 
 class LinodeTokenError(LinodeApiError):
@@ -420,7 +446,11 @@ class LinodeClient:
                     )
                     self._sleep_before_retry(delay)
                     continue
-                raise LinodeApiError(self._failure_message(f"Linode API request failed with status {exc.code}", attempt)) from exc
+                raise LinodeApiError(
+                    self._failure_message(f"Linode API request failed with status {exc.code}", attempt),
+                    status_code=exc.code,
+                    provider_errors=self._provider_errors(exc),
+                ) from exc
             except OSError as exc:
                 if attempt < attempts:
                     delay, delay_source = self._deterministic_retry_delay(attempt)
@@ -542,6 +572,49 @@ class LinodeClient:
     def _sleep_before_retry(delay: float | None) -> None:
         if delay is not None and delay > 0:
             time.sleep(delay)
+
+    @classmethod
+    def _provider_errors(cls, exc: HTTPError) -> list[dict[str, Any]]:
+        payload = cls._http_error_payload(exc)
+        if not isinstance(payload, dict):
+            return []
+
+        raw_errors = payload.get("errors")
+        if isinstance(raw_errors, list):
+            errors = [cls._provider_error_entry(item) for item in raw_errors if isinstance(item, dict)]
+            return [error for error in errors if error]
+
+        for key in ("reason", "message", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return [{"reason": redact(value.strip())}]
+        return []
+
+    @staticmethod
+    def _http_error_payload(exc: HTTPError) -> object | None:
+        try:
+            body = exc.read()
+        except (OSError, ValueError):
+            return None
+        if not body:
+            return None
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+    @staticmethod
+    def _provider_error_entry(item: dict[str, Any]) -> dict[str, Any]:
+        entry: dict[str, Any] = {}
+        for key in ("reason", "message", "field"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                entry[key] = redact(value.strip())
+        return entry
 
     def _record_retry_event(
         self,

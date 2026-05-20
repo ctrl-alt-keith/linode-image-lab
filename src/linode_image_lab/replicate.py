@@ -159,6 +159,10 @@ def execute_replicate(
         mark_running_step_failed(manifest, client=run_client)
         manifest["status"] = "failed"
         manifest["errors"] = [safe_error_message(exc)]
+        if isinstance(exc, LinodeApiError):
+            provider_error = exc.provider_error_details()
+            if provider_error is not None:
+                manifest["provider_error"] = provider_error
         if manifest.get("validation", {}).get("status") == "running":
             manifest["validation"]["status"] = "failed"
         raise ReplicateError("replicate --execute failed", manifest) from exc

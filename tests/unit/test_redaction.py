@@ -28,6 +28,9 @@ class RedactionTests(unittest.TestCase):
             {"linode_id": REDACTION, "image_id": REDACTION, "run_id": "run-test"},
         )
 
+    def test_redacts_provider_image_id_inside_text(self) -> None:
+        self.assertEqual(redact_text("image private/123 failed"), f"image {REDACTION} failed")
+
     def test_keeps_source_image_visible_while_redacting_provider_image_id(self) -> None:
         payload = {"source_image": "linode/debian12", "image_id": "private/123"}
 

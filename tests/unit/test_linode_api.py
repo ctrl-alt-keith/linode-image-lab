@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import unittest
 from unittest.mock import call, patch
 from urllib.error import HTTPError
@@ -38,8 +39,15 @@ def request_payload(request: object) -> dict[str, object]:
 
 
 class LinodeClientTests(unittest.TestCase):
-    def http_error(self, status: int, message: str, headers: dict[str, str] | None = None) -> HTTPError:
-        error = HTTPError(f"{API_BASE_URL}/profile", status, message, headers or {}, None)
+    def http_error(
+        self,
+        status: int,
+        message: str,
+        headers: dict[str, str] | None = None,
+        body: dict[str, object] | None = None,
+    ) -> HTTPError:
+        fp = BytesIO(json.dumps(body).encode("utf-8")) if body is not None else None
+        error = HTTPError(f"{API_BASE_URL}/profile", status, message, headers or {}, fp)
         self.addCleanup(error.close)
         return error
 
@@ -814,6 +822,50 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0].get_method(), "POST")
         self.assertEqual(str(raised.exception), "Linode API request failed with status 500")
+        self.assertEqual(client.consume_retry_events(), [])
+
+    def test_replicate_image_exposes_sanitized_provider_error_details(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            max_retry_attempts=3,
+            retry_backoff_seconds=(),
+        )
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            raise self.http_error(
+                400,
+                "bad request",
+                body={
+                    "errors": [
+                        {
+                            "reason": "Image private/789 cannot be replicated to requested region with token=secret",
+                            "field": "regions",
+                        }
+                    ]
+                },
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(LinodeApiError) as raised:
+                client.replicate_image(image_id="private/789", regions=["us-east", "us-west"])
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(str(raised.exception), "Linode API request failed with status 400")
+        self.assertEqual(
+            raised.exception.provider_error_details(),
+            {
+                "status_code": 400,
+                "errors": [
+                    {
+                        "reason": "Image [REDACTED] cannot be replicated to requested region with token=[REDACTED]",
+                        "field": "regions",
+                    }
+                ],
+            },
+        )
         self.assertEqual(client.consume_retry_events(), [])
 
     def test_wait_image_regions_available_polls_until_top_level_and_requested_regions_available(self) -> None:

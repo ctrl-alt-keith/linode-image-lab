@@ -228,11 +228,14 @@ expectations, and no provider calls.
 
 Execute manifests include the capture result, replication request/result,
 replica status checks, per-region deploy results, validation summary, cleanup
-summary, and final `status`. The command fails closed before deploy if existing
-image regions are not exposed or if requested replicas do not report
-`available` before the bounded wait expires. It records only the emitted
-manifest, performs no background work, does not repair replicas, and keeps
-cleanup scoped to the run's temporary resources.
+summary, and final `status`. If the replication POST fails, the manifest also
+includes sanitized provider error details such as status code and provider
+reason or field values when the API response exposes them. The command fails
+closed before deploy if existing image regions are not exposed, replication
+submission fails, or requested replicas do not report `available` before the
+bounded wait expires. It records only the emitted manifest, performs no
+background work, does not repair replicas, and keeps cleanup scoped to the
+run's temporary resources.
 
 Config-backed defaults use `[capture-replicate-deploy]`:
 

@@ -7,6 +7,8 @@
 - Add `capture-replicate-deploy` to capture in the first requested region,
   explicitly replicate the captured image to deploy regions, wait for requested
   replicas to report available, and deploy with cleanup-first manifests.
+- Include sanitized provider status and reason details when image replication
+  submission fails.
 - Add `replicate` to dry-run and explicitly execute custom image replication
   while preserving dry-run-first and mutation-gated behavior.
 - Add `firewall-sync` to consume a private trusted network registry and sync

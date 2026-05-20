@@ -15,6 +15,7 @@ AUTHORIZED_KEY_TEXT_RE = re.compile(
     r"\b(?:ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|"
     r"sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+(?: [^\n\r]+)?"
 )
+PROVIDER_IMAGE_ID_TEXT_RE = re.compile(r"\bprivate/[A-Za-z0-9._-]+\b")
 PROVIDER_IDENTIFIER_KEYS = {
     "account_id",
     "disk_id",
@@ -47,7 +48,9 @@ def redact_text(value: str) -> str:
             return f"{match.group(2)}={REDACTION}"
         return REDACTION
 
-    return AUTHORIZED_KEY_TEXT_RE.sub(REDACTION, TOKEN_TEXT_RE.sub(replace, value))
+    text = TOKEN_TEXT_RE.sub(replace, value)
+    text = AUTHORIZED_KEY_TEXT_RE.sub(REDACTION, text)
+    return PROVIDER_IMAGE_ID_TEXT_RE.sub(REDACTION, text)
 
 
 def redact(value: Any) -> Any:
