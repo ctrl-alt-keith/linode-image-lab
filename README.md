@@ -5,6 +5,7 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 - Plans capture, deploy, and capture-deploy runs before any API mutation.
 - Captures custom images from temporary Linode instances.
 - Deploys temporary validation instances from custom images.
+- Submits explicit custom image replication requests when requested.
 - Validates requested region, Linode type, image inputs, tags, resources, and
   running status at the API level.
 - Cleans up temporary resources while preserving custom images as deliverables.
@@ -103,8 +104,8 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 ## Authentication
 
 `LINODE_TOKEN` is required when `--execute` is used and when `cleanup
---discover` is used. Dry-run commands, including plain `cleanup`, do not read
-the token, call Linode, or mutate resources.
+--discover` is used. Dry-run commands, including plain `cleanup` and
+`replicate`, do not read the token, call Linode, or mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -212,6 +213,15 @@ specify cross-region deploy latency. Operators should expect farther-region
 deploys may take longer, but the tool does not depend on that timing.
 Standalone `capture --execute` and `deploy --execute` remain single-region
 only.
+
+`replicate --execute` accepts multiple regions and submits one explicit custom
+image replication request. Because the Linode API request represents the
+complete region set for an image, execute mode first reads the image's existing
+regions and submits existing-plus-requested regions. If existing regions are
+not exposed, the command fails before mutation. Replicate dry-run output
+models the requested regions and records that execute mode will preserve
+provider-reported existing regions, but it does not read `LINODE_TOKEN` or call
+Linode.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,

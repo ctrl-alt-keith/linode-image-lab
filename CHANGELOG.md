@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `replicate` to dry-run and explicitly execute custom image replication
+  while preserving dry-run-first and mutation-gated behavior.
 - Add `firewall-sync` to consume a private trusted network registry and sync
   one managed Linode firewall allowlist rule with dry-run-first behavior.
 - Add TTL-aware lab artifact tags to custom images produced during capture

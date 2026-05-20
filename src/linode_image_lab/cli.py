@@ -28,6 +28,7 @@ from .config import (
 from .deploy import DeployError, deploy_plan
 from .firewall_sync import FirewallSyncError, firewall_sync_plan
 from .manifest import PROJECT, create_manifest, serialize_manifest, validate_run_id
+from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
 
 PACKAGE_NAME = "linode-image-lab"
@@ -248,6 +249,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy validation Linode after execution.",
     )
 
+    replicate = subparsers.add_parser("replicate", help="Plan or execute explicit custom image replication.")
+    add_version_arg(replicate, version_text)
+    add_config_arg(replicate, dest="command_config")
+    add_region_args(replicate, required=True)
+    replicate.add_argument("--execute", action="store_true", help="Opt into Linode image replication mutation.")
+    add_manifest_file_arg(replicate)
+    replicate.add_argument("--image-id", help="Custom image id to replicate.")
+
     cleanup = subparsers.add_parser("cleanup", help="Plan, discover, or execute tag-scoped cleanup.")
     add_version_arg(cleanup, version_text)
     add_config_arg(cleanup, dest="command_config")
@@ -275,7 +284,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
     config = load_config(config_path(args))
     defaults = command_defaults(config, args.command)
 
-    if args.command in {"plan", "capture", "deploy", "capture-deploy"}:
+    if args.command in {"plan", "capture", "deploy", "capture-deploy", "replicate"}:
         if args.region is None:
             args.region = config_regions(defaults)
         if not parse_regions(args.region):
@@ -301,6 +310,10 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
         args.user_data = resolved_user_data(defaults, args)
+
+    if args.command == "replicate":
+        if args.image_id is None and "image_id" in defaults:
+            args.image_id = defaults["image_id"]
 
     if args.command == "capture-deploy":
         if args.firewall_id is None and "firewall_id" in defaults:
@@ -513,6 +526,15 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             preserve_instance=args.preserve_instance,
         )
 
+    if args.command == "replicate":
+        return replicate_plan(
+            regions=parse_regions(args.region),
+            run_id=args.run_id,
+            ttl=args.ttl,
+            execute=args.execute,
+            image_id=args.image_id,
+        )
+
     if args.command == "cleanup":
         return cleanup_plan(
             run_id=args.run_id,
@@ -642,6 +664,12 @@ def main(argv: list[str] | None = None) -> int:
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)
             sys.stderr.write("capture-deploy --execute failed\n")
+            return 1
+        parser.error(str(exc))
+    except ReplicateError as exc:
+        if exc.manifest is not None:
+            emit_manifest(args, exc.manifest)
+            sys.stderr.write("replicate --execute failed\n")
             return 1
         parser.error(str(exc))
     except CleanupError as exc:

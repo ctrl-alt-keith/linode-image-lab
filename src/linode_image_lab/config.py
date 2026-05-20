@@ -24,6 +24,7 @@ ROOT_KEYS = {
     "capture",
     "deploy",
     "capture-deploy",
+    "replicate",
     "cleanup",
     "firewall-sync",
 }
@@ -54,6 +55,7 @@ TABLE_FIELDS = {
         "authorized_keys",
         "authorized_keys_file",
     },
+    "replicate": {"region", "regions", "image_id", "ttl"},
     "cleanup": {"ttl"},
     "firewall-sync": {
         "firewall_id",
@@ -66,11 +68,12 @@ TABLE_FIELDS = {
         "managed_label",
     },
 }
-COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "cleanup", "firewall-sync"}
+COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "replicate", "cleanup", "firewall-sync"}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type", "image_project_tag"),
     "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys", "user_data"),
+    "replicate": ("regions", "ttl", "image_id"),
     "capture-deploy": (
         "regions",
         "ttl",

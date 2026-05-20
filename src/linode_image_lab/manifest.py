@@ -12,8 +12,8 @@ from .redaction import redact
 
 PROJECT = "linode-image-lab"
 SCHEMA_VERSION = 1
-VALID_MODES = {"capture", "deploy", "capture-deploy"}
-VALID_COMPONENTS = {"capture", "deploy"}
+VALID_MODES = {"capture", "deploy", "capture-deploy", "replicate"}
+VALID_COMPONENTS = {"capture", "deploy", "replicate"}
 REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
 RESERVED_TAG_KEYS = frozenset((*REQUIRED_TAG_KEYS, "lifecycle"))
 RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
@@ -125,6 +125,8 @@ def lifecycle_tags_from_manifest(manifest: dict[str, Any]) -> list[str]:
 
 
 def component_for_mode(mode: str) -> str:
+    if mode == "replicate":
+        return "replicate"
     return "deploy" if mode == "deploy" else "capture"
 
 

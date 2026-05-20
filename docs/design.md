@@ -11,6 +11,7 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Make cleanup selection testable without cloud access.
 - Allow capture, deploy, and capture-deploy execution only after explicit
   opt-in; capture-deploy may fan out across requested regions.
+- Allow explicit image replication submission only after explicit opt-in.
 
 ## Non-Goals
 
@@ -36,6 +37,8 @@ first-class outcome.
 - `capture.py` owns dry-run capture manifests and execute-mode orchestration.
 - `deploy.py` owns dry-run deploy manifests and execute-mode orchestration.
 - `capture_deploy.py` owns the combined capture-deploy execute orchestration.
+- `replicate.py` owns dry-run replication manifests and execute-mode
+  replication submission.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
   serialization.
 - `regions.py` owns one-or-many region parsing.
@@ -55,10 +58,10 @@ For HTTP 429 rate-limit responses, the client honors Linode's documented
 `Retry-After` header when valid, then falls back to `X-RateLimit-Reset` when it
 can be parsed, before using the deterministic backoff.
 
-Create-instance, image-create, shutdown, cleanup DELETE, and other mutation
-requests remain single-attempt so transient failures cannot create duplicate
-resources, repeat unsafe state transitions, or obscure ambiguous delete
-outcomes.
+Create-instance, image-create, image-replicate, shutdown, cleanup DELETE, and
+other mutation requests remain single-attempt so transient failures cannot
+create duplicate resources, repeat unsafe state transitions, or obscure
+ambiguous outcomes.
 
 ## Manifest Foundation
 
@@ -79,6 +82,9 @@ execution adds top-level `execution_mode`, `steps`, `resources`, `capture`,
 combined resource list; nested `capture.resources` and `deploy.resources` are
 phase-specific views. Top-level `validation` and `cleanup` are combined
 summaries; nested validation and cleanup blocks preserve phase-specific status.
+M6 replicate execution adds `execution_mode`, ordered `steps`,
+`replication_source`, `replication_request`, `replication_result`,
+`provider_response_summary`, `validation`, and `replica_status_polling` fields.
 Validation checks record `name`, `status`, a symbolic `target`, and a sanitized
 `failure_reason` when a check fails. Internal manifests may carry provider
 resource identifiers required for cleanup and debugging. Normal stdout uses
@@ -107,7 +113,7 @@ Supported config values are intentionally narrow:
 - `region` or `regions`,
 - `ttl`,
 - `source_image` for capture and capture-deploy,
-- `image_id` for deploy,
+- `image_id` for deploy and replicate,
 - `type` or `instance_type` for capture, deploy, and capture-deploy,
 - `image_project_tag` for captured custom image artifact tags in capture and
   capture-deploy,
@@ -144,6 +150,9 @@ Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
 multiple regions and runs one capture followed by bounded parallel deploy
 attempts.
+`replicate --execute` accepts multiple regions and submits one explicit image
+replication request. Replicate config can provide `region`, `regions`,
+`image_id`, and `ttl`.
 
 ## Capture Execution Boundary
 
@@ -191,6 +200,33 @@ The execute flow is intentionally linear:
 
 M3 does not perform SSH, cloud-init, service, or application readiness
 validation.
+
+## Replicate Execution Boundary
+
+`replicate` without `--execute` remains non-mutating and does not read
+`LINODE_TOKEN`. `replicate --execute` requires one or more regions, an existing
+custom image id via `--image-id`, and `LINODE_TOKEN`.
+
+The execute flow is intentionally bounded:
+
+1. preflight the token with non-mutating API calls,
+2. read the requested image and require provider-reported `available` status,
+3. require the image response to expose existing image regions,
+4. preflight each requested region with non-mutating API calls,
+5. submit one image replication request to `POST /images/{imageId}/regions`,
+   using the existing image regions plus the requested regions,
+6. record provider/API-level validation, sanitized replication response
+   details, and a response summary of returned region statuses.
+
+The provider replication request uses a complete region set for the image. To
+avoid accidentally removing an existing image region, execute mode preserves
+the provider-reported existing regions in the submitted request. If existing
+regions are not exposed, the command fails before mutation.
+
+Replicate execution does not poll replica convergence, repair replicas, clean
+up replicas, or take ownership of regional image placement. The manifest
+records `replica_status_polling: "not_attempted"` because public docs expose
+replica statuses but do not define a polling contract this tool relies on.
 
 ## Capture-Deploy Execution Boundary
 

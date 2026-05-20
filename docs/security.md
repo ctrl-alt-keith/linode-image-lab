@@ -1,14 +1,16 @@
 # Security
 
 Linode Image Lab is designed to be public-safe by default. Dry-run behavior is
-non-mutating; capture and deploy execution require explicit opt-in.
+non-mutating; capture, deploy, and replication execution require explicit
+opt-in.
 
 ## Token Handling
 
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
 - The CLI reads `LINODE_TOKEN` for `capture --execute`, `deploy --execute`,
-  `capture-deploy --execute`, `cleanup --discover`, and `cleanup --execute`.
+  `capture-deploy --execute`, `replicate --execute`, `cleanup --discover`, and
+  `cleanup --execute`.
 - Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
@@ -44,15 +46,15 @@ selected command table, then `[defaults]`.
 
 ## Execute Permissions
 
-`capture --execute`, `deploy --execute`, `capture-deploy --execute`, `cleanup
---discover`, and `cleanup --execute` need a personal access token or equivalent
-OAuth access that can:
+`capture --execute`, `deploy --execute`, `capture-deploy --execute`,
+`replicate --execute`, `cleanup --discover`, and `cleanup --execute` need a
+personal access token or equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - read regions, Linode types, images, and configured firewalls for input
   preflight,
 - create, read, shut down, and delete temporary Linodes,
-- create and read custom images,
+- create, read, and explicitly replicate custom images,
 - apply tags to created resources.
 
 In Linode scope terms, this generally means `linodes:read_write` and
@@ -81,10 +83,10 @@ loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `capture`, `deploy`, `capture-deploy`, and `cleanup`
-are dry-run unless `--execute` is provided. Plain `cleanup` is a local manifest
-preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
---discover` is the explicit read-only provider discovery path.
+`plan` is dry-run only. `capture`, `deploy`, `capture-deploy`, `replicate`, and
+`cleanup` are dry-run unless `--execute` is provided. Plain `cleanup` is a
+local manifest preview only; it does not read `LINODE_TOKEN` or call Linode.
+`cleanup --discover` is the explicit read-only provider discovery path.
 
 `capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
 before mutation if required options or `LINODE_TOKEN` are missing. They perform
@@ -97,6 +99,15 @@ checked as non-empty UTF-8 text, Base64 encoded, and included as
 only targets resources whose required tags exactly match the current run. Tag
 mismatches are represented as preserved resources in manifests, not as deletion
 attempts.
+
+`replicate --execute` fails before mutation if `--image-id`, one or more
+regions, or `LINODE_TOKEN` are missing. It performs token preflight, reads the
+custom image, requires provider-reported image availability, requires existing
+image regions to be exposed, and preflights each requested region before
+submitting one replication request. The submitted request preserves existing
+provider-reported regions plus the requested regions, because the provider API
+uses the request as the complete image region set. Replicate does not poll
+replica convergence, delete replicas, or take ownership of regional placement.
 
 `capture-deploy --execute` creates resources with `mode=capture-deploy` and a
 component-specific tag: capture resources use `component=capture`, and deploy
@@ -120,7 +131,7 @@ Transient Linode API retries are limited to read-only API calls, polling reads,
 and managed resource discovery. Cleanup DELETE requests are single-attempt
 after candidate re-fetch because public provider docs do not document safe
 idempotent retry behavior after a lost DELETE response. Create-instance,
-image-create, shutdown, and cleanup DELETE requests are not retried
+image-create, image-replicate, shutdown, and cleanup DELETE requests are not retried
 automatically. HTTP 429 retries for retry-enabled reads honor Linode's
 documented rate-limit headers before falling back to deterministic backoff.
 Retry errors and metadata use public-safe operation names, status categories,
