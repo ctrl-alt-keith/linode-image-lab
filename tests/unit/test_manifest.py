@@ -109,6 +109,11 @@ class ManifestTests(unittest.TestCase):
 
         self.assertEqual(resolve_ttl("1 day", now=now), "2026-05-21T12:30:45Z")
         self.assertEqual(resolve_ttl("90 minutes", now=now), "2026-05-20T14:00:45Z")
+        self.assertEqual(resolve_ttl("30m", now=now), "2026-05-20T13:00:45Z")
+        self.assertEqual(resolve_ttl("24h", now=now), "2026-05-21T12:30:45Z")
+        self.assertEqual(resolve_ttl("7d", now=now), "2026-05-27T12:30:45Z")
+        self.assertEqual(resolve_ttl("2w", now=now), "2026-06-03T12:30:45Z")
+        self.assertEqual(resolve_ttl("45s", now=now), "2026-05-20T12:31:30Z")
 
     def test_normalizes_absolute_ttl_to_utc_timestamp(self) -> None:
         self.assertEqual(
@@ -135,6 +140,8 @@ class ManifestTests(unittest.TestCase):
     def test_rejects_invalid_ttl_input_for_manifest_tags(self) -> None:
         with self.assertRaisesRegex(ValueError, "absolute ISO-8601 timestamp"):
             resolve_ttl("not-a-timestamp")
+        with self.assertRaisesRegex(ValueError, "absolute ISO-8601 timestamp"):
+            resolve_ttl("tomorrow")
 
     def test_legacy_tags_remain_lifecycle_compatibility_alias(self) -> None:
         manifest = {"tags": ["project=linode-image-lab", "run_id=run-test"]}

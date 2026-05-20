@@ -20,20 +20,25 @@ RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 RUN_ID_RE = re.compile(RUN_ID_PATTERN)
 RELATIVE_TTL_RE = re.compile(r"^\s*(?P<amount>[1-9][0-9]*)\s*(?P<unit>[A-Za-z]+)\s*$")
 RELATIVE_TTL_UNITS = {
+    "s": "seconds",
     "second": "seconds",
     "seconds": "seconds",
     "sec": "seconds",
     "secs": "seconds",
+    "m": "minutes",
     "minute": "minutes",
     "minutes": "minutes",
     "min": "minutes",
     "mins": "minutes",
+    "h": "hours",
     "hour": "hours",
     "hours": "hours",
     "hr": "hours",
     "hrs": "hours",
+    "d": "days",
     "day": "days",
     "days": "days",
+    "w": "weeks",
     "week": "weeks",
     "weeks": "weeks",
 }
@@ -67,7 +72,7 @@ def resolve_ttl(value: str | None, *, now: datetime | None = None) -> str:
     if absolute is not None:
         return format_timestamp(absolute)
 
-    raise ValueError("ttl must be an absolute ISO-8601 timestamp or a relative duration like '1 day'")
+    raise ValueError("ttl must be an absolute ISO-8601 timestamp or a relative duration like '1 day' or '24h'")
 
 
 def parse_relative_ttl(value: str) -> timedelta | None:

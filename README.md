@@ -192,8 +192,9 @@ owned by `linode-image-lab`. A non-default image project tag places the
 captured image outside standalone cleanup ownership and discovery.
 `image_project_tag` is config-only and has no CLI override.
 `ttl` may be an absolute ISO-8601 timestamp or a relative duration such as
-`"4 hours"`, `"1 day"`, or `"2 weeks"`. Relative TTLs are resolved at command
-runtime and manifests still emit absolute UTC `ttl` values and `ttl=...` tags.
+`"4 hours"`, `"1 day"`, `"30m"`, `"24h"`, `"7d"`, or `"2w"`. Relative TTLs
+are resolved at command runtime and manifests still emit absolute UTC `ttl`
+values and `ttl=...` tags.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured

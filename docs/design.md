@@ -127,10 +127,10 @@ Supported config values are intentionally narrow:
 `project=<value>` artifact tag, not a way to configure lifecycle tag keys, and
 has no CLI override.
 `ttl` accepts either an absolute ISO-8601 timestamp or a relative duration such
-as `"4 hours"`, `"1 day"`, or `"2 weeks"`. Relative TTLs are resolved during
-manifest generation against the current command execution time; serialized
-manifests and lifecycle/artifact tags continue to carry absolute UTC TTL
-timestamps.
+as `"4 hours"`, `"1 day"`, `"30m"`, `"24h"`, `"7d"`, or `"2w"`. Relative TTLs
+are resolved during manifest generation against the current command execution
+time; serialized manifests and lifecycle/artifact tags continue to carry
+absolute UTC TTL timestamps.
 `--execute`, preservation flags, run id fields, image labels, tokens,
 passwords, private SSH keys, root passwords, inline metadata, and inline
 cloud-init or user-data values are not configurable. Unknown keys and

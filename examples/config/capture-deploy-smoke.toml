@@ -2,7 +2,7 @@ schema_version = 1
 
 [defaults]
 region = "us-sea"
-ttl = "1 day"
+ttl = "24h"
 
 [capture-deploy]
 source_image = "linode/alpine3.23"

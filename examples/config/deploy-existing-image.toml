@@ -2,7 +2,7 @@ schema_version = 1
 
 [defaults]
 region = "us-east"
-ttl = "1 day"
+ttl = "24h"
 
 [deploy]
 image_id = "private/example-custom-image"
