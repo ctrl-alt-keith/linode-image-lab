@@ -14,6 +14,7 @@ from typing import Any
 from .cleanup import CleanupError, cleanup_plan
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
+from .capture_replicate_deploy import CaptureReplicateDeployError, capture_replicate_deploy_plan
 from .config import (
     COMMAND_DEFAULT_FIELDS,
     ConfigError,
@@ -191,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_region_args(plan, required=True)
     plan.add_argument(
         "--mode",
-        choices=("capture", "deploy", "capture-deploy"),
+        choices=("capture", "deploy", "capture-deploy", "capture-replicate-deploy"),
         default="capture-deploy",
         help="Workflow mode to model.",
     )
@@ -249,6 +250,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the temporary deploy validation Linode after execution.",
     )
 
+    capture_replicate_deploy = subparsers.add_parser(
+        "capture-replicate-deploy",
+        help="Plan or execute capture, explicit replication, and deploy validation.",
+    )
+    add_version_arg(capture_replicate_deploy, version_text)
+    add_config_arg(capture_replicate_deploy, dest="command_config")
+    add_region_args(capture_replicate_deploy, required=True)
+    capture_replicate_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
+    add_manifest_file_arg(capture_replicate_deploy)
+    capture_replicate_deploy.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
+    capture_replicate_deploy.add_argument(
+        "--type",
+        dest="instance_type",
+        help="Linode type for the temporary capture and deploy Linodes.",
+    )
+    add_firewall_arg(capture_replicate_deploy)
+    add_authorized_keys_args(capture_replicate_deploy)
+    add_user_data_arg(capture_replicate_deploy)
+    capture_replicate_deploy.add_argument(
+        "--preserve-instance",
+        action="store_true",
+        help="Keep temporary deploy validation Linodes after execution.",
+    )
+
     replicate = subparsers.add_parser("replicate", help="Plan or execute explicit custom image replication.")
     add_version_arg(replicate, version_text)
     add_config_arg(replicate, dest="command_config")
@@ -284,7 +309,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
     config = load_config(config_path(args))
     defaults = command_defaults(config, args.command)
 
-    if args.command in {"plan", "capture", "deploy", "capture-deploy", "replicate"}:
+    if args.command in {"plan", "capture", "deploy", "capture-deploy", "capture-replicate-deploy", "replicate"}:
         if args.region is None:
             args.region = config_regions(defaults)
         if not parse_regions(args.region):
@@ -293,7 +318,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
     if hasattr(args, "ttl") and args.ttl is None and "ttl" in defaults:
         args.ttl = defaults["ttl"]
 
-    if args.command in {"capture", "capture-deploy"}:
+    if args.command in {"capture", "capture-deploy", "capture-replicate-deploy"}:
         if args.source_image is None and "source_image" in defaults:
             args.source_image = defaults["source_image"]
         if args.instance_type is None and ("type" in defaults or "instance_type" in defaults):
@@ -315,7 +340,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
         if args.image_id is None and "image_id" in defaults:
             args.image_id = defaults["image_id"]
 
-    if args.command == "capture-deploy":
+    if args.command in {"capture-deploy", "capture-replicate-deploy"}:
         if args.firewall_id is None and "firewall_id" in defaults:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
@@ -526,6 +551,21 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             preserve_instance=args.preserve_instance,
         )
 
+    if args.command == "capture-replicate-deploy":
+        return capture_replicate_deploy_plan(
+            regions=parse_regions(args.region),
+            run_id=args.run_id,
+            ttl=args.ttl,
+            execute=args.execute,
+            source_image=args.source_image,
+            instance_type=args.instance_type,
+            image_project_tag=getattr(args, "image_project_tag", None),
+            firewall_id=args.firewall_id,
+            authorized_keys=args.authorized_keys,
+            user_data=args.user_data,
+            preserve_instance=args.preserve_instance,
+        )
+
     if args.command == "replicate":
         return replicate_plan(
             regions=parse_regions(args.region),
@@ -664,6 +704,12 @@ def main(argv: list[str] | None = None) -> int:
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)
             sys.stderr.write("capture-deploy --execute failed\n")
+            return 1
+        parser.error(str(exc))
+    except CaptureReplicateDeployError as exc:
+        if exc.manifest is not None:
+            emit_manifest(args, exc.manifest)
+            sys.stderr.write("capture-replicate-deploy --execute failed\n")
             return 1
         parser.error(str(exc))
     except ReplicateError as exc:

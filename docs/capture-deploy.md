@@ -3,7 +3,8 @@
 This document describes the current capture/deploy workflow shape. M2 adds
 single-region capture execution, M3 adds single-region deploy execution, M4
 adds single-region capture-deploy execution, and M5 adds bounded multi-region
-capture-deploy execution.
+capture-deploy execution. The capture-replicate-deploy operator path adds an
+explicit replication phase before deploy.
 
 ## Capture
 
@@ -190,6 +191,63 @@ Use `linode-image-lab config validate --config PATH --command COMMAND` to
 validate a config file and inspect the effective defaults before a smoke run.
 The report is non-mutating, does not read `LINODE_TOKEN`, and labels precedence
 as CLI values, then the selected command table, then `[defaults]`.
+
+## Capture-Replicate-Deploy
+
+The capture-replicate-deploy flow is the bounded operator path for validating a
+captured image in multiple regions after an explicit replication request. By
+default, the command returns a dry-run manifest and performs no Linode action.
+
+`capture-replicate-deploy --execute` is mutating and requires:
+
+- at least one `--region`,
+- `--source-image`,
+- `--type`,
+- optional `--firewall-id` for deploy validation Linodes,
+- optional repeated `--authorized-key` or `--authorized-keys-file` for public
+  SSH keys on deploy validation Linodes,
+- `LINODE_TOKEN`.
+
+Execution steps:
+
+1. capture a custom image in the first requested region,
+2. read the captured image and require provider-reported `available` status
+   plus exposed existing image regions,
+3. submit one image replication request containing existing image regions plus
+   all requested deploy regions,
+4. wait with bounded read-only polling until requested deploy regions report
+   replica status `available`,
+5. deploy from the captured image to each requested region,
+6. clean up temporary capture-source and deploy validation Linodes by tag,
+7. preserve the captured custom image as the workflow deliverable.
+
+The command treats `regions` as deploy regions; the first region is also the
+capture region. Dry-run manifests show the capture region, deploy regions,
+replication target regions, planned capture/replication/deploy phases, cleanup
+expectations, and no provider calls.
+
+Execute manifests include the capture result, replication request/result,
+replica status checks, per-region deploy results, validation summary, cleanup
+summary, and final `status`. The command fails closed before deploy if existing
+image regions are not exposed or if requested replicas do not report
+`available` before the bounded wait expires. It records only the emitted
+manifest, performs no background work, does not repair replicas, and keeps
+cleanup scoped to the run's temporary resources.
+
+Config-backed defaults use `[capture-replicate-deploy]`:
+
+```toml
+schema_version = 1
+
+[defaults]
+ttl = "12h"
+
+[capture-replicate-deploy]
+regions = ["us-sea", "us-east", "us-west"]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"
+firewall_id = 12345
+```
 
 ## Cleanup
 

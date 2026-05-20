@@ -24,6 +24,7 @@ ROOT_KEYS = {
     "capture",
     "deploy",
     "capture-deploy",
+    "capture-replicate-deploy",
     "replicate",
     "cleanup",
     "firewall-sync",
@@ -55,6 +56,18 @@ TABLE_FIELDS = {
         "authorized_keys",
         "authorized_keys_file",
     },
+    "capture-replicate-deploy": {
+        "region",
+        "regions",
+        "source_image",
+        "type",
+        "instance_type",
+        "firewall_id",
+        "ttl",
+        "image_project_tag",
+        "authorized_keys",
+        "authorized_keys_file",
+    },
     "replicate": {"region", "regions", "image_id", "ttl"},
     "cleanup": {"ttl"},
     "firewall-sync": {
@@ -68,13 +81,31 @@ TABLE_FIELDS = {
         "managed_label",
     },
 }
-COMMAND_TABLES = {"capture", "deploy", "capture-deploy", "replicate", "cleanup", "firewall-sync"}
+COMMAND_TABLES = {
+    "capture",
+    "deploy",
+    "capture-deploy",
+    "capture-replicate-deploy",
+    "replicate",
+    "cleanup",
+    "firewall-sync",
+}
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
     "capture": ("regions", "ttl", "source_image", "type", "image_project_tag"),
     "deploy": ("regions", "ttl", "image_id", "type", "firewall_id", "authorized_keys", "user_data"),
     "replicate": ("regions", "ttl", "image_id"),
     "capture-deploy": (
+        "regions",
+        "ttl",
+        "source_image",
+        "type",
+        "image_project_tag",
+        "firewall_id",
+        "authorized_keys",
+        "user_data",
+    ),
+    "capture-replicate-deploy": (
         "regions",
         "ttl",
         "source_image",
@@ -373,7 +404,7 @@ def effective_command_defaults(
 
 def precedence_labels(command: str) -> list[str]:
     labels = ["cli"]
-    if command == "capture-deploy":
+    if command in {"capture-deploy", "capture-replicate-deploy"}:
         labels.append("[deploy]")
     if command in COMMAND_TABLES:
         labels.append(f"[{command}]")
@@ -437,7 +468,7 @@ def resolve_user_data_defaults(
     if "user_data" in cli_values:
         return load_user_data(str(cli_values["user_data"]), "cli --user-data-file"), CLI_SOURCE_LABELS["user_data"]
 
-    if command not in {"deploy", "capture-deploy"}:
+    if command not in {"deploy", "capture-deploy", "capture-replicate-deploy"}:
         return None, ""
 
     deploy_table = config.get("deploy", {})
@@ -464,13 +495,13 @@ def config_authorized_keys(config: dict[str, Any], command: str) -> list[str]:
 def authorized_key_table_order(command: str) -> tuple[str, ...]:
     if command == "deploy":
         return ("deploy",)
-    if command == "capture-deploy":
-        return ("deploy", "capture-deploy")
+    if command in {"capture-deploy", "capture-replicate-deploy"}:
+        return ("deploy", command)
     return ()
 
 
 def config_user_data(config: dict[str, Any], command: str) -> DeployUserData | None:
-    if command not in {"deploy", "capture-deploy"}:
+    if command not in {"deploy", "capture-deploy", "capture-replicate-deploy"}:
         return None
     deploy_table = config.get("deploy", {})
     if "user_data_file" not in deploy_table:

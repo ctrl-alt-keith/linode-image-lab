@@ -12,7 +12,7 @@ from .redaction import redact
 
 PROJECT = "linode-image-lab"
 SCHEMA_VERSION = 1
-VALID_MODES = {"capture", "deploy", "capture-deploy", "replicate"}
+VALID_MODES = {"capture", "deploy", "capture-deploy", "capture-replicate-deploy", "replicate"}
 VALID_COMPONENTS = {"capture", "deploy", "replicate"}
 REQUIRED_TAG_KEYS = ("project", "run_id", "mode", "component", "ttl")
 RESERVED_TAG_KEYS = frozenset((*REQUIRED_TAG_KEYS, "lifecycle"))

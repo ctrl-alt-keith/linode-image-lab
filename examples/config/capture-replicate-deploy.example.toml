@@ -1,0 +1,10 @@
+schema_version = 1
+
+[defaults]
+ttl = "12h"
+
+[capture-replicate-deploy]
+regions = ["us-sea", "us-east", "us-west"]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"
+firewall_id = 12345

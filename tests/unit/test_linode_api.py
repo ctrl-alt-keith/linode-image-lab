@@ -816,6 +816,73 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "Linode API request failed with status 500")
         self.assertEqual(client.consume_retry_events(), [])
 
+    def test_wait_image_regions_available_polls_until_top_level_and_requested_regions_available(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            poll_interval_seconds=0,
+            max_wait_seconds=5,
+            retry_backoff_seconds=(),
+        )
+        responses = [
+            {
+                "id": "private/789",
+                "status": "pending",
+                "regions": [
+                    {"region": "us-east", "status": "available"},
+                    {"region": "us-west", "status": "pending replication"},
+                ],
+            },
+            {
+                "id": "private/789",
+                "status": "available",
+                "regions": [
+                    {"region": "us-east", "status": "available"},
+                    {"region": "us-west", "status": "available"},
+                ],
+            },
+        ]
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(responses.pop(0))
+
+        with (
+            patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen),
+            patch("linode_image_lab.linode_api.time.sleep") as sleep,
+        ):
+            resource = client.wait_image_regions_available("private/789", ["us-west"])
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0].get_method(), "GET")
+        self.assertEqual(requests[0].full_url, f"{API_BASE_URL}/images/private%2F789")
+        sleep.assert_called_once_with(0)
+        self.assertEqual(resource["status"], "available")
+        self.assertEqual(resource["regions"][1], {"region": "us-west", "status": "available"})
+
+    def test_wait_image_regions_available_fails_when_region_never_reports_available(self) -> None:
+        client = LinodeClient(
+            token=TOKEN_VALUE,
+            api_base_url=API_BASE_URL,
+            poll_interval_seconds=0,
+            max_wait_seconds=0,
+            retry_backoff_seconds=(),
+        )
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            return FakeHTTPResponse(
+                {
+                    "id": "private/789",
+                    "status": "available",
+                    "regions": [{"region": "us-west", "status": "replicating"}],
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(LinodeApiError, "timed out waiting"):
+                client.wait_image_regions_available("private/789", ["us-west"])
+
     def test_delete_image_uses_expected_path(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         requests: list[object] = []

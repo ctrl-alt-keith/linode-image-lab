@@ -42,7 +42,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "9.8.7\n")
 
     def test_version_after_subcommand_prints_package_version_and_exits(self) -> None:
-        for command in ("plan", "capture", "deploy", "capture-deploy", "replicate", "cleanup"):
+        for command in (
+            "plan",
+            "capture",
+            "deploy",
+            "capture-deploy",
+            "capture-replicate-deploy",
+            "replicate",
+            "cleanup",
+        ):
             with self.subTest(command=command):
                 output = StringIO()
                 with patch("linode_image_lab.cli.version", return_value="9.8.7"):
@@ -81,7 +89,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("project=linode-image-lab", payload["tags"])
 
     def test_exposes_capture_deploy_commands(self) -> None:
-        for command in ("capture", "deploy", "capture-deploy", "replicate"):
+        for command in ("capture", "deploy", "capture-deploy", "capture-replicate-deploy", "replicate"):
             with self.subTest(command=command):
                 output = StringIO()
                 with redirect_stdout(output):
@@ -129,6 +137,19 @@ class CliTests(unittest.TestCase):
             ],
             [
                 "capture-deploy",
+                "--region",
+                "us-east",
+                "--run-id",
+                "run-test",
+                "--ttl",
+                "2030-01-01T00:00:00Z",
+                "--source-image",
+                "linode/debian12",
+                "--type",
+                "g6-nanode-1",
+            ],
+            [
+                "capture-replicate-deploy",
                 "--region",
                 "us-east",
                 "--run-id",
@@ -264,6 +285,7 @@ class CliTests(unittest.TestCase):
             ("capture", ["capture", "--region", "us-east"]),
             ("deploy", ["deploy", "--region", "us-east"]),
             ("capture-deploy", ["capture-deploy", "--region", "us-east"]),
+            ("capture-replicate-deploy", ["capture-replicate-deploy", "--region", "us-east"]),
             ("replicate", ["replicate", "--region", "us-east"]),
             ("cleanup", ["cleanup"]),
         )
@@ -319,6 +341,14 @@ class CliTests(unittest.TestCase):
         error = StringIO()
         with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
             main(["capture-deploy", "--region", "us-east", "--execute", "--source-image", "linode/debian12"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--type", error.getvalue())
+
+    def test_capture_replicate_deploy_execute_requires_options_before_mutation(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["capture-replicate-deploy", "--region", "us-east", "--execute", "--source-image", "linode/debian12"])
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--type", error.getvalue())
@@ -416,6 +446,50 @@ class CliTests(unittest.TestCase):
         self.assertIn("ttl=2026-05-21T12:30:45Z", payload["lifecycle_tags"])
         self.assertIn("ttl=2026-05-21T12:30:45Z", payload["component_tags"]["capture"])
         self.assertIn("ttl=2026-05-21T12:30:45Z", payload["component_tags"]["deploy"])
+
+    def test_capture_replicate_deploy_config_fills_dry_run_defaults_without_token_lookup(self) -> None:
+        user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [defaults]
+            ttl = "12h"
+
+            [deploy]
+            user_data_file = "{user_data_path}"
+
+            [capture-replicate-deploy]
+            regions = ["us-sea", "us-east", "us-west"]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            firewall_id = 12345
+            authorized_keys = ["{PUBLIC_KEY_ONE}"]
+            """
+        )
+
+        output = StringIO()
+        now = datetime(2026, 5, 20, 12, 30, 45, tzinfo=UTC)
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+            patch("linode_image_lab.manifest.utc_now", return_value=now),
+            redirect_stdout(output),
+        ):
+            code = main(["capture-replicate-deploy", "--config", config_path])
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["summary"]["capture_region"], "us-sea")
+        self.assertEqual(payload["summary"]["deploy_regions"], ["us-sea", "us-east", "us-west"])
+        self.assertEqual(payload["ttl"], "2026-05-21T00:30:45Z")
+        self.assertEqual(payload["deploy_config"]["firewall"], {"enabled": True, "firewall_id": "[REDACTED]"})
+        self.assertEqual(payload["deploy_config"]["authorized_keys"], {"enabled": True, "authorized_key_count": 1})
+        self.assertEqual(payload["deploy_config"]["user_data"]["byte_count"], len(USER_DATA.encode("utf-8")))
+        self.assertNotIn(PUBLIC_KEY_ONE, payload_text)
+        self.assertNotIn(USER_DATA, payload_text)
 
     def test_duplicate_global_and_command_local_config_fails_clearly(self) -> None:
         global_config_path = self.write_config(
@@ -908,6 +982,58 @@ class CliTests(unittest.TestCase):
             {"enabled": True, "source": "file", "byte_count": len(USER_DATA.encode("utf-8"))},
         )
         self.assertIn({"field": "user_data", "source": "[deploy].user_data_file"}, payload["sources"])
+
+    def test_config_validate_accepts_capture_replicate_deploy_defaults(self) -> None:
+        config_path = self.write_config(
+            f"""
+            schema_version = 1
+
+            [defaults]
+            ttl = "12h"
+
+            [deploy]
+            authorized_keys = ["{PUBLIC_KEY_ONE}"]
+
+            [capture-replicate-deploy]
+            regions = ["us-sea", "us-east"]
+            source_image = "linode/alpine3.23"
+            instance_type = "g6-nanode-1"
+            firewall_id = 12345
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["config", "validate", "--config", config_path, "--command", "capture-replicate-deploy"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["regions"], ["us-sea", "us-east"])
+        self.assertEqual(payload["effective_defaults"]["source_image"], "linode/alpine3.23")
+        self.assertEqual(payload["effective_defaults"]["type"], "g6-nanode-1")
+        self.assertEqual(payload["effective_defaults"]["firewall_id"], "[REDACTED]")
+        self.assertEqual(payload["effective_defaults"]["authorized_keys"], {"enabled": True, "authorized_key_count": 1})
+        self.assertEqual(payload["precedence"], ["cli", "[deploy]", "[capture-replicate-deploy]", "[defaults]"])
+
+    def test_capture_replicate_deploy_config_rejects_user_data_file_in_command_table(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            region = "us-sea"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            user_data_file = "cloud-init.yaml"
+            """
+        )
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["capture-replicate-deploy", "--config", config_path])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unknown config key in [capture-replicate-deploy]: user_data_file", error.getvalue())
 
     def test_config_validate_reports_user_data_cli_override_precedence(self) -> None:
         config_user_data_path = self.write_file(USER_DATA, name="config-cloud-init.yaml")

@@ -86,6 +86,8 @@ class LinodeClientProtocol(Protocol):
 
     def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, Any]: ...
 
+    def wait_image_regions_available(self, image_id: str, regions: list[str]) -> dict[str, Any]: ...
+
     def list_managed_linodes(self) -> list[dict[str, Any]]: ...
 
     def list_managed_images(self) -> list[dict[str, Any]]: ...
@@ -266,6 +268,24 @@ class LinodeClient:
             operation="replicate_image",
         )
         return self._image_details_resource(response)
+
+    def wait_image_regions_available(self, image_id: str, regions: list[str]) -> dict[str, Any]:
+        requested_regions = {region.strip().lower() for region in regions if region.strip()}
+
+        def current() -> dict[str, Any]:
+            return self.get_image_details(image_id)
+
+        def done(resource: dict[str, Any]) -> bool:
+            if resource.get("status") != "available":
+                return False
+            statuses = {
+                str(entry.get("region", "")).strip().lower(): str(entry.get("status", "")).strip().lower()
+                for entry in resource.get("regions", [])
+                if isinstance(entry, dict)
+            }
+            return all(statuses.get(region) == "available" for region in requested_regions)
+
+        return self._wait_until(current, done)
 
     def list_managed_linodes(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []

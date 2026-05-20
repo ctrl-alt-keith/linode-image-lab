@@ -12,13 +12,15 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Allow capture, deploy, and capture-deploy execution only after explicit
   opt-in; capture-deploy may fan out across requested regions.
 - Allow explicit image replication submission only after explicit opt-in.
+- Allow a bounded operator path that captures, explicitly replicates, waits for
+  requested replicas to report available, and deploys from that captured image.
 
 ## Non-Goals
 
 - No implicit Linode API mutations.
 - No GitHub Actions mutation, external scheduler integration, or
   general-purpose multi-region orchestration outside bounded
-  capture-deploy validation runs.
+  capture-deploy and capture-replicate-deploy validation runs.
 - No infrastructure ownership or planning model.
 - CI exists to run `make check`.
 
@@ -37,6 +39,8 @@ first-class outcome.
 - `capture.py` owns dry-run capture manifests and execute-mode orchestration.
 - `deploy.py` owns dry-run deploy manifests and execute-mode orchestration.
 - `capture_deploy.py` owns the combined capture-deploy execute orchestration.
+- `capture_replicate_deploy.py` owns the capture, explicit replication, and
+  deploy execute orchestration.
 - `replicate.py` owns dry-run replication manifests and execute-mode
   replication submission.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
@@ -85,6 +89,10 @@ summaries; nested validation and cleanup blocks preserve phase-specific status.
 M6 replicate execution adds `execution_mode`, ordered `steps`,
 `replication_source`, `replication_request`, `replication_result`,
 `provider_response_summary`, `validation`, and `replica_status_polling` fields.
+Capture-replicate-deploy execution adds top-level `capture`, `replication`,
+`deploy_results`, `validation`, `cleanup`, and `summary` fields so the operator
+path can report capture, replica readiness checks, per-region deploys, and
+cleanup without durable state.
 Validation checks record `name`, `status`, a symbolic `target`, and a sanitized
 `failure_reason` when a check fails. Internal manifests may carry provider
 resource identifiers required for cleanup and debugging. Normal stdout uses
@@ -94,8 +102,9 @@ sanitized serialization, which redacts provider identifiers before printing.
 
 Config is opt-in through `--config PATH`, either before or after the command,
 and uses TOML `schema_version = 1`. The config file can provide execution
-defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`, and
-`[cleanup]` tables. Most scalar defaults use override precedence: CLI flags,
+defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`,
+`[capture-replicate-deploy]`, `[replicate]`, and `[cleanup]` tables. Most
+scalar defaults use override precedence: CLI flags,
 then command-specific config, then `[defaults]`, then existing generated
 defaults. Deploy metadata fields have narrower rules described below.
 
@@ -112,14 +121,16 @@ Supported config values are intentionally narrow:
 
 - `region` or `regions`,
 - `ttl`,
-- `source_image` for capture and capture-deploy,
+- `source_image` for capture, capture-deploy, and capture-replicate-deploy,
 - `image_id` for deploy and replicate,
-- `type` or `instance_type` for capture, deploy, and capture-deploy,
+- `type` or `instance_type` for capture, deploy, capture-deploy, and
+  capture-replicate-deploy,
 - `image_project_tag` for captured custom image artifact tags in capture and
-  capture-deploy,
-- `firewall_id` for deploy instances in deploy and capture-deploy,
+  capture-deploy and capture-replicate-deploy,
+- `firewall_id` for deploy instances in deploy, capture-deploy, and
+  capture-replicate-deploy,
 - `authorized_keys` and `authorized_keys_file` for deploy instances in deploy
-  and capture-deploy,
+  and the combined deploy workflows,
 - `user_data_file` in `[deploy]` for Linode metadata user data on deploy
   instances.
 
@@ -144,12 +155,12 @@ Config precedence is field-specific for deploy metadata. Scalar fields such as
 `regions`, `ttl`, `source_image`, `image_id`, `type`, `image_project_tag`, and
 `firewall_id` use override precedence. Authorized keys are additive:
 `authorized_keys`, `authorized_keys_file`, `--authorized-key`, and
-`--authorized-keys-file` inputs are merged and deduped. For `capture-deploy`,
-authorized keys from `[deploy]` feed the deploy phase before
-`[capture-deploy]` adds command-specific keys. `[deploy].user_data_file` is
-deploy-scoped and feeds `deploy` and only the deploy phase of `capture-deploy`;
-`--user-data-file` overrides it when provided, and
-`[capture-deploy].user_data_file` is not supported.
+`--authorized-keys-file` inputs are merged and deduped. For `capture-deploy`
+and `capture-replicate-deploy`, authorized keys from `[deploy]` feed the deploy
+phase before the command table adds command-specific keys.
+`[deploy].user_data_file` is deploy-scoped and feeds `deploy` and only the
+deploy phase of the combined workflows; `--user-data-file` overrides it when
+provided, and command-table `user_data_file` is not supported.
 
 Multi-region config is accepted for dry-run manifests. Execute mode remains
 single-region for `capture` and `deploy`; `capture-deploy --execute` accepts
@@ -158,6 +169,9 @@ attempts.
 `replicate --execute` accepts multiple regions and submits one explicit image
 replication request. Replicate config can provide `region`, `regions`,
 `image_id`, and `ttl`.
+`capture-replicate-deploy --execute` accepts multiple regions, captures in the
+first region, treats the full region list as the deploy and replication target
+set, and can receive the same deploy metadata defaults as `capture-deploy`.
 
 ## Capture Execution Boundary
 
@@ -263,6 +277,33 @@ a bounded worker pool capped at 4 deploy workers. Linode custom images are
 deployable across regions; public docs do not specify cross-region deploy
 latency. Operators should expect farther-region deploys may take longer, but
 the tool does not depend on that timing.
+
+## Capture-Replicate-Deploy Execution Boundary
+
+`capture-replicate-deploy` without `--execute` remains non-mutating and does
+not read `LINODE_TOKEN`. `capture-replicate-deploy --execute` requires at least
+one region, a source image, a Linode type, and `LINODE_TOKEN`.
+
+The execute flow is bounded and has no durable ownership model:
+
+1. run capture in the first requested region with
+   `mode=capture-replicate-deploy` and `component=capture`,
+2. read the captured image details and require `available` status plus exposed
+   existing image regions,
+3. submit one replication request for existing image regions plus all requested
+   deploy regions,
+4. perform a bounded read-only wait until the requested deploy regions report
+   image replica status `available`,
+5. deploy from the captured image to each requested region with bounded
+   deploy fan-out,
+6. clean up temporary capture and deploy Linodes by current-run tags,
+7. preserve the captured custom image as the workflow deliverable.
+
+The workflow fails closed before deploy if existing image regions are not
+exposed or if requested replica statuses do not report `available` before the
+bounded wait expires. It does not retry the replication mutation, repair
+replicas, reconcile desired regions, run a scheduler, write state, or own image
+placement after the run.
 
 ## Cleanup Semantics
 
