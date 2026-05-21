@@ -200,7 +200,7 @@ default, the command returns a dry-run manifest and performs no Linode action.
 
 `capture-replicate-deploy --execute` is mutating and requires:
 
-- at least one `--region`,
+- at least one explicit `--region` or resolved `--deploy-group` target,
 - `--source-image`,
 - `--type`,
 - optional `--firewall-id` for deploy validation Linodes,
@@ -210,40 +210,45 @@ default, the command returns a dry-run manifest and performs no Linode action.
 
 Execution steps:
 
-1. resolve configured `replication_groups` from the selected region policy
-   artifact, defaulting to `policy/region-policy.toml`,
-2. combine explicit replication regions and group-expanded regions into a
+1. resolve configured `deploy_groups` and `replication_groups` from the
+   selected region policy artifact, defaulting to `policy/region-policy.toml`,
+2. combine explicit deploy regions and group-expanded deploy regions into a
+   deterministic deploy target set,
+3. combine explicit replication regions and group-expanded regions into a
    deterministic replication target set,
-3. read each resolved replication target region and require the provider
+4. read each resolved replication target region and require the provider
    `Object Storage` capability,
-4. capture a custom image in the first explicit deploy region,
-5. read the captured image and require provider-reported `available` status
+5. capture a custom image in the first resolved deploy target,
+6. read the captured image and require provider-reported `available` status
    plus exposed existing image regions,
-6. submit one image replication request containing existing image regions plus
+7. submit one image replication request containing existing image regions plus
    all resolved replication target regions,
-7. wait with bounded read-only polling until resolved replication targets report
+8. wait with bounded read-only polling until resolved replication targets report
    replica status `available`,
-8. deploy from the captured image only to explicit deploy regions,
-9. clean up temporary capture-source and deploy validation Linodes by tag,
-10. preserve the captured custom image as the workflow deliverable.
+9. deploy from the captured image only to resolved deploy targets,
+10. clean up temporary capture-source and deploy validation Linodes by tag,
+11. preserve the captured custom image as the workflow deliverable.
 
 The command treats `--region`, `region`, `regions`, and `deploy_regions` as
-explicit deploy regions; the first deploy region is also the capture region.
+explicit deploy regions. `deploy_groups` expand deploy targets from policy
+groups; the first resolved deploy target is also the capture region.
 `replication_regions` and `replication_groups` expand where the captured image
-is made available, not where deploy validation runs. Deploy regions are not
+is made available, not where deploy validation runs. Deploy targets are not
 automatically added to the resolved replication target set when either
-replication input is configured. When no replication regions or groups are
-configured, deploy regions remain the backwards-compatible default replication
+replication input is configured. Replication targets are not automatically
+added to deploy targets. When no replication regions or groups are configured,
+resolved deploy targets remain the backwards-compatible default replication
 target set. Dry-run manifests show the policy file path when groups are
-configured, requested deploy regions, requested replication groups, resolved
-replication target regions, whether groups came from `groups.*` or
-`generated_groups.*`, planned capture/replication/deploy phases, cleanup
-expectations, and no workflow mutation calls.
+configured, requested deploy groups, resolved deploy target regions, requested
+replication groups, resolved replication target regions, whether groups came
+from `groups.*` or `generated_groups.*`, planned capture/replication/deploy
+phases, cleanup expectations, and no workflow mutation calls.
 
 Execute manifests include the capture result, replication request/result,
-policy validation result, resolved replication targets, replication target
-capability checks, replica status checks, deploy results only for explicit
-deploy regions, validation summary, cleanup summary, and final `status`. If the
+policy validation result, resolved deploy targets, resolved replication
+targets, replication target capability checks, replica status checks, deploy
+results only for resolved deploy targets, validation summary, cleanup summary,
+and final `status`. If the
 replication POST fails, the manifest also includes sanitized provider error
 details such as status code and provider reason or field values when the API
 response exposes them. The command fails closed before capture if policy
@@ -260,8 +265,8 @@ regions, or keep cleanup beyond the run's temporary resources.
 The replication POST preserves the capture/original image region by submitting
 provider-reported existing image regions plus the requested replication target
 regions. It does not preserve that region by silently turning every deploy
-region into a requested replication target. Deploy may still run in an explicit
-deploy region outside the requested replication targets through the provider's
+region into a requested replication target. Deploy may still run in a resolved
+deploy target outside the requested replication targets through the provider's
 cross-region image deploy behavior.
 
 Config-backed defaults use `[capture-replicate-deploy]`:
@@ -273,12 +278,16 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-deploy_regions = ["us-east"]
-replication_groups = ["country_us_image_replication"]
+deploy_groups = ["geo_apac_north"]
+replication_groups = ["geo_apac_north_image_replication"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345
 ```
+
+Operator-owned geo groups such as `geo_apac_north` are hand-maintained
+`groups.*` entries. They are reviewable local intent, not generated topology
+or placement logic.
 
 Prefer image-replication generated groups such as
 `country_us_image_replication` when the desired image availability boundary is
@@ -293,11 +302,12 @@ scaffolding only; execute mode still validates every resolved replication
 target and fails before mutation when any target lacks the required
 capability.
 
-When `replication_groups` is configured and `region_policy_file` is omitted,
-the command resolves groups from `policy/region-policy.toml`. Set
-`region_policy_file = "policy/staging-region-policy.toml"` only for an explicit
-artifact override. Operator-owned `groups.*` entries remain canonical intent;
-generated groups are convenience scaffolding.
+When `deploy_groups` or `replication_groups` is configured and
+`region_policy_file` is omitted, the command resolves groups from
+`policy/region-policy.toml`. Set
+`region_policy_file = "policy/staging-region-policy.toml"` only for an
+explicit artifact override. Operator-owned `groups.*` entries remain canonical
+intent; generated groups are convenience scaffolding.
 
 ## Cleanup
 

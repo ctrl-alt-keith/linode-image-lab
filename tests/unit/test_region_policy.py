@@ -9,6 +9,7 @@ from linode_image_lab.region_policy import (
     generate_region_policy_artifact,
     generated_country_capability_group_name,
     generated_region_groups,
+    load_policy,
     serialize_validation_report,
     validate_region_policy_artifact,
 )
@@ -23,6 +24,33 @@ class FakeRegionClient:
 
 
 class RegionPolicyTests(unittest.TestCase):
+    def test_checked_in_policy_contains_operator_geo_groups(self) -> None:
+        policy_path = Path(__file__).resolve().parents[2] / "policy" / "region-policy.toml"
+        policy = load_policy(policy_path)
+
+        groups = policy["groups"]
+        self.assertEqual(
+            groups["geo_americas"]["regions"],
+            [
+                "br-gru",
+                "ca-central",
+                "us-central",
+                "us-east",
+                "us-iad",
+                "us-iad-2",
+                "us-lax",
+                "us-mia",
+                "us-ord",
+                "us-sea",
+                "us-southeast",
+                "us-west",
+            ],
+        )
+        self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par", "gb-lon"])
+        self.assertEqual(groups["geo_apac_north_image_replication"]["regions"], ["jp-tyo-3"])
+        self.assertNotIn("geo_india_image_replication", groups)
+        self.assertNotIn("geo_oceania_image_replication", groups)
+
     def test_generation_is_deterministic_and_normalizes_capabilities(self) -> None:
         client = FakeRegionClient(
             [

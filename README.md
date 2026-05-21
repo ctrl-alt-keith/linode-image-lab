@@ -110,9 +110,9 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 --discover` is used. Dry-run commands, including plain `cleanup` and
 `replicate` and `capture-replicate-deploy`, do not read the token or mutate
 resources. `region-policy generate`, `region-policy validate`, and
-`capture-replicate-deploy` runs that resolve `replication_groups` read public
-provider region metadata from the Linode regions API without account
-authentication and do not mutate resources.
+`capture-replicate-deploy` runs that resolve `deploy_groups` or
+`replication_groups` read public provider region metadata from the Linode
+regions API without account authentication and do not mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -194,7 +194,8 @@ Supported values are
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
 `authorized_keys_file`, and `user_data_file`, depending on the command and
 table. `[capture-replicate-deploy]` also accepts `deploy_regions`,
-`replication_regions`, `replication_groups`, and `region_policy_file`.
+`deploy_groups`, `replication_regions`, `replication_groups`, and
+`region_policy_file`.
 `region` or `regions` remain supported there as legacy deploy-region aliases.
 `[capture].image_project_tag` and
 `[capture-deploy].image_project_tag` set only the captured custom image's
@@ -241,10 +242,11 @@ a file.
 The repository intentionally includes `policy/region-policy.toml` as the full
 current generated provider policy snapshot. It is versioned so operators can
 rerun generation periodically and review the diff for provider region or
-capability drift. The checked-in snapshot is generated data and should not
-contain hand-authored operator-only groups unless that intent is deliberately
-documented. Documented `provider_overrides.*` entries are allowed only for
-narrow provider-discrepancy handling such as image replication exclusions.
+capability drift. The generated provider and helper sections stay generated;
+the checked-in snapshot also carries deliberately documented, hand-maintained
+operator-owned geo groups under `groups.*`. Documented `provider_overrides.*`
+entries are allowed only for narrow provider-discrepancy handling such as
+image replication exclusions.
 
 ## Maintaining Region Policy Artifacts
 
@@ -286,21 +288,23 @@ provider discrepancies, but execution validation remains authoritative.
 Operators own the meaning of each operator group, and later commands can
 validate against that explicit local intent.
 
-`capture-replicate-deploy` can consume these artifacts for replication target
-selection only. When `[capture-replicate-deploy].replication_groups` is
+`capture-replicate-deploy` can consume these artifacts for deploy target
+expansion and replication target selection. When
+`[capture-replicate-deploy].deploy_groups` or `replication_groups` is
 configured, the command uses `policy/region-policy.toml` by default; set
 `region_policy_file = "policy/staging-region-policy.toml"` only when an
 alternate checked-in artifact is intended. Group names resolve first from
 operator-owned `groups.*`, then from generated `generated_groups.*`. Deploy
-regions remain explicit deploy intent only. Replication regions and
-replication groups control where image availability is expanded; deploy
-regions are not automatically added to the resolved replication target set
-when either replication input is configured. When no replication regions or
-groups are configured, deploy regions remain the backwards-compatible default
-replication target set. Generated capability-scoped and image-replication
-groups improve discoverability, but they do not bypass execution validation.
-Execute mode still validates every resolved replication target for
-`Object Storage` and fails before mutation if any requested target is invalid.
+regions and `deploy_groups` are deploy intent. Replication regions and
+`replication_groups` are image-availability intent. Deploy targets are not
+automatically replication targets when replication input is configured, and
+replication targets are not automatically deploy targets. When no replication
+regions or groups are configured, resolved deploy targets remain the
+backwards-compatible default replication target set. Generated
+capability-scoped and image-replication groups improve discoverability, but
+they do not bypass execution validation. Execute mode still validates every
+resolved replication target for `Object Storage` and fails before mutation if
+any requested target is invalid.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -339,9 +343,10 @@ provider-reported existing regions, but it does not read `LINODE_TOKEN` or call
 Linode.
 
 `capture-replicate-deploy --execute` captures one custom image in the first
-explicit deploy region, resolves replication targets from explicit
+resolved deploy target, resolves deploy targets from explicit deploy regions
+and checked-in `deploy_groups`, resolves replication targets from explicit
 `replication_regions`, checked-in `replication_groups`, or both, then deploys
-from the captured image only to the explicit deploy regions after bounded
+from the captured image only to resolved deploy targets after bounded
 read-only status checks show the resolved image regions are `available`. For
 country-based image replication, generated groups such as
 `country_us_image_replication` are the ergonomic starting point because base
@@ -353,8 +358,8 @@ verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
 provider-reported existing image regions plus resolved replication targets, so
 the capture/original region is preserved through the provider-reported image
-region set rather than by treating every deploy region as a requested
-replication target. Deploy may still target an explicit deploy region outside
+region set rather than by treating every deploy target as a requested
+replication target. Deploy may still target a resolved deploy region outside
 the requested replication targets, relying on the provider's existing
 cross-region image deploy behavior. If a requested group is unknown,
 malformed, stale, or references invalid regions, if a requested target lacks
@@ -598,14 +603,15 @@ normal stdout.
 
 `capture-replicate-deploy --execute` emits one combined manifest with
 top-level `capture`, `replication`, `deploy_results`, `validation`, `cleanup`,
-and `summary` blocks. Dry-run manifests show the capture region, deploy
-regions, requested replication groups, policy file path when groups are used,
-group source namespace, resolved replication target regions, planned
-capture/replication/deploy phases, cleanup expectations, and
+and `summary` blocks. Dry-run manifests show the capture region, requested
+deploy groups, resolved deploy target regions, requested replication groups,
+policy file path when groups are used, group source namespaces, resolved
+replication target regions, planned capture/replication/deploy phases, cleanup
+expectations, and
 `provider_calls: "not_attempted"`. Execute manifests record the policy
 validation result, resolved replication targets, replication capability checks,
 capture result, replication request/result, replica status checks, deploy
-results by explicit deploy region, validation summary, cleanup summary, and
+results by resolved deploy target, validation summary, cleanup summary, and
 final `status` of `succeeded`, `partial`, or `failed`.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
@@ -642,10 +648,10 @@ entries include `resource_type` plus a sanitized `reason`, such as
   retry, or own replicas after the run.
 - Replication target eligibility: explicit image replication requires requested
   target regions to expose the provider `Object Storage` capability.
-- Region policy consumption: `replication_groups` expand image availability
-  only. They do not infer geography, choose nearest regions, plan fallbacks,
-  auto-select deploy regions, bypass capability validation, or perform partial
-  execution.
+- Region policy consumption: `deploy_groups` expand deploy targets, while
+  `replication_groups` expand image availability only. They do not infer
+  geography, choose nearest regions, plan fallbacks, bypass capability
+  validation, or perform partial execution.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

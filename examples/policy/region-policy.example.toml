@@ -1,7 +1,8 @@
 # Example only. Use `linode-image-lab region-policy generate` to refresh
 # provider_regions and generated_groups from current provider metadata before
 # relying on a policy. provider_overrides entries are explicit documented
-# provider-discrepancy handling and are not raw provider facts.
+# provider-discrepancy handling and are not raw provider facts. groups entries
+# are operator-owned intent and are preserved unless --replace-groups is used.
 schema_version = 1
 
 [provider_regions.gb-lon]
@@ -65,8 +66,17 @@ regions = ["us-east", "us-iad-2", "us-sea", "us-west"]
 [generated_groups.country_us_object_storage]
 regions = ["us-east", "us-iad-2", "us-sea"]
 
-[groups.eu]
+[groups.geo_americas]
+regions = ["us-east", "us-iad-2", "us-sea", "us-west"]
+
+[groups.geo_americas_image_replication]
+regions = ["us-east", "us-sea"]
+
+[groups.geo_europe]
+regions = ["de-fra-2", "gb-lon"]
+
+[groups.geo_europe_image_replication]
 regions = ["gb-lon"]
 
-[groups.us]
+[groups.operator_us_smoke]
 regions = ["us-sea", "us-east"]

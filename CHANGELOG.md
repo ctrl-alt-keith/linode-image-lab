@@ -7,6 +7,8 @@
   generated provider facts from operator-owned grouping intent.
 - Add generated helper groups and a checked-in `policy/region-policy.toml`
   provider policy snapshot for reviewing provider region and capability drift.
+- Add operator-owned geo groups to the checked-in region policy, including
+  separate image-replication groups where the current policy supports them.
 - Add capability-scoped generated country helper groups, such as
   `country_us_object_storage`, while preserving strict execution-time
   capability validation.
@@ -16,6 +18,8 @@
 - Allow `capture-replicate-deploy` to consume checked-in region policy groups
   as replication targets while keeping deploy regions explicit and mutation
   gated behind `--execute`.
+- Allow `capture-replicate-deploy` to consume `deploy_groups` as deploy target
+  expansion while keeping deploy intent and replication intent separate.
 - Stop treating explicit deploy regions as requested replication targets when
   `capture-replicate-deploy` is configured with replication regions or groups;
   the replication request still preserves provider-reported existing image

@@ -598,6 +598,51 @@ regions = ["us-ghost"]
         self.assertEqual(payload["summary"]["deploy_regions"], ["us-east"])
         self.assertEqual(payload["summary"]["replication_target_regions"], ["us-east", "us-sea"])
 
+    def test_capture_replicate_deploy_config_uses_deploy_groups_without_regions(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        provider_regions = [
+            {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+        ]
+        self.write_region_policy(root / "policy" / "region-policy.toml", provider_regions=provider_regions)
+        config_path = root / "lab.toml"
+        config_path.write_text(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            deploy_groups = ["country_us"]
+            replication_regions = ["us-east"]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """,
+            encoding="utf-8",
+        )
+
+        output = StringIO()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("linode_image_lab.region_policy.LinodeClient", return_value=FakeRegionClient(provider_regions)),
+                patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+                redirect_stdout(output),
+            ):
+                code = main(["capture-replicate-deploy", "--config", str(config_path)])
+        finally:
+            os.chdir(original_cwd)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["region_policy"]["path"], "policy/region-policy.toml")
+        self.assertEqual(payload["summary"]["requested_deploy_groups"], ["country_us"])
+        self.assertEqual(payload["summary"]["deploy_regions"], ["us-east", "us-sea"])
+        self.assertEqual(payload["summary"]["replication_target_regions"], ["us-east"])
+
     def test_capture_replicate_deploy_config_uses_policy_file_override(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -1166,6 +1211,7 @@ regions = ["us-ghost"]
 
             [capture-replicate-deploy]
             deploy_regions = ["us-east"]
+            deploy_groups = ["geo_americas"]
             replication_regions = ["us-sea"]
             replication_groups = ["country_us"]
             region_policy_file = "policy/staging-region-policy.toml"
@@ -1181,9 +1227,11 @@ regions = ["us-ghost"]
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(payload["effective_defaults"]["deploy_regions"], ["us-east"])
+        self.assertEqual(payload["effective_defaults"]["deploy_groups"], ["geo_americas"])
         self.assertEqual(payload["effective_defaults"]["replication_regions"], ["us-sea"])
         self.assertEqual(payload["effective_defaults"]["replication_groups"], ["country_us"])
         self.assertTrue(payload["effective_defaults"]["region_policy_file"].endswith("policy/staging-region-policy.toml"))
+        self.assertIn({"field": "deploy_groups", "source": "[capture-replicate-deploy].deploy_groups"}, payload["sources"])
         self.assertIn({"field": "replication_groups", "source": "[capture-replicate-deploy].replication_groups"}, payload["sources"])
         self.assertIn({"field": "region_policy_file", "source": "[capture-replicate-deploy].region_policy_file"}, payload["sources"])
 
@@ -1193,8 +1241,7 @@ regions = ["us-ghost"]
             schema_version = 1
 
             [capture-replicate-deploy]
-            deploy_regions = ["us-east"]
-            replication_groups = ["country_us"]
+            deploy_groups = ["geo_americas"]
             source_image = "linode/alpine3.23"
             type = "g6-nanode-1"
             """
