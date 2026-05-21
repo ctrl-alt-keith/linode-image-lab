@@ -12,6 +12,9 @@
 - Add versioned bounded geo `capture-replicate-deploy` smoke configs under
   `examples/smoke/` for provider validation of checked-in replication policy
   semantics without broad deploy fan-out.
+- Add `replication_enabled = false` for explicit deploy-only
+  `capture-replicate-deploy` validation, plus broader geo deploy validation
+  configs under `examples/geo/`.
 - Add capability-scoped generated country helper groups, such as
   `country_us_object_storage`, while preserving strict execution-time
   capability validation.

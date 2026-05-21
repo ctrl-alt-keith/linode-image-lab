@@ -194,6 +194,12 @@ image-replication group for either geo. Keeping those configs out of
 `examples/smoke/` avoids accidental fail-closed execute runs caused by the
 backwards-compatible no-replication-input default.
 
+`examples/geo/` contains broader deploy validation configs that use
+operator-owned `deploy_groups`. Geos with known-good image-replication groups
+also set `replication_groups`; deploy-only geos set `replication_enabled =
+false` so the backwards-compatible replication default does not turn deploy
+targets into replication targets.
+
 ## Config Defaults
 
 Pass `--config` before or after the command to load optional TOML execution
@@ -214,8 +220,8 @@ Supported values are
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
 `authorized_keys_file`, and `user_data_file`, depending on the command and
 table. `[capture-replicate-deploy]` also accepts `deploy_regions`,
-`deploy_groups`, `replication_regions`, `replication_groups`, and
-`region_policy_file`.
+`deploy_groups`, `replication_regions`, `replication_groups`,
+`replication_enabled`, and `region_policy_file`.
 `region` or `regions` remain supported there as legacy deploy-region aliases.
 `[capture].image_project_tag` and
 `[capture-deploy].image_project_tag` set only the captured custom image's
@@ -322,12 +328,16 @@ regions and `deploy_groups` are deploy intent. Replication regions and
 automatically replication targets when replication input is configured, and
 replication targets are not automatically deploy targets. When no replication
 regions or groups are configured, resolved deploy targets remain the
-backwards-compatible default replication target set. Generated
-capability-scoped and image-replication groups improve discoverability, but
-they do not bypass execution validation. Execute mode still validates every
-resolved replication target for `Object Storage` and fails before mutation if
-any requested target is invalid. Under the checked-in policy, `geo_apac_north`
-currently has deploy targets but no corresponding known-good
+backwards-compatible default replication target set.
+`replication_enabled = false` is the explicit opt-out for deploy-only
+validation. When set, replication target resolution, capability checks,
+replication API calls, and replica readiness waits are skipped; deploy targets
+do not become implicit replication targets. Generated capability-scoped and
+image-replication groups improve discoverability, but they do not bypass
+execution validation. Execute mode still validates every resolved replication
+target for `Object Storage` and fails before mutation if any requested target is
+invalid whenever replication is enabled. Under the checked-in policy,
+`geo_apac_north` currently has deploy targets but no corresponding known-good
 `geo_apac_north_image_replication` group because `jp-tyo-3` is a documented
 image-replication provider discrepancy.
 
@@ -633,14 +643,17 @@ normal stdout.
 top-level `capture`, `replication`, `deploy_results`, `validation`, `cleanup`,
 and `summary` blocks. Dry-run manifests show the capture region, requested
 deploy groups, resolved deploy target regions, requested replication groups,
-policy file path when groups are used, group source namespaces, resolved
-replication target regions, planned capture/replication/deploy phases, cleanup
-expectations, and
+the replication enabled/disabled state, policy file path when groups are used,
+group source namespaces, resolved replication target regions, planned
+capture/replication/deploy phases, cleanup expectations, and
 `provider_calls: "not_attempted"`. Execute manifests record the policy
-validation result, resolved replication targets, replication capability checks,
-capture result, replication request/result, replica status checks, deploy
-results by resolved deploy target, validation summary, cleanup summary, and
-final `status` of `succeeded`, `partial`, or `failed`.
+validation result, resolved replication targets when replication is enabled,
+replication capability checks, capture result, replication request/result,
+replica status checks, deploy results by resolved deploy target, validation
+summary, cleanup summary, and final `status` of `succeeded`, `partial`, or
+`failed`. When `replication_enabled = false`, the `replication` and
+`validation.replication` blocks report `status: "skipped"` with reason
+`replication_enabled=false`.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or
@@ -685,6 +698,10 @@ entries include `resource_type` plus a sanitized `reason`, such as
   `replication_groups` expand image availability only. They do not infer
   geography, choose nearest regions, plan fallbacks, bypass capability
   validation, or perform partial execution.
+- Deploy-only geo validation: set `replication_enabled = false` to intentionally
+  skip replication for broad deploy validation configs. Existing configs that
+  omit the field keep the backwards-compatible default where deploy targets are
+  replication targets when no replication input is configured.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

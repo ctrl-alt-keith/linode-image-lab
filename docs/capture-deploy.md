@@ -238,26 +238,33 @@ automatically added to the resolved replication target set when either
 replication input is configured. Replication targets are not automatically
 added to deploy targets. When no replication regions or groups are configured,
 resolved deploy targets remain the backwards-compatible default replication
-target set. Dry-run manifests show the policy file path when groups are
-configured, requested deploy groups, resolved deploy target regions, requested
-replication groups, resolved replication target regions, whether groups came
-from `groups.*` or `generated_groups.*`, planned capture/replication/deploy
-phases, cleanup expectations, and no workflow mutation calls.
+target set unless `replication_enabled = false` is configured. With
+`replication_enabled = false`, replication target resolution, capability
+checks, replication API calls, and replica readiness waits are skipped, and
+deploy targets do not become implicit replication targets. Dry-run manifests
+show the policy file path when groups are configured, requested deploy groups,
+resolved deploy target regions, requested replication groups, the replication
+enabled/disabled state, resolved replication target regions, whether groups
+came from `groups.*` or `generated_groups.*`, planned
+capture/replication/deploy phases, cleanup expectations, and no workflow
+mutation calls.
 
 Execute manifests include the capture result, replication request/result,
 policy validation result, resolved deploy targets, resolved replication
 targets, replication target capability checks, replica status checks, deploy
 results only for resolved deploy targets, validation summary, cleanup summary,
-and final `status`. If the
-replication POST fails, the manifest also includes sanitized provider error
-details such as status code and provider reason or field values when the API
-response exposes them. The command fails closed before capture if policy
-validation fails, a group is unknown or malformed, a group references invalid
-regions, or a resolved replication target lacks the provider `Object Storage`
-capability. It fails closed before deploy if existing image regions are not
-exposed, replication submission fails, or requested replicas do not report
-`available` before the bounded wait expires. Capability validation records
-every resolved target region before deciding whether the workflow can proceed.
+and final `status`. If `replication_enabled = false`, execute manifests report
+replication as intentionally skipped instead of recording replication request
+or replica wait data. If the replication POST fails, the manifest also includes
+sanitized provider error details such as status code and provider reason or
+field values when the API response exposes them. The command fails closed
+before capture if policy validation fails, a group is unknown or malformed, a
+group references invalid regions, or a resolved replication target lacks the
+provider `Object Storage` capability. When replication is enabled, it fails
+closed before deploy if existing image regions are not exposed, replication
+submission fails, or requested replicas do not report `available` before the
+bounded wait expires. Capability validation records every resolved target
+region before deciding whether the workflow can proceed.
 It records only the emitted manifest, performs no background work, does not
 repair replicas, infer nearest regions, choose fallbacks, auto-select deploy
 regions, or keep cleanup beyond the run's temporary resources.
@@ -290,6 +297,12 @@ one explicit deploy region plus a geo image-replication group. They validate the
 checked-in replication policy surface without broad deploy fan-out.
 `deploy_groups` expansion is still validated by dry-run and unit behavior, not
 by deploying every geo member during each live smoke run.
+
+Broader geo deploy validation configs in `examples/geo/` intentionally use
+`deploy_groups`. Geos with known-good image-replication groups request those
+groups explicitly. Geos without known-good image-replication groups set
+`replication_enabled = false` for deploy-only validation instead of relying on
+implicit replication defaults.
 
 Operator-owned geo groups such as `geo_americas` are hand-maintained
 `groups.*` entries. They are reviewable local intent, not generated topology

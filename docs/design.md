@@ -141,7 +141,7 @@ Supported config values are intentionally narrow:
 - `user_data_file` in `[deploy]` for Linode metadata user data on deploy
   instances.
 - `deploy_regions`, `deploy_groups`, `replication_regions`,
-  `replication_groups`, and `region_policy_file` for
+  `replication_groups`, `replication_enabled`, and `region_policy_file` for
   capture-replicate-deploy policy-backed deploy and replication target
   resolution.
 
@@ -188,10 +188,13 @@ are deploy intent only and are not automatically added to resolved replication
 targets when either replication input is configured. Replication targets are
 not automatically added to deploy targets. When no replication regions or
 groups are configured, resolved deploy targets remain the backwards-compatible
-default replication target set. The command verifies resolved replication
-targets expose the provider `Object Storage` capability before capture,
-deploys only to resolved deploy targets, and can receive the same deploy
-metadata defaults as `capture-deploy`.
+default replication target set. `replication_enabled = false` is an explicit
+opt-out for deploy-only validation: replication target resolution, capability
+checks, replication API calls, and replica readiness waits are skipped, and
+deploy targets do not become implicit replication targets. The command verifies
+resolved replication targets expose the provider `Object Storage` capability
+before capture when replication is enabled, deploys only to resolved deploy
+targets, and can receive the same deploy metadata defaults as `capture-deploy`.
 
 ## Region Policy Artifacts
 
@@ -261,15 +264,16 @@ resolve from operator-owned `groups.*` first and generated
 `deploy_groups` expand deploy targets. `replication_groups` expand image
 availability targets. Neither direction crosses over automatically when
 replication input is configured, and the default no-replication-input behavior
-continues to use resolved deploy targets as the replication target set. This
-resolution does not infer geography, proximity, latency, fallback regions, or
-a "best" region. Generated capability-scoped groups improve discoverability
-for workflows such as image replication, but the execution layer still
-validates every resolved replication target for the required provider
-capability and fails before mutation if any requested target is invalid. Under
-the checked-in policy, `geo_apac_north` currently has deploy targets but no
-matching `geo_apac_north_image_replication` group because `jp-tyo-3` is a
-documented image-replication provider discrepancy.
+continues to use resolved deploy targets as the replication target set unless
+`replication_enabled = false` is configured. This resolution does not infer
+geography, proximity, latency, fallback regions, or a "best" region. Generated
+capability-scoped groups improve discoverability for workflows such as image
+replication, but the execution layer still validates every resolved
+replication target for the required provider capability and fails before
+mutation if any requested target is invalid. Under the checked-in policy,
+`geo_apac_north` currently has deploy targets but no matching
+`geo_apac_north_image_replication` group because `jp-tyo-3` is a documented
+image-replication provider discrepancy.
 
 Versioned smoke configs under `examples/smoke/` make these policy semantics
 reviewable as operational tooling. They are bounded provider validation inputs,
@@ -281,6 +285,12 @@ currently have deploy geo groups but no executable replication smoke config
 because the checked-in policy has no known-good geo image-replication group for
 either geo. Smoke configs remain dry-run-first unless the operator explicitly
 passes `--execute` with a valid provider token.
+
+Broader geo validation configs under `examples/geo/` use deploy groups to
+exercise more deploy targets. Geos with known-good image-replication groups
+request those groups explicitly; deploy-only geos set `replication_enabled =
+false` so the backwards-compatible no-replication-input default does not create
+implicit replication targets.
 
 Image-replication-specific generated groups improve the default operator
 surface when a provider inconsistency is documented. The current documented
@@ -429,18 +439,18 @@ The execute flow is bounded and has no durable ownership model:
    selected region policy artifact, defaulting to `policy/region-policy.toml`,
 2. combine explicit deploy regions and group-expanded deploy regions into a
    deterministic deploy target set,
-3. combine explicit `replication_regions` and group-expanded regions into a
-   deterministic replication target set,
-4. read each resolved replication target region and require the provider
-   `Object Storage` capability before capture,
+3. when replication is enabled, combine explicit `replication_regions` and
+   group-expanded regions into a deterministic replication target set,
+4. when replication is enabled, read each resolved replication target region and
+   require the provider `Object Storage` capability before capture,
 5. run capture in the first resolved deploy target with
    `mode=capture-replicate-deploy` and `component=capture`,
-6. read the captured image details and require `available` status plus exposed
-   existing image regions,
-7. submit one replication request for existing image regions plus all resolved
-   replication target regions,
-8. perform a bounded read-only wait until resolved replication target regions
-   report image replica status `available`,
+6. when replication is enabled, read the captured image details and require
+   `available` status plus exposed existing image regions,
+7. when replication is enabled, submit one replication request for existing
+   image regions plus all resolved replication target regions,
+8. when replication is enabled, perform a bounded read-only wait until resolved
+   replication target regions report image replica status `available`,
 9. deploy from the captured image only to resolved deploy targets with bounded
    deploy fan-out,
 10. clean up temporary capture and deploy Linodes by current-run tags,
@@ -456,12 +466,14 @@ image deploy behavior.
 The workflow fails closed before capture if policy validation fails, a
 requested group is unknown, a requested replication target region lacks the
 provider `Object Storage` capability, or a group references a region missing
-from current provider metadata. It fails closed before deploy if existing image
-regions are not exposed or if requested replica statuses do not report
-`available` before the bounded wait expires. It does not retry the replication
-mutation, repair replicas, reconcile desired regions, infer fallback regions,
-auto-select regions, run a scheduler, write state, or own image
-placement after the run.
+from current provider metadata. When replication is enabled, it fails closed
+before deploy if existing image regions are not exposed or if requested replica
+statuses do not report `available` before the bounded wait expires. When
+`replication_enabled = false`, those replication-only gates are skipped
+intentionally and recorded as skipped in the manifest. It does not retry the
+replication mutation, repair replicas, reconcile desired regions, infer
+fallback regions, auto-select regions, run a scheduler, write state, or own
+image placement after the run.
 
 ## Cleanup Semantics
 

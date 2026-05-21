@@ -286,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
         "capture-replicate-deploy",
         help="Plan or execute capture, explicit replication, and deploy validation.",
     )
+    capture_replicate_deploy.set_defaults(replication_enabled=True)
     add_version_arg(capture_replicate_deploy, version_text)
     add_config_arg(capture_replicate_deploy, dest="command_config")
     add_region_args(capture_replicate_deploy, required=True)
@@ -423,6 +424,8 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.replication_group = defaults["replication_groups"]
         if args.replication_region is None and "replication_regions" in defaults:
             args.replication_region = defaults["replication_regions"]
+        if "replication_enabled" in defaults:
+            args.replication_enabled = defaults["replication_enabled"]
         if args.region_policy_file is None and "region_policy_file" in defaults:
             args.region_policy_file = defaults["region_policy_file"]
 
@@ -653,6 +656,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             deploy_groups=parse_string_values(args.deploy_group),
             replication_regions=parse_regions(args.replication_region),
             replication_groups=parse_string_values(args.replication_group),
+            replication_enabled=args.replication_enabled,
             region_policy_file=args.region_policy_file,
             run_id=args.run_id,
             ttl=args.ttl,

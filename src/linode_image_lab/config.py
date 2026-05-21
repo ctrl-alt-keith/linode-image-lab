@@ -65,6 +65,7 @@ TABLE_FIELDS = {
         "regions",
         "replication_group",
         "replication_groups",
+        "replication_enabled",
         "replication_region",
         "replication_regions",
         "region_policy_file",
@@ -120,6 +121,7 @@ COMMAND_DEFAULT_FIELDS = {
         "ttl",
         "replication_regions",
         "replication_groups",
+        "replication_enabled",
         "region_policy_file",
         "source_image",
         "type",
@@ -271,6 +273,15 @@ def validate_table(table: str, values: dict[str, Any]) -> None:
         raise ConfigError(f"config [{table}] cannot set both replication_region and replication_regions")
     if "replication_group" in values and "replication_groups" in values:
         raise ConfigError(f"config [{table}] cannot set both replication_group and replication_groups")
+    if values.get("replication_enabled") is False and (
+        "replication_region" in values
+        or "replication_regions" in values
+        or "replication_group" in values
+        or "replication_groups" in values
+    ):
+        raise ConfigError(
+            f"config [{table}].replication_enabled=false cannot be combined with replication regions or groups"
+        )
     if table == "capture-replicate-deploy" and "region_policy_file" in values:
         has_deploy_groups = "deploy_group" in values or "deploy_groups" in values
         has_replication_groups = "replication_group" in values or "replication_groups" in values
@@ -311,6 +322,11 @@ def validate_value(table: str, key: str, value: Any) -> None:
             raise ConfigError(f"config [{table}].{key} must be a non-empty list of strings")
         if not all(isinstance(group, str) and group.strip() for group in value):
             raise ConfigError(f"config [{table}].{key} must be a non-empty list of strings")
+        return
+
+    if key == "replication_enabled":
+        if not isinstance(value, bool):
+            raise ConfigError(f"config [{table}].replication_enabled must be a boolean")
         return
 
     if key == "firewall_id":
@@ -686,6 +702,10 @@ def normalize_default_value(field: str, value: Any) -> Any:
                 f"config validate requires at least one non-empty {CLI_SOURCE_LABELS[field].removeprefix('cli ')} when provided"
             )
         return groups
+    if field == "replication_enabled":
+        if not isinstance(value, bool):
+            raise ConfigError("config validate requires replication_enabled to be a boolean")
+        return value
     if field == "firewall_id":
         return normalize_firewall_id(value, "firewall_id")
     if field == "image_project_tag":

@@ -1,0 +1,16 @@
+# Broad capture-replicate-deploy validation config for APAC North.
+# Deploy intent uses the operator-owned geo_apac_north group.
+# Replication is intentionally disabled because no checked-in known-good
+# geo_apac_north_image_replication group exists.
+# This is deploy-only geo validation; no replication targets are implied.
+# Review dry-run output before executing with --execute and LINODE_TOKEN.
+schema_version = 1
+
+[defaults]
+ttl = "3h"
+
+[capture-replicate-deploy]
+deploy_groups = ["geo_apac_north"]
+replication_enabled = false
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"
