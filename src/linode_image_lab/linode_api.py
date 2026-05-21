@@ -62,6 +62,8 @@ class LinodePreflightError(LinodeApiError):
 class LinodeClientProtocol(Protocol):
     def preflight(self) -> None: ...
 
+    def list_regions(self) -> list[dict[str, Any]]: ...
+
     def preflight_region(self, region: str) -> None: ...
 
     def get_region_details(self, region: str) -> dict[str, Any]: ...
@@ -139,7 +141,7 @@ class LinodeClientProtocol(Protocol):
 class LinodeClient:
     """Small HTTP client used only after the user opts into execution."""
 
-    token: str = field(repr=False)
+    token: str | None = field(default=None, repr=False)
     api_base_url: str = DEFAULT_API_BASE_URL
     timeout_seconds: float = 30
     poll_interval_seconds: float = 5
@@ -165,6 +167,25 @@ class LinodeClient:
     def preflight(self) -> None:
         self._request("GET", "/profile", retry=True, operation="preflight_profile")
         self._request("GET", "/profile/grants", allow_empty=True, retry=True, operation="preflight_grants")
+
+    def list_regions(self) -> list[dict[str, Any]]:
+        regions: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = urlencode({"page": page, "page_size": 100})
+            response = self._request("GET", f"/regions?{query}", retry=True, operation="list_regions")
+            data = response.get("data", []) if isinstance(response, dict) else []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                region = self._region_resource(item)
+                if isinstance(region.get("region"), str) and region["region"].strip():
+                    regions.append(region)
+
+            pages = response.get("pages", page) if isinstance(response, dict) else page
+            if not isinstance(pages, int) or page >= pages:
+                return regions
+            page += 1
 
     def preflight_region(self, region: str) -> None:
         escaped = quote(region, safe="")
@@ -440,15 +461,17 @@ class LinodeClient:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         attempts = self._retry_attempt_limit(retry)
         for attempt in range(1, attempts + 1):
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            if self.token is not None:
+                headers["Authorization"] = f"Bearer {self.token}"
             request = Request(
                 f"{self.api_base_url}{path}",
                 data=body,
                 method=method,
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
             )
 
             try:

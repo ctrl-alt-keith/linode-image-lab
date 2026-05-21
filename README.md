@@ -7,6 +7,8 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 - Captures custom images from temporary Linode instances.
 - Deploys temporary validation instances from custom images.
 - Submits explicit custom image replication requests when requested.
+- Generates and validates public-safe region policy artifacts that separate
+  provider region facts from operator-owned grouping intent.
 - Validates requested region, Linode type, image inputs, tags, resources, and
   running status at the API level.
 - Cleans up temporary resources while preserving custom images as deliverables.
@@ -107,7 +109,9 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 `LINODE_TOKEN` is required when `--execute` is used and when `cleanup
 --discover` is used. Dry-run commands, including plain `cleanup` and
 `replicate` and `capture-replicate-deploy`, do not read the token, call
-Linode, or mutate resources.
+Linode, or mutate resources. `region-policy generate` and `region-policy
+validate` read public provider region metadata from the Linode regions API
+without account authentication and do not mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -198,6 +202,40 @@ captured image outside standalone cleanup ownership and discovery.
 `"4 hours"`, `"1 day"`, `"30m"`, `"24h"`, `"7d"`, or `"2w"`. Relative TTLs
 are resolved at command runtime and manifests still emit absolute UTC `ttl`
 values and `ttl=...` tags.
+
+## Region Policy Artifacts
+
+Region policy artifacts keep provider facts separate from operator intent.
+Generated `[provider_regions.*]` sections contain public-safe provider region
+ids and capabilities from the current Linode regions API. Operator-maintained
+`[groups.*]` sections name semantic region groups for local workflows.
+
+Generate or refresh the default version-controlled artifact:
+
+```sh
+linode-image-lab region-policy generate --output policy/region-policy.toml
+```
+
+When the output file already exists, generation refreshes only provider facts
+and preserves supported `groups.*` tables. Use `--replace-groups` only when you
+intentionally want a provider-only artifact. Use `--output -` to print the TOML
+without writing a file.
+
+Validate the artifact against current provider metadata:
+
+```sh
+linode-image-lab region-policy validate --path policy/region-policy.toml
+```
+
+Validation emits sanitized JSON, fails closed on malformed TOML, unknown or
+missing provider regions, stale provider capabilities, and groups that
+reference regions missing from current provider metadata.
+
+The policy file is deliberately not an automatic placement engine. The tool
+does not infer geography, measure latency, choose nearest regions, plan
+fallback placement, execute replication policy, or reconcile long-lived
+resource declarations from these groups. Operators own the meaning of each
+group, and later commands can validate against that explicit local intent.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured

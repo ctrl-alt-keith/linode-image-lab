@@ -1,0 +1,18 @@
+# Example only. Use `linode-image-lab region-policy generate` to refresh
+# provider_regions from current provider metadata before relying on a policy.
+schema_version = 1
+
+[provider_regions.gb-lon]
+capabilities = ["Linodes", "Object Storage"]
+
+[provider_regions.us-east]
+capabilities = ["Linodes", "Object Storage"]
+
+[provider_regions.us-sea]
+capabilities = ["Linodes", "Object Storage"]
+
+[groups.eu]
+regions = ["gb-lon"]
+
+[groups.us]
+regions = ["us-sea", "us-east"]

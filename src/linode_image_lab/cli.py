@@ -29,6 +29,14 @@ from .config import (
 from .deploy import DeployError, deploy_plan
 from .firewall_sync import FirewallSyncError, firewall_sync_plan
 from .manifest import PROJECT, create_manifest, serialize_manifest, validate_run_id
+from .region_policy import (
+    DEFAULT_REGION_POLICY_PATH,
+    RegionPolicyError,
+    generate_region_policy_artifact,
+    serialize_validation_report,
+    validate_region_policy_artifact,
+    write_region_policy_artifact,
+)
 from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
 
@@ -301,6 +309,36 @@ def build_parser() -> argparse.ArgumentParser:
     firewall_sync.add_argument("--execute", action="store_true", help="Opt into Linode firewall rule mutation.")
     add_manifest_file_arg(firewall_sync)
     add_registry_firewall_sync_args(firewall_sync)
+
+    region_policy = subparsers.add_parser(
+        "region-policy",
+        help="Generate or validate provider-backed region policy artifacts.",
+    )
+    add_version_arg(region_policy, version_text)
+    region_policy_subparsers = region_policy.add_subparsers(dest="region_policy_action", required=True)
+    region_policy_generate = region_policy_subparsers.add_parser(
+        "generate",
+        help="Generate a deterministic region policy TOML artifact.",
+    )
+    region_policy_generate.add_argument(
+        "--output",
+        default=str(DEFAULT_REGION_POLICY_PATH),
+        help=f"Policy artifact path to write. Use '-' for stdout only. Defaults to {DEFAULT_REGION_POLICY_PATH}.",
+    )
+    region_policy_generate.add_argument(
+        "--replace-groups",
+        action="store_true",
+        help="Do not preserve existing operator-owned groups from the output file.",
+    )
+    region_policy_validate = region_policy_subparsers.add_parser(
+        "validate",
+        help="Validate a region policy artifact against current provider metadata.",
+    )
+    region_policy_validate.add_argument(
+        "--path",
+        default=str(DEFAULT_REGION_POLICY_PATH),
+        help=f"Policy artifact path to validate. Defaults to {DEFAULT_REGION_POLICY_PATH}.",
+    )
 
     return parser
 
@@ -678,10 +716,35 @@ def emit_manifest(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
     sys.stdout.write(serialized)
 
 
+def emit_region_policy_generate(args: argparse.Namespace) -> None:
+    output = Path(args.output)
+    existing_path = None if args.output == "-" else output
+    artifact = generate_region_policy_artifact(
+        existing_policy_path=existing_path,
+        replace_groups=args.replace_groups,
+    )
+    if args.output != "-":
+        write_region_policy_artifact(path=output, content=artifact)
+    sys.stdout.write(artifact)
+
+
+def emit_region_policy_validate(args: argparse.Namespace) -> int:
+    report = validate_region_policy_artifact(path=Path(args.path))
+    sys.stdout.write(serialize_validation_report(report))
+    return 0 if report["valid"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "region-policy":
+            if args.region_policy_action == "generate":
+                emit_region_policy_generate(args)
+                return 0
+            if args.region_policy_action == "validate":
+                return emit_region_policy_validate(args)
+            raise ValueError(f"unsupported region-policy action: {args.region_policy_action}")
         preflight_manifest_file(args)
         if args.command == "config":
             manifest = config_validate_manifest(args)
@@ -730,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"{exc}\n")
             return 1
         parser.error(str(exc))
-    except (ConfigError, ValueError) as exc:
+    except (ConfigError, RegionPolicyError, ValueError) as exc:
         parser.error(str(exc))
     emit_manifest(args, manifest)
     return 0

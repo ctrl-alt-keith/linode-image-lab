@@ -21,6 +21,14 @@ USER_DATA = "#cloud-config\nfinal_message: sensitive value\n"
 USER_DATA_OVERRIDE = "#!/bin/bash\necho override\n"
 
 
+class FakeRegionClient:
+    def __init__(self, regions: list[dict[str, object]]) -> None:
+        self.regions = regions
+
+    def list_regions(self) -> list[dict[str, object]]:
+        return list(self.regions)
+
+
 class CliTests(unittest.TestCase):
     def test_version_prints_package_version_and_exits(self) -> None:
         output = StringIO()
@@ -50,6 +58,7 @@ class CliTests(unittest.TestCase):
             "capture-replicate-deploy",
             "replicate",
             "cleanup",
+            "region-policy",
         ):
             with self.subTest(command=command):
                 output = StringIO()
@@ -203,6 +212,56 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["command"], "cleanup")
+
+    def test_region_policy_generate_writes_toml_artifact(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        policy_path = Path(directory.name) / "region-policy.toml"
+        output = StringIO()
+
+        with (
+            patch(
+                "linode_image_lab.region_policy.LinodeClient",
+                return_value=FakeRegionClient([{"region": "us-east", "capabilities": ["Object Storage", "Linodes"]}]),
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(["region-policy", "generate", "--output", str(policy_path)])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(output.getvalue(), policy_path.read_text(encoding="utf-8"))
+        self.assertIn("[provider_regions.us-east]", output.getvalue())
+        self.assertIn('capabilities = ["Linodes", "Object Storage"]', output.getvalue())
+
+    def test_region_policy_validate_emits_json_and_nonzero_for_invalid_policy(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        policy_path = Path(directory.name) / "region-policy.toml"
+        policy_path.write_text(
+            """schema_version = 1
+[provider_regions.us-east]
+capabilities = ["Linodes"]
+[groups.us]
+regions = ["us-ghost"]
+""",
+            encoding="utf-8",
+        )
+        output = StringIO()
+
+        with (
+            patch(
+                "linode_image_lab.region_policy.LinodeClient",
+                return_value=FakeRegionClient([{"region": "us-east", "capabilities": ["Linodes"]}]),
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(["region-policy", "validate", "--path", str(policy_path)])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["command"], "region-policy")
+        self.assertFalse(payload["valid"])
+        self.assertEqual(payload["errors"][0]["code"], "unknown_group_region")
 
     def test_manifest_file_missing_parent_fails_before_mutation(self) -> None:
         directory = tempfile.TemporaryDirectory()

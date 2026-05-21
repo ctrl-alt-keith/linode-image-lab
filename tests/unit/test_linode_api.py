@@ -139,6 +139,32 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual([request.get_method() for request in requests], ["GET"])
         self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/regions/us-west"])
 
+    def test_list_regions_uses_public_safe_region_metadata_without_token(self) -> None:
+        client = LinodeClient(api_base_url=API_BASE_URL)
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(
+                {
+                    "data": [
+                        {"id": "us-east", "capabilities": ["Linodes", "Object Storage"], "resolvers": "ignored"},
+                        {"id": "", "capabilities": ["Linodes"]},
+                        {"not_id": "ignored", "capabilities": ["Linodes"]},
+                    ],
+                    "page": 1,
+                    "pages": 1,
+                }
+            )
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
+            regions = client.list_regions()
+
+        self.assertEqual(regions, [{"region": "us-east", "capabilities": ["Linodes", "Object Storage"]}])
+        self.assertEqual([request.get_method() for request in requests], ["GET"])
+        self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/regions?page=1&page_size=100"])
+        self.assertIsNone(requests[0].get_header("Authorization"))
+
     def test_preflight_region_capability_requires_provider_capability(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         responses = [
