@@ -1123,3 +1123,30 @@ regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "u
 
 [generated_groups.country_us_vpcs]
 regions = ["us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
+
+[groups.geo_americas]
+regions = ["br-gru", "ca-central", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
+
+[groups.geo_americas_image_replication]
+regions = ["br-gru", "us-east", "us-iad", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+
+[groups.geo_apac_north]
+regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
+
+[groups.geo_apac_north_image_replication]
+regions = ["jp-tyo-3"]
+
+[groups.geo_apac_southeast]
+regions = ["ap-south", "id-cgk", "sg-sin-2"]
+
+[groups.geo_europe]
+regions = ["de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "it-mil", "nl-ams", "se-sto"]
+
+[groups.geo_europe_image_replication]
+regions = ["fr-par", "gb-lon"]
+
+[groups.geo_india]
+regions = ["ap-west", "in-bom-2", "in-maa"]
+
+[groups.geo_oceania]
+regions = ["ap-southeast", "au-mel"]
