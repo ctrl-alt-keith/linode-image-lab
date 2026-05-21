@@ -231,6 +231,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(output.getvalue(), policy_path.read_text(encoding="utf-8"))
         self.assertIn("[provider_regions.us-east]", output.getvalue())
+        self.assertIn("[generated_groups.capability_linodes]", output.getvalue())
         self.assertIn('capabilities = ["Linodes", "Object Storage"]', output.getvalue())
 
     def test_region_policy_validate_emits_json_and_nonzero_for_invalid_policy(self) -> None:
@@ -241,6 +242,8 @@ class CliTests(unittest.TestCase):
             """schema_version = 1
 [provider_regions.us-east]
 capabilities = ["Linodes"]
+[generated_groups.capability_linodes]
+regions = ["us-east"]
 [groups.us]
 regions = ["us-ghost"]
 """,
@@ -261,7 +264,7 @@ regions = ["us-ghost"]
         self.assertEqual(code, 1)
         self.assertEqual(payload["command"], "region-policy")
         self.assertFalse(payload["valid"])
-        self.assertEqual(payload["errors"][0]["code"], "unknown_group_region")
+        self.assertEqual(payload["errors"][0]["code"], "unknown_groups_region")
 
     def test_manifest_file_missing_parent_fails_before_mutation(self) -> None:
         directory = tempfile.TemporaryDirectory()

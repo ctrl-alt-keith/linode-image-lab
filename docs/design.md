@@ -191,6 +191,11 @@ capability names only. They intentionally omit labels, resolver IPs, account
 limits, private resource identifiers, and any other account-specific or
 unneeded provider fields.
 
+`[generated_groups.*]` tables are generated convenience scaffolding. Capability
+groups are derived from provider capability names, and country groups are
+derived only from provider-exposed country codes. These groups are safe to
+overwrite on regeneration and are not an operator policy layer.
+
 `[groups.*]` tables are operator-owned intent. Each group has an explicit
 `regions = [...]` list whose meaning is defined locally by the operator. A
 group can represent any semantic boundary useful to the operator, but the tool
@@ -198,10 +203,18 @@ does not infer that boundary from country, city, coordinates, network latency,
 provider labels, or region naming conventions.
 
 When generation writes to an existing policy file, it parses and preserves the
-supported `groups.*` tables while refreshing generated provider facts. If the
-existing policy is malformed or contains unsupported group fields, generation
-fails rather than dropping operator-owned intent. `--replace-groups` is the
-explicit escape hatch for producing a provider-only artifact.
+supported `groups.*` tables while refreshing generated provider facts and
+generated helper groups. If the existing operator-owned groups are malformed or
+contain unsupported fields, generation fails rather than dropping operator
+intent. Stale or malformed `generated_groups.*` tables do not block generation
+because they are overwritten. `--replace-groups` is the explicit escape hatch
+for dropping operator-owned groups.
+
+The repository intentionally carries `policy/region-policy.toml` as the current
+full generated provider policy snapshot. Operators can rerun generation and
+review the version-control diff to detect provider region or capability drift.
+The checked-in snapshot should not contain hand-authored `groups.*` tables
+unless that operator intent is deliberately documented.
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:
@@ -209,11 +222,12 @@ metadata, then emits sanitized JSON. It validates:
 - `schema_version = 1`,
 - a non-empty `[provider_regions.*]` structure,
 - provider region entries with only `capabilities = [...]`,
-- optional group entries with only `regions = [...]`,
+- generated and operator group entries with only `regions = [...]`,
 - all provider regions in the artifact still exist,
 - all current provider regions are present in the artifact,
 - stored provider capabilities match current provider capabilities, and
-- every group region reference points at a current provider region.
+- every generated or operator group region reference points at a current
+  provider region.
 
 Validation is a policy-file freshness and shape check only. It does not choose
 where to deploy, expand groups into execution plans, run replication, probe

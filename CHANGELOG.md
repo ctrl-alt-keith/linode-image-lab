@@ -5,6 +5,8 @@
 - Add `region-policy generate` and `region-policy validate` for
   version-controlled provider-backed region policy artifacts that separate
   generated provider facts from operator-owned grouping intent.
+- Add generated helper groups and a checked-in `policy/region-policy.toml`
+  provider policy snapshot for reviewing provider region and capability drift.
 - Resolve relative TTL inputs such as `"1 day"` at command runtime while
   preserving absolute UTC TTL values in manifests and cleanup tags.
 - Add `capture-replicate-deploy` to capture in the first requested region,

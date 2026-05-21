@@ -207,8 +207,11 @@ values and `ttl=...` tags.
 
 Region policy artifacts keep provider facts separate from operator intent.
 Generated `[provider_regions.*]` sections contain public-safe provider region
-ids and capabilities from the current Linode regions API. Operator-maintained
-`[groups.*]` sections name semantic region groups for local workflows.
+ids and capabilities from the current Linode regions API. Generated
+`[generated_groups.*]` sections are overwrite-safe convenience scaffolding
+derived from provider capabilities and provider country codes. Operator-
+maintained `[groups.*]` sections name semantic region groups for local
+workflows and remain the canonical intent layer.
 
 Generate or refresh the default version-controlled artifact:
 
@@ -216,10 +219,17 @@ Generate or refresh the default version-controlled artifact:
 linode-image-lab region-policy generate --output policy/region-policy.toml
 ```
 
-When the output file already exists, generation refreshes only provider facts
-and preserves supported `groups.*` tables. Use `--replace-groups` only when you
-intentionally want a provider-only artifact. Use `--output -` to print the TOML
-without writing a file.
+When the output file already exists, generation refreshes provider facts and
+generated helper groups while preserving supported `groups.*` tables. Use
+`--replace-groups` only when you intentionally want to drop operator-owned
+groups. Use `--output -` to print the TOML without writing a file.
+
+The repository intentionally includes `policy/region-policy.toml` as the full
+current generated provider policy snapshot. It is versioned so operators can
+rerun generation periodically and review the diff for provider region or
+capability drift. The checked-in snapshot is generated data and should not
+contain hand-authored operator-only groups unless that intent is deliberately
+documented.
 
 Validate the artifact against current provider metadata:
 
@@ -228,14 +238,16 @@ linode-image-lab region-policy validate --path policy/region-policy.toml
 ```
 
 Validation emits sanitized JSON, fails closed on malformed TOML, unknown or
-missing provider regions, stale provider capabilities, and groups that
-reference regions missing from current provider metadata.
+missing provider regions, stale provider capabilities, stale generated groups,
+and generated or operator groups that reference regions missing from current
+provider metadata.
 
 The policy file is deliberately not an automatic placement engine. The tool
 does not infer geography, measure latency, choose nearest regions, plan
 fallback placement, execute replication policy, or reconcile long-lived
-resource declarations from these groups. Operators own the meaning of each
-group, and later commands can validate against that explicit local intent.
+resource declarations from these groups. Generated groups are starting points,
+not policy. Operators own the meaning of each operator group, and later
+commands can validate against that explicit local intent.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured

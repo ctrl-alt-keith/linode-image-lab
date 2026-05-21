@@ -148,7 +148,12 @@ class LinodeClientTests(unittest.TestCase):
             return FakeHTTPResponse(
                 {
                     "data": [
-                        {"id": "us-east", "capabilities": ["Linodes", "Object Storage"], "resolvers": "ignored"},
+                        {
+                            "id": "us-east",
+                            "country": "US",
+                            "capabilities": ["Linodes", "Object Storage"],
+                            "resolvers": "ignored",
+                        },
                         {"id": "", "capabilities": ["Linodes"]},
                         {"not_id": "ignored", "capabilities": ["Linodes"]},
                     ],
@@ -160,7 +165,10 @@ class LinodeClientTests(unittest.TestCase):
         with patch("linode_image_lab.linode_api.urlopen", side_effect=fake_urlopen):
             regions = client.list_regions()
 
-        self.assertEqual(regions, [{"region": "us-east", "capabilities": ["Linodes", "Object Storage"]}])
+        self.assertEqual(
+            regions,
+            [{"region": "us-east", "country": "us", "capabilities": ["Linodes", "Object Storage"]}],
+        )
         self.assertEqual([request.get_method() for request in requests], ["GET"])
         self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/regions?page=1&page_size=100"])
         self.assertIsNone(requests[0].get_header("Authorization"))

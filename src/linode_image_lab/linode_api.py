@@ -179,6 +179,9 @@ class LinodeClient:
                 if not isinstance(item, dict):
                     continue
                 region = self._region_resource(item)
+                country = item.get("country")
+                if isinstance(country, str) and country.strip():
+                    region["country"] = country.strip().lower()
                 if isinstance(region.get("region"), str) and region["region"].strip():
                     regions.append(region)
 
