@@ -214,7 +214,9 @@ The repository intentionally carries `policy/region-policy.toml` as the current
 full generated provider policy snapshot. Operators can rerun generation and
 review the version-control diff to detect provider region or capability drift.
 The checked-in snapshot should not contain hand-authored `groups.*` tables
-unless that operator intent is deliberately documented.
+unless that operator intent is deliberately documented. The operational
+maintenance loop is documented in
+[`README.md`](../README.md#maintaining-region-policy-artifacts).
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:

@@ -231,6 +231,24 @@ capability drift. The checked-in snapshot is generated data and should not
 contain hand-authored operator-only groups unless that intent is deliberately
 documented.
 
+## Maintaining Region Policy Artifacts
+
+Use normal source control review for provider drift:
+
+```sh
+linode-image-lab region-policy generate \
+  --output policy/region-policy.toml
+linode-image-lab region-policy validate \
+  --path policy/region-policy.toml
+git diff -- policy/region-policy.toml
+```
+
+`policy/region-policy.toml` is intentionally versioned. Regeneration updates
+`provider_regions.*` and `generated_groups.*` from current public provider
+metadata. Operator-owned `groups.*` remains preserved unless `--replace-groups`
+is used. Generation and validation do not require `LINODE_TOKEN`, read no
+account-specific data, and perform no provider mutations.
+
 Validate the artifact against current provider metadata:
 
 ```sh
