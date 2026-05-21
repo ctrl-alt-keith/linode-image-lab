@@ -1,0 +1,14 @@
+# Capture-replicate-deploy execute smoke config for India.
+# Deploy intent uses the operator-owned geo_india group.
+# Image availability uses the checked-in geo_india_image_replication group.
+# Review dry-run output before executing with --execute and LINODE_TOKEN.
+schema_version = 1
+
+[defaults]
+ttl = "3h"
+
+[capture-replicate-deploy]
+deploy_groups = ["geo_india"]
+replication_groups = ["geo_india_image_replication"]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"

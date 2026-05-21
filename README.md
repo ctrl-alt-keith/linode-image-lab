@@ -174,6 +174,20 @@ Provider or validation failures are reported with public-safe symbolic targets
 and sanitized failure reasons; normal stdout must not expose provider resource
 identifiers.
 
+## Geo Replication Smoke Configs
+
+`examples/smoke/` contains operational `capture-replicate-deploy` smoke configs
+for bounded provider validation against the checked-in region policy. They are
+safe by default because a config run is still a dry run unless `--execute` and
+`LINODE_TOKEN` are both provided.
+
+The geo smoke configs intentionally exercise current checked-in policy
+semantics: deploy intent uses operator-owned geo deploy groups, and replication
+intent uses matching operator-owned geo image-replication groups where the
+policy has known-good targets. Geos without a checked-in geo image-replication
+group omit `replication_groups` and explain the missing coverage in comments,
+including documented provider discrepancy behavior.
+
 ## Config Defaults
 
 Pass `--config` before or after the command to load optional TOML execution
@@ -358,9 +372,10 @@ country-based image replication, generated groups such as
 country groups include all provider regions for that country, and
 `country_us_object_storage` intentionally mirrors provider Object Storage
 metadata even when a provider discrepancy is documented. The checked-in
-provider discrepancy exclusions currently include `de-fra-2`, `jp-tyo-3`, and
-`us-iad-2` for image-replication helper groups only. Before creating the
-capture Linode, it validates any configured region policy artifact and
+provider discrepancy exclusions currently include `au-mel`, `de-fra-2`,
+`fr-par-2`, `gb-lon`, `jp-tyo-3`, `sg-sin-2`, and `us-iad-2` for
+image-replication helper groups only. Before creating the capture Linode, it
+validates any configured region policy artifact and
 verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
 provider-reported existing image regions plus resolved replication targets, so
@@ -655,10 +670,11 @@ entries include `resource_type` plus a sanitized `reason`, such as
   retry, or own replicas after the run.
 - Replication target eligibility: explicit image replication requires requested
   target regions to expose the provider `Object Storage` capability.
-- Image replication provider discrepancies: `de-fra-2`, `jp-tyo-3`, and
-  `us-iad-2` currently advertise Object Storage but are excluded from
-  generated image-replication helper groups and matching operator
-  image-replication groups in the checked-in policy.
+- Image replication provider discrepancies: `au-mel`, `de-fra-2`,
+  `fr-par-2`, `gb-lon`, `jp-tyo-3`, `sg-sin-2`, and `us-iad-2` are
+  documented exclusions from generated image-replication helper groups and
+  matching operator image-replication groups in the checked-in policy. Raw
+  provider facts and provider-backed capability groups remain unchanged.
 - Region policy consumption: `deploy_groups` expand deploy targets, while
   `replication_groups` expand image availability only. They do not infer
   geography, choose nearest regions, plan fallbacks, bypass capability

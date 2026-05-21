@@ -30,6 +30,10 @@ class RegionPolicyTests(unittest.TestCase):
 
         groups = policy["groups"]
         self.assertEqual(
+            policy["provider_overrides"]["image_replication_excluded_regions"]["regions"],
+            ["au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"],
+        )
+        self.assertEqual(
             groups["geo_americas"]["regions"],
             [
                 "br-gru",
@@ -46,8 +50,10 @@ class RegionPolicyTests(unittest.TestCase):
                 "us-west",
             ],
         )
-        self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par", "gb-lon"])
+        self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par"])
         self.assertEqual(groups["geo_apac_north"]["regions"], ["ap-northeast", "jp-osa", "jp-tyo-3"])
+        self.assertEqual(groups["geo_apac_southeast_image_replication"]["regions"], ["id-cgk"])
+        self.assertEqual(groups["geo_india_image_replication"]["regions"], ["in-maa"])
         self.assertEqual(
             policy["provider_regions"]["jp-tyo-3"]["capabilities"],
             [
@@ -75,8 +81,9 @@ class RegionPolicyTests(unittest.TestCase):
         )
         self.assertEqual(policy["generated_groups"]["country_jp_object_storage"]["regions"], ["jp-tyo-3"])
         self.assertNotIn("country_jp_image_replication", policy["generated_groups"])
+        self.assertNotIn("country_gb_image_replication", policy["generated_groups"])
+        self.assertNotIn("country_sg_image_replication", policy["generated_groups"])
         self.assertNotIn("geo_apac_north_image_replication", groups)
-        self.assertNotIn("geo_india_image_replication", groups)
         self.assertNotIn("geo_oceania_image_replication", groups)
 
     def test_generation_is_deterministic_and_normalizes_capabilities(self) -> None:

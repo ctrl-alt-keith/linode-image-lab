@@ -299,11 +299,11 @@ that country. Capability-scoped groups such as `country_us_object_storage`
 mirror provider capability metadata, including any documented provider
 discrepancies. Image-replication generated groups can apply narrow documented
 `provider_overrides.image_replication_excluded_regions` entries for known
-replication POST inconsistencies, currently including `de-fra-2`, `jp-tyo-3`,
-and `us-iad-2`. These groups are generated convenience scaffolding only;
-execute mode still validates every resolved replication target and fails
-before mutation when any target lacks the required capability or the provider
-replication POST rejects it.
+replication POST inconsistencies, currently including `au-mel`, `de-fra-2`,
+`fr-par-2`, `gb-lon`, `jp-tyo-3`, `sg-sin-2`, and `us-iad-2`. These groups
+are generated convenience scaffolding only; execute mode still validates every
+resolved replication target and fails before mutation when any target lacks the
+required capability or the provider replication POST rejects it.
 
 When `deploy_groups` or `replication_groups` is configured and
 `region_policy_file` is omitted, the command resolves groups from

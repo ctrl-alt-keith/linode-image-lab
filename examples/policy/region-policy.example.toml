@@ -27,7 +27,7 @@ capabilities = ["Linodes", "Object Storage"]
 capabilities = ["Linodes"]
 
 [provider_overrides.image_replication_excluded_regions]
-regions = ["de-fra-2", "jp-tyo-3", "us-iad-2"]
+regions = ["de-fra-2", "gb-lon", "jp-tyo-3", "us-iad-2"]
 reason = "Provider currently advertises Object Storage, but image replication POST rejects these regions."
 
 [generated_groups.capability_linodes]
@@ -46,9 +46,6 @@ regions = ["de-fra-2"]
 regions = ["de-fra-2"]
 
 [generated_groups.country_gb]
-regions = ["gb-lon"]
-
-[generated_groups.country_gb_image_replication]
 regions = ["gb-lon"]
 
 [generated_groups.country_gb_linodes]
@@ -86,9 +83,6 @@ regions = ["us-east", "us-sea"]
 
 [groups.geo_europe]
 regions = ["de-fra-2", "gb-lon"]
-
-[groups.geo_europe_image_replication]
-regions = ["gb-lon"]
 
 [groups.geo_apac_north]
 regions = ["jp-tyo-3"]

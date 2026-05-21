@@ -271,10 +271,18 @@ the checked-in policy, `geo_apac_north` currently has deploy targets but no
 matching `geo_apac_north_image_replication` group because `jp-tyo-3` is a
 documented image-replication provider discrepancy.
 
+Versioned smoke configs under `examples/smoke/` make these policy semantics
+reviewable as operational tooling. They are bounded provider validation inputs:
+they preserve deploy intent separately from replication intent, use
+operator-owned geo image-replication groups only where they are checked in, and
+remain dry-run-first unless the operator explicitly passes `--execute` with a
+valid provider token.
+
 Image-replication-specific generated groups improve the default operator
 surface when a provider inconsistency is documented. The current documented
-image-replication exclusions are `de-fra-2`, `jp-tyo-3`, and `us-iad-2`.
-They do not bypass validation or silently filter execution requests.
+image-replication exclusions are `au-mel`, `de-fra-2`, `fr-par-2`, `gb-lon`,
+`jp-tyo-3`, `sg-sin-2`, and `us-iad-2`. They do not rewrite raw provider
+facts, bypass validation, or silently filter execution requests.
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:
