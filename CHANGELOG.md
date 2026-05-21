@@ -4,6 +4,13 @@
 
 - Resolve relative TTL inputs such as `"1 day"` at command runtime while
   preserving absolute UTC TTL values in manifests and cleanup tags.
+- Add `capture-replicate-deploy` to capture in the first requested region,
+  explicitly replicate the captured image to deploy regions, wait for requested
+  replicas to report available, and deploy with cleanup-first manifests.
+- Include sanitized provider status and reason details when image replication
+  submission fails.
+- Validate explicit image replication targets for the provider `Object Storage`
+  capability before capture-replicate-deploy creates temporary Linodes.
 - Add `replicate` to dry-run and explicitly execute custom image replication
   while preserving dry-run-first and mutation-gated behavior.
 - Add `firewall-sync` to consume a private trusted network registry and sync

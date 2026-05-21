@@ -2,7 +2,8 @@
 
 Safe, repeatable Linode image capture and deploy validation with automatic cleanup.
 
-- Plans capture, deploy, and capture-deploy runs before any API mutation.
+- Plans capture, deploy, capture-deploy, and capture-replicate-deploy runs
+  before any API mutation.
 - Captures custom images from temporary Linode instances.
 - Deploys temporary validation instances from custom images.
 - Submits explicit custom image replication requests when requested.
@@ -105,7 +106,8 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 
 `LINODE_TOKEN` is required when `--execute` is used and when `cleanup
 --discover` is used. Dry-run commands, including plain `cleanup` and
-`replicate`, do not read the token, call Linode, or mutate resources.
+`replicate` and `capture-replicate-deploy`, do not read the token, call
+Linode, or mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -180,7 +182,8 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 ```
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
-`[deploy]`, `[capture-deploy]`, `[cleanup]`, and `[firewall-sync]` tables.
+`[deploy]`, `[capture-deploy]`, `[capture-replicate-deploy]`, `[replicate]`,
+`[cleanup]`, and `[firewall-sync]` tables.
 Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
@@ -202,11 +205,14 @@ for deploy instances. Authorized keys are additive: configured
 `--authorized-key`, and `--authorized-keys-file` inputs are merged and deduped
 instead of replacing each other. `[deploy].authorized_keys` and
 `[deploy].authorized_keys_file` also feed the deploy phase of `capture-deploy`;
-`[capture-deploy]` can add command-specific keys. `[deploy].user_data_file`
-provides deploy-scoped Linode metadata user data for `deploy` and for the
-deploy phase of `capture-deploy`; `--user-data-file` overrides it when provided.
-There is no `[capture-deploy].user_data_file`. File inputs are explicit; the
-tool never discovers keys or user data.
+`[capture-deploy]` can add command-specific keys. The same rule applies to
+`capture-replicate-deploy` with `[capture-replicate-deploy]`.
+`[deploy].user_data_file` provides deploy-scoped Linode metadata user data for
+`deploy` and for the deploy phase of `capture-deploy` and
+`capture-replicate-deploy`; `--user-data-file` overrides it when provided.
+There is no `[capture-deploy].user_data_file` or
+`[capture-replicate-deploy].user_data_file`. File inputs are explicit; the tool
+never discovers keys or user data.
 
 `capture-deploy --execute` accepts multiple regions through repeated
 `--region` flags or `regions = [...]` config. It captures one custom image in
@@ -221,11 +227,28 @@ only.
 `replicate --execute` accepts multiple regions and submits one explicit custom
 image replication request. Because the Linode API request represents the
 complete region set for an image, execute mode first reads the image's existing
-regions and submits existing-plus-requested regions. If existing regions are
-not exposed, the command fails before mutation. Replicate dry-run output
-models the requested regions and records that execute mode will preserve
+regions and verifies that each requested replication target exposes the
+provider `Object Storage` capability, then submits existing-plus-requested
+regions. If existing regions are not exposed, or a requested target lacks that
+capability, the command fails before mutation. Replicate dry-run output models
+the requested regions and records that execute mode will preserve
 provider-reported existing regions, but it does not read `LINODE_TOKEN` or call
 Linode.
+
+`capture-replicate-deploy --execute` captures one custom image in the first
+requested region, submits explicit replication for the deploy region list, then
+deploys from the captured image only after bounded read-only status checks show
+the requested image regions are `available`. Before creating the capture
+Linode, it verifies that each requested replication target exposes the provider
+`Object Storage` capability. The replication request preserves
+provider-reported existing image regions plus requested deploy regions. If a
+requested target lacks that capability, the image response does not expose
+existing regions, or requested replicas do not report available before the
+bounded wait expires, the workflow fails closed, cleans up temporary resources
+when any were created, and does not deploy. The captured custom image remains
+the workflow deliverable under the same artifact-tag semantics as
+capture-deploy. Capability validation records a check for every requested
+target region before deciding whether the workflow can proceed.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
@@ -233,16 +256,16 @@ command execution, and emits a non-mutating JSON report with `precedence`,
 classes considered for the selected command, and `sources` shows which source
 fed each effective field. It is not a single override rule for every field:
 scalar fields use override precedence, authorized-key inputs merge and dedupe
-additively, and user data remains deploy-scoped. For `capture-deploy`, scalar
-defaults come from explicit CLI flags, then `[capture-deploy]`, then
-`[defaults]`; authorized keys can come from `[deploy]`, `[capture-deploy]`, and
-CLI key inputs; user data can come from `[deploy].user_data_file` or
-`--user-data-file`. You can pass supported CLI default flags such as `--region`,
-`--ttl`, `--source-image`, `--image-id`, or `--type` to preview config
-resolution for the selected command. For deploy defaults, `--firewall-id`,
-`--authorized-key`, `--authorized-keys-file`, and `--user-data-file` can also be
-previewed. Authorized key and user-data output reports safe metadata such as
-count, source, and byte count only.
+additively, and user data remains deploy-scoped. For `capture-deploy` and
+`capture-replicate-deploy`, scalar defaults come from explicit CLI flags, then
+the command table, then `[defaults]`; authorized keys can come from `[deploy]`,
+the command table, and CLI key inputs; user data can come from
+`[deploy].user_data_file` or `--user-data-file`. You can pass supported CLI
+default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
+`--type` to preview config resolution for the selected command. For deploy
+defaults, `--firewall-id`, `--authorized-key`, `--authorized-keys-file`, and
+`--user-data-file` can also be previewed. Authorized key and user-data output
+reports safe metadata such as count, source, and byte count only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, private SSH keys, inline cloud-init data, `execute`,
@@ -288,7 +311,8 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
 
 - All commands are dry-run by default.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`,
-  `capture-deploy`, `cleanup`, and `firewall-sync`.
+  `capture-deploy`, `capture-replicate-deploy`, `replicate`, `cleanup`, and
+  `firewall-sync`.
 - Provider behavior assumptions are tracked in
   [docs/provider-assumptions.md](docs/provider-assumptions.md).
 - Scalar config values fill omitted command options; CLI scalar flags override
@@ -307,12 +331,15 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
   `--execute`.
 - Normal stdout is redacted for public-safe review.
 - `--manifest-file PATH` writes an atomic copy of the same redacted manifest
-  emitted on stdout for `capture`, `deploy`, `capture-deploy`, and `cleanup`;
-  `--manifest-file -` keeps stdout-only behavior.
+  emitted on stdout for `capture`, `deploy`, `capture-deploy`,
+  `capture-replicate-deploy`, `replicate`, and `cleanup`; `--manifest-file -`
+  keeps stdout-only behavior.
 
 ## What This Does
 
 - Captures custom images from temporary Linode instances.
+- Explicitly replicates captured images when using the
+  capture-replicate-deploy operator path.
 - Deploys temporary validation instances.
 - Validates region, Linode type, image inputs, tags, resources, and running
   status at the API level.
@@ -323,7 +350,8 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
 - SSH, cloud-init, service, or application-level validation.
 - Manage long-lived infrastructure.
 - General-purpose multi-region orchestration outside bounded
-  `capture-deploy --execute` validation runs.
+  `capture-deploy --execute` and `capture-replicate-deploy --execute`
+  validation runs.
 
 ## Commands
 
@@ -334,6 +362,7 @@ linode-image-lab plan --region us-east --mode capture-deploy
 linode-image-lab capture --region us-east
 linode-image-lab deploy --region us-east
 linode-image-lab capture-deploy --region us-east
+linode-image-lab capture-replicate-deploy --config examples/config/capture-replicate-deploy.example.toml
 linode-image-lab cleanup
 ```
 
@@ -369,6 +398,18 @@ linode-image-lab capture-deploy \
   --execute
 ```
 
+Execute capture, explicit replication, and deploy validation:
+
+```sh
+linode-image-lab capture-replicate-deploy \
+  --region us-sea \
+  --region us-east \
+  --source-image linode/alpine3.23 \
+  --type g6-nanode-1 \
+  --firewall-id "$FIREWALL_ID" \
+  --execute
+```
+
 Preview or execute tag-scoped cleanup:
 
 ```sh
@@ -391,8 +432,8 @@ Modeled resources use rediscoverable tags:
 
 - `project=linode-image-lab`
 - `run_id=<unique-id>`
-- `mode=<capture|deploy|capture-deploy>`
-- `component=<capture|deploy>`
+- `mode=<capture|deploy|capture-deploy|capture-replicate-deploy|replicate>`
+- `component=<capture|deploy|replicate>`
 - `ttl=<absolute-utc-timestamp>`
 
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
@@ -401,10 +442,11 @@ enforce it as a provider-side expiration policy.
 Captured custom images use separate artifact tags with the same `run_id`,
 `mode`, `component`, and `ttl` metadata. By default the artifact project tag is
 `project=linode-image-lab`, making expired images eligible for explicit
-standalone cleanup. `[capture].image_project_tag` or
-`[capture-deploy].image_project_tag` can change the value after `project=`.
-Images outside the default lab-owned project tag are ignored by standalone
-cleanup discovery and are not deleted by standalone cleanup.
+standalone cleanup. `[capture].image_project_tag`,
+`[capture-deploy].image_project_tag`, or
+`[capture-replicate-deploy].image_project_tag` can change the value after
+`project=`. Images outside the default lab-owned project tag are ignored by
+standalone cleanup discovery and are not deleted by standalone cleanup.
 
 ## Manifest Output
 
@@ -435,6 +477,16 @@ count metadata only; when user data is configured, deploy manifests include
 identifiers, raw key material, and raw or encoded user data remain redacted in
 normal stdout.
 
+`capture-replicate-deploy --execute` emits one combined manifest with
+top-level `capture`, `replication`, `deploy_results`, `validation`, `cleanup`,
+and `summary` blocks. Dry-run manifests show the capture region, deploy
+regions, replication target regions, planned capture/replication/deploy phases,
+cleanup expectations, and `provider_calls: "not_attempted"`. Execute manifests
+record the capture result, replication capability checks, replication
+request/result, replica status checks, deploy results by region, validation
+summary, cleanup summary, and final `status` of `succeeded`, `partial`, or
+`failed`.
+
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or
 capture cleanup fails after successful deploys, and `failed` when capture fails
@@ -464,6 +516,11 @@ entries include `resource_type` plus a sanitized `reason`, such as
   (non-swap, ready). Multi-disk sources are not supported.
 - Cross-region deploy latency: Linode supports cross-region image deploy, but
   latency is not specified by provider docs.
+- Replica readiness waits: `capture-replicate-deploy --execute` waits only for
+  provider/API image region statuses to report `available`; it does not repair,
+  retry, or own replicas after the run.
+- Replication target eligibility: explicit image replication requires requested
+  target regions to expose the provider `Object Storage` capability.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

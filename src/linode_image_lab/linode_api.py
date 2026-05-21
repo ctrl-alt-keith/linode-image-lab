@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .manifest import PROJECT, tags_to_dict
+from .redaction import redact
 
 TOKEN_ENV_NAME = "LINODE_TOKEN"
 DEFAULT_API_BASE_URL = "https://api.linode.com/v4"
@@ -23,6 +24,31 @@ RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 class LinodeApiError(ValueError):
     """Raised when the Linode API boundary cannot complete a requested action."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.provider_errors = []
+        for item in provider_errors or []:
+            redacted = redact(item)
+            if isinstance(redacted, dict):
+                self.provider_errors.append(redacted)
+
+    def provider_error_details(self) -> dict[str, Any] | None:
+        if self.status_code is None and not self.provider_errors:
+            return None
+        details: dict[str, Any] = {}
+        if self.status_code is not None:
+            details["status_code"] = self.status_code
+        if self.provider_errors:
+            details["errors"] = self.provider_errors
+        return details
 
 
 class LinodeTokenError(LinodeApiError):
@@ -37,6 +63,14 @@ class LinodeClientProtocol(Protocol):
     def preflight(self) -> None: ...
 
     def preflight_region(self, region: str) -> None: ...
+
+    def get_region_details(self, region: str) -> dict[str, Any]: ...
+
+    def preflight_region_capability(
+        self,
+        region: str,
+        capability: str,
+    ) -> dict[str, Any]: ...
 
     def preflight_instance_type(self, instance_type: str) -> None: ...
 
@@ -86,6 +120,8 @@ class LinodeClientProtocol(Protocol):
 
     def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, Any]: ...
 
+    def wait_image_regions_available(self, image_id: str, regions: list[str]) -> dict[str, Any]: ...
+
     def list_managed_linodes(self) -> list[dict[str, Any]]: ...
 
     def list_managed_images(self) -> list[dict[str, Any]]: ...
@@ -133,6 +169,25 @@ class LinodeClient:
     def preflight_region(self, region: str) -> None:
         escaped = quote(region, safe="")
         self._preflight_resource(f"/regions/{escaped}", "requested region is unavailable")
+
+    def get_region_details(self, region: str) -> dict[str, Any]:
+        escaped = quote(region, safe="")
+        try:
+            response = self._request("GET", f"/regions/{escaped}", retry=True, operation="get_region_details")
+        except LinodeTokenError:
+            raise
+        except LinodeApiError as exc:
+            raise LinodePreflightError("requested region is unavailable") from exc
+        return self._region_resource(response)
+
+    def preflight_region_capability(self, region: str, capability: str) -> dict[str, Any]:
+        details = self.get_region_details(region)
+        capabilities = region_capabilities(details)
+        if capability not in capabilities:
+            raise LinodePreflightError(
+                f"requested region {region} is missing required capability: {capability}"
+            )
+        return details
 
     def preflight_instance_type(self, instance_type: str) -> None:
         escaped = quote(instance_type, safe="")
@@ -267,6 +322,24 @@ class LinodeClient:
         )
         return self._image_details_resource(response)
 
+    def wait_image_regions_available(self, image_id: str, regions: list[str]) -> dict[str, Any]:
+        requested_regions = {region.strip().lower() for region in regions if region.strip()}
+
+        def current() -> dict[str, Any]:
+            return self.get_image_details(image_id)
+
+        def done(resource: dict[str, Any]) -> bool:
+            if resource.get("status") != "available":
+                return False
+            statuses = {
+                str(entry.get("region", "")).strip().lower(): str(entry.get("status", "")).strip().lower()
+                for entry in resource.get("regions", [])
+                if isinstance(entry, dict)
+            }
+            return all(statuses.get(region) == "available" for region in requested_regions)
+
+        return self._wait_until(current, done)
+
     def list_managed_linodes(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
         page = 1
@@ -400,7 +473,11 @@ class LinodeClient:
                     )
                     self._sleep_before_retry(delay)
                     continue
-                raise LinodeApiError(self._failure_message(f"Linode API request failed with status {exc.code}", attempt)) from exc
+                raise LinodeApiError(
+                    self._failure_message(f"Linode API request failed with status {exc.code}", attempt),
+                    status_code=exc.code,
+                    provider_errors=self._provider_errors(exc),
+                ) from exc
             except OSError as exc:
                 if attempt < attempts:
                     delay, delay_source = self._deterministic_retry_delay(attempt)
@@ -523,6 +600,49 @@ class LinodeClient:
         if delay is not None and delay > 0:
             time.sleep(delay)
 
+    @classmethod
+    def _provider_errors(cls, exc: HTTPError) -> list[dict[str, Any]]:
+        payload = cls._http_error_payload(exc)
+        if not isinstance(payload, dict):
+            return []
+
+        raw_errors = payload.get("errors")
+        if isinstance(raw_errors, list):
+            errors = [cls._provider_error_entry(item) for item in raw_errors if isinstance(item, dict)]
+            return [error for error in errors if error]
+
+        for key in ("reason", "message", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return [{"reason": redact(value.strip())}]
+        return []
+
+    @staticmethod
+    def _http_error_payload(exc: HTTPError) -> object | None:
+        try:
+            body = exc.read()
+        except (OSError, ValueError):
+            return None
+        if not body:
+            return None
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+    @staticmethod
+    def _provider_error_entry(item: dict[str, Any]) -> dict[str, Any]:
+        entry: dict[str, Any] = {}
+        for key in ("reason", "message", "field"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                entry[key] = redact(value.strip())
+        return entry
+
     def _record_retry_event(
         self,
         *,
@@ -598,3 +718,27 @@ class LinodeClient:
                 entry["status"] = status
             regions.append(entry)
         return regions
+
+    @staticmethod
+    def _region_resource(response: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "region": response.get("id"),
+            "capabilities": region_capabilities(response),
+        }
+
+
+def region_capabilities(region: dict[str, Any]) -> list[str]:
+    value = region.get("capabilities", [])
+    if not isinstance(value, list):
+        return []
+    capabilities: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        capability = item.strip()
+        if capability in seen:
+            continue
+        seen.add(capability)
+        capabilities.append(capability)
+    return capabilities

@@ -16,6 +16,8 @@ class FakeReplicateClient:
         image_regions: list[dict[str, object]] | None = None,
         fail_region: str | None = None,
         fail_submit: bool = False,
+        provider_error_submit: bool = False,
+        region_capabilities: dict[str, list[str]] | None = None,
     ) -> None:
         self.calls: list[str] = []
         self.image_status = image_status
@@ -24,6 +26,8 @@ class FakeReplicateClient:
         )
         self.fail_region = fail_region
         self.fail_submit = fail_submit
+        self.provider_error_submit = provider_error_submit
+        self.region_capabilities = region_capabilities or {}
         self.submitted_regions: list[str] = []
 
     def preflight(self) -> None:
@@ -42,9 +46,32 @@ class FakeReplicateClient:
         if region == self.fail_region:
             raise LinodePreflightError("requested region is unavailable")
 
+    def get_region_details(self, region: str) -> dict[str, object]:
+        self.calls.append(f"get_region_details:{region}")
+        if region == self.fail_region:
+            raise LinodePreflightError("requested region is unavailable")
+        return {
+            "region": region,
+            "capabilities": self.region_capabilities.get(region, ["Linodes", "Object Storage"]),
+        }
+
+    def preflight_region_capability(self, region: str, capability: str) -> dict[str, object]:
+        self.calls.append(f"preflight_region_capability:{region}:{capability}")
+        details = self.get_region_details(region)
+        capabilities = details.get("capabilities", [])
+        if not isinstance(capabilities, list) or capability not in capabilities:
+            raise LinodePreflightError(f"requested region {region} is missing required capability: {capability}")
+        return details
+
     def replicate_image(self, *, image_id: str, regions: list[str]) -> dict[str, object]:
         self.calls.append("replicate_image")
         self.submitted_regions = list(regions)
+        if self.provider_error_submit:
+            raise LinodeApiError(
+                "Linode API request failed with status 400",
+                status_code=400,
+                provider_errors=[{"reason": "Image private/789 is not allowed", "field": "regions"}],
+            )
         if self.fail_submit:
             raise LinodeApiError("Linode API request failed with status 500")
         return {
@@ -118,8 +145,8 @@ class ReplicateExecutionTests(unittest.TestCase):
             [
                 "preflight",
                 "get_image_details",
-                "preflight_region:us-west",
-                "preflight_region:us-sea",
+                "get_region_details:us-west",
+                "get_region_details:us-sea",
                 "replicate_image",
             ],
         )
@@ -171,8 +198,8 @@ class ReplicateExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["replication_request"]["requested_regions"], ["us-west", "us-sea"])
         self.assertEqual(manifest["replication_request"]["submitted_regions"], ["us-east", "us-west", "us-sea"])
         self.assertEqual(
-            [call for call in client.calls if call.startswith("preflight_region:")],
-            ["preflight_region:us-west", "preflight_region:us-sea"],
+            [call for call in client.calls if call.startswith("get_region_details:")],
+            ["get_region_details:us-west", "get_region_details:us-sea"],
         )
 
     def test_execute_fails_closed_when_existing_regions_are_not_exposed(self) -> None:
@@ -268,10 +295,69 @@ class ReplicateExecutionTests(unittest.TestCase):
                 client=client,
             )
 
-        self.assertEqual(client.calls, ["preflight", "get_image_details", "preflight_region:us-west"])
+        self.assertEqual(client.calls, ["preflight", "get_image_details", "get_region_details:us-west"])
         self.assertEqual(raised.exception.manifest["status"], "failed")
         self.assertEqual(raised.exception.manifest["resources"], [])
         self.assertEqual(raised.exception.manifest["errors"], ["requested region is unavailable"])
+
+    def test_execute_fails_after_reporting_all_regions_that_lack_object_storage(self) -> None:
+        client = FakeReplicateClient(
+            region_capabilities={
+                "us-west": ["Linodes"],
+                "us-sea": ["Linodes", "Object Storage"],
+                "us-lax": ["Linodes"],
+            }
+        )
+
+        with self.assertRaises(ReplicateError) as raised:
+            replicate_plan(
+                regions=["us-west", "us-sea", "us-lax"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                image_id="private/789",
+                client=client,
+            )
+
+        self.assertNotIn("replicate_image", client.calls)
+        manifest = raised.exception.manifest
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(
+            manifest["errors"],
+            [
+                "requested replication target regions us-west, us-lax are missing required capability: "
+                "Object Storage"
+            ],
+        )
+        self.assertEqual(
+            [call for call in client.calls if call.startswith("get_region_details:")],
+            [
+                "get_region_details:us-west",
+                "get_region_details:us-sea",
+                "get_region_details:us-lax",
+            ],
+        )
+        self.assertEqual(
+            manifest["replication_request"]["region_capability_checks"],
+            {
+                "required_capability": "Object Storage",
+                "checks": [
+                    {
+                        "region": "us-west",
+                        "capability": "Object Storage",
+                        "status": "failed",
+                        "missing_capability": "Object Storage",
+                    },
+                    {"region": "us-sea", "capability": "Object Storage", "status": "succeeded"},
+                    {
+                        "region": "us-lax",
+                        "capability": "Object Storage",
+                        "status": "failed",
+                        "missing_capability": "Object Storage",
+                    },
+                ],
+            },
+        )
 
     def test_execute_submission_failure_records_partial_manifest(self) -> None:
         client = FakeReplicateClient(fail_submit=True)
@@ -291,6 +377,28 @@ class ReplicateExecutionTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "failed")
         self.assertEqual(manifest["steps"][-1], {"name": "submit_image_replication", "mutates": True, "status": "failed"})
         self.assertEqual(manifest["errors"], ["Linode API request failed with status 500"])
+
+    def test_execute_submission_failure_records_sanitized_provider_error(self) -> None:
+        client = FakeReplicateClient(provider_error_submit=True)
+
+        with self.assertRaises(ReplicateError) as raised:
+            replicate_plan(
+                regions=["us-west"],
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                execute=True,
+                image_id="private/789",
+                client=client,
+            )
+
+        manifest = raised.exception.manifest
+        self.assertEqual(
+            manifest["provider_error"],
+            {
+                "status_code": 400,
+                "errors": [{"reason": "Image [REDACTED] is not allowed", "field": "regions"}],
+            },
+        )
 
 
 if __name__ == "__main__":

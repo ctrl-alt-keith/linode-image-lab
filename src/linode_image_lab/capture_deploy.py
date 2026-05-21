@@ -203,6 +203,8 @@ def execute_region_deploys(
     user_data: DeployUserData | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
+    command: str = "capture-deploy",
+    mode: str = "capture-deploy",
 ) -> dict[str, dict[str, Any]]:
     if len(regions) == 1:
         region = regions[0]
@@ -218,6 +220,8 @@ def execute_region_deploys(
                 user_data=user_data,
                 preserve_instance=preserve_instance,
                 client=client,
+                command=command,
+                mode=mode,
             )
         }
 
@@ -237,6 +241,8 @@ def execute_region_deploys(
                 user_data=user_data,
                 preserve_instance=preserve_instance,
                 client=client,
+                command=command,
+                mode=mode,
             ): region
             for region in regions
         }
@@ -251,6 +257,8 @@ def execute_region_deploys(
                     ttl=ttl,
                     image_id=image_id,
                     exc=exc,
+                    command=command,
+                    mode=mode,
                 )
     return results
 
@@ -267,6 +275,8 @@ def execute_region_deploy(
     user_data: DeployUserData | None,
     preserve_instance: bool,
     client: LinodeClientProtocol | None,
+    command: str = "capture-deploy",
+    mode: str = "capture-deploy",
 ) -> dict[str, Any]:
     try:
         return execute_deploy(
@@ -281,8 +291,8 @@ def execute_region_deploy(
                 authorized_keys=authorized_keys,
                 user_data=user_data,
                 preserve_instance=preserve_instance,
-                command="capture-deploy",
-                mode="capture-deploy",
+                command=command,
+                mode=mode,
                 component="deploy",
                 defer_cleanup=False,
                 label_suffix=region,
@@ -296,6 +306,8 @@ def execute_region_deploy(
             ttl=ttl,
             image_id=image_id,
             exc=exc,
+            command=command,
+            mode=mode,
         )
         add_region_error_context(deploy_manifest, region=region)
         return deploy_manifest
@@ -568,10 +580,12 @@ def failed_deploy_manifest(
     ttl: str,
     image_id: str,
     exc: Exception,
+    command: str = "capture-deploy",
+    mode: str = "capture-deploy",
 ) -> dict[str, Any]:
     manifest = create_manifest(
-        command="capture-deploy",
-        mode="capture-deploy",
+        command=command,
+        mode=mode,
         component="deploy",
         regions=[region],
         run_id=run_id,
