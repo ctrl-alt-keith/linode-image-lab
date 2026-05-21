@@ -104,8 +104,8 @@ capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block S
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_overrides.image_replication_excluded_regions]
-regions = ["us-iad-2"]
-reason = "Provider currently advertises Object Storage, but image replication POST rejects this region."
+regions = ["de-fra-2", "us-iad-2"]
+reason = "Provider currently advertises Object Storage, but image replication POST rejects these regions."
 
 [generated_groups.capability_aclp_logs_datacenter_lke_e]
 regions = ["de-fra-2", "fr-par-2", "gb-lon", "in-bom-2", "jp-tyo-3", "sg-sin-2", "us-iad", "us-lax", "us-ord", "us-sea"]
@@ -370,9 +370,6 @@ regions = ["de-fra-2", "eu-central"]
 
 [generated_groups.country_de_gpu_linodes]
 regions = ["de-fra-2", "eu-central"]
-
-[generated_groups.country_de_image_replication]
-regions = ["de-fra-2"]
 
 [generated_groups.country_de_kubernetes]
 regions = ["de-fra-2", "eu-central"]
