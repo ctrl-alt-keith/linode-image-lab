@@ -36,6 +36,8 @@ regions = ["us-east", "us-sea", "us-west"]
 [generated_groups.country_us_linodes]
 regions = ["us-east", "us-sea", "us-west"]
 
+# Convenience scaffold for image replication targets. Execution still validates
+# every requested target for Object Storage before mutation.
 [generated_groups.country_us_object_storage]
 regions = ["us-east", "us-sea"]
 

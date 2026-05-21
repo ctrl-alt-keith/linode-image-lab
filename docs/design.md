@@ -181,8 +181,11 @@ replication request. Replicate config can provide `region`, `regions`,
 `image_id`, and `ttl`.
 `capture-replicate-deploy --execute` accepts multiple explicit deploy regions,
 captures in the first deploy region, resolves replication target regions from
-explicit `replication_regions`, checked-in `replication_groups`, or both, and
-always includes all deploy regions in the replication target set. It verifies
+explicit `replication_regions`, checked-in `replication_groups`, or both.
+Deploy regions are deploy intent only and are not automatically added to
+resolved replication targets when either replication input is configured. When
+no replication regions or groups are configured, deploy regions remain the
+backwards-compatible default replication target set. The command verifies
 resolved replication targets expose the provider `Object Storage` capability
 before capture, deploys only to explicit deploy regions, and can receive the
 same deploy metadata defaults as `capture-deploy`.
@@ -380,8 +383,8 @@ The execute flow is bounded and has no durable ownership model:
 
 1. resolve configured `replication_groups` from the selected region policy
    artifact, defaulting to `policy/region-policy.toml`,
-2. combine explicit `replication_regions`, group-expanded regions, and
-   explicit deploy regions into a deterministic replication target set,
+2. combine explicit `replication_regions` and group-expanded regions into a
+   deterministic replication target set,
 3. read each resolved replication target region and require the provider
    `Object Storage` capability before capture,
 4. run capture in the first explicit deploy region with
@@ -396,6 +399,13 @@ The execute flow is bounded and has no durable ownership model:
    deploy fan-out,
 9. clean up temporary capture and deploy Linodes by current-run tags,
 10. preserve the captured custom image as the workflow deliverable.
+
+The capture/original image region is preserved during the replication POST by
+submitting provider-reported existing image regions together with the requested
+replication target regions. This preservation is independent from deploy
+intent: an explicit deploy region can remain outside the requested replication
+target set and still be used by deploy through the provider's cross-region
+image deploy behavior.
 
 The workflow fails closed before capture if policy validation fails, a
 requested group is unknown, a requested replication target region lacks the

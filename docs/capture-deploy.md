@@ -212,8 +212,8 @@ Execution steps:
 
 1. resolve configured `replication_groups` from the selected region policy
    artifact, defaulting to `policy/region-policy.toml`,
-2. combine explicit replication regions, group-expanded regions, and explicit
-   deploy regions into a deterministic replication target set,
+2. combine explicit replication regions and group-expanded regions into a
+   deterministic replication target set,
 3. read each resolved replication target region and require the provider
    `Object Storage` capability,
 4. capture a custom image in the first explicit deploy region,
@@ -230,12 +230,15 @@ Execution steps:
 The command treats `--region`, `region`, `regions`, and `deploy_regions` as
 explicit deploy regions; the first deploy region is also the capture region.
 `replication_regions` and `replication_groups` expand where the captured image
-is made available, not where deploy validation runs. Dry-run manifests show the
-policy file path when groups are configured, requested deploy regions,
-requested replication groups, resolved replication target regions, whether
-groups came from `groups.*` or `generated_groups.*`, planned
-capture/replication/deploy phases, cleanup expectations, and no workflow
-mutation calls.
+is made available, not where deploy validation runs. Deploy regions are not
+automatically added to the resolved replication target set when either
+replication input is configured. When no replication regions or groups are
+configured, deploy regions remain the backwards-compatible default replication
+target set. Dry-run manifests show the policy file path when groups are
+configured, requested deploy regions, requested replication groups, resolved
+replication target regions, whether groups came from `groups.*` or
+`generated_groups.*`, planned capture/replication/deploy phases, cleanup
+expectations, and no workflow mutation calls.
 
 Execute manifests include the capture result, replication request/result,
 policy validation result, resolved replication targets, replication target
@@ -253,6 +256,13 @@ every resolved target region before deciding whether the workflow can proceed.
 It records only the emitted manifest, performs no background work, does not
 repair replicas, infer nearest regions, choose fallbacks, auto-select deploy
 regions, or keep cleanup beyond the run's temporary resources.
+
+The replication POST preserves the capture/original image region by submitting
+provider-reported existing image regions plus the requested replication target
+regions. It does not preserve that region by silently turning every deploy
+region into a requested replication target. Deploy may still run in an explicit
+deploy region outside the requested replication targets through the provider's
+cross-region image deploy behavior.
 
 Config-backed defaults use `[capture-replicate-deploy]`:
 

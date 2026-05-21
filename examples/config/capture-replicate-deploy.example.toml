@@ -4,6 +4,8 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
+# Deploy regions are explicit deploy intent. Replication groups expand image
+# availability only and do not automatically add or remove deploy regions.
 deploy_regions = ["us-east"]
 replication_groups = ["country_us_object_storage"]
 # region_policy_file = "policy/staging-region-policy.toml"

@@ -53,6 +53,7 @@ class CaptureReplicateDeployOptions:
     replication_regions: list[str]
     replication_groups: list[str]
     replication_target_regions: list[str]
+    replication_target_source: str
     region_policy_file: Path | None = None
     region_policy_resolution: ResolvedRegionPolicyGroups | None = None
     run_id: str | None = None
@@ -101,14 +102,17 @@ def capture_replicate_deploy_plan(
         client=region_policy_client,
     )
     group_regions = policy_resolution.regions if policy_resolution is not None else []
-    replication_target_regions = unique_region_ids(
-        [*explicit_replication_regions, *group_regions, *deploy_regions]
+    replication_target_regions, replication_target_source = resolve_replication_target_regions(
+        deploy_regions=deploy_regions,
+        replication_regions=explicit_replication_regions,
+        group_regions=group_regions,
     )
     options = CaptureReplicateDeployOptions(
         deploy_regions=deploy_regions,
         replication_regions=explicit_replication_regions,
         replication_groups=requested_replication_groups,
         replication_target_regions=replication_target_regions,
+        replication_target_source=replication_target_source,
         region_policy_file=policy_file,
         region_policy_resolution=policy_resolution,
         run_id=run_id,
@@ -145,6 +149,7 @@ def dry_run_manifest(options: CaptureReplicateDeployOptions) -> dict[str, Any]:
         "region_policy_file": str(options.region_policy_file) if options.region_policy_file is not None else None,
         "group_sources": group_sources(options),
         "replication_target_regions": list(options.replication_target_regions),
+        "replication_target_source": options.replication_target_source,
         "provider_request": "execute mode submits existing image regions plus resolved replication target regions",
         "replica_status_check": "execute mode waits for resolved replication target replicas to report available",
     }
@@ -402,6 +407,7 @@ def base_manifest(options: CaptureReplicateDeployOptions, *, dry_run: bool, stat
         "explicit_replication_regions": list(options.replication_regions),
         "requested_replication_groups": list(options.replication_groups),
         "replication_target_regions": list(options.replication_target_regions),
+        "replication_target_source": options.replication_target_source,
         "succeeded": [],
         "failed": [],
     }
@@ -537,6 +543,18 @@ def resolved_policy_file(*, region_policy_file: str | None, replication_groups: 
     if replication_groups:
         return DEFAULT_REGION_POLICY_PATH
     return None
+
+
+def resolve_replication_target_regions(
+    *,
+    deploy_regions: list[str],
+    replication_regions: list[str],
+    group_regions: list[str],
+) -> tuple[list[str], str]:
+    requested_targets = unique_region_ids([*replication_regions, *group_regions])
+    if requested_targets:
+        return requested_targets, "replication_inputs"
+    return list(deploy_regions), "deploy_regions_default"
 
 
 def resolve_replication_groups(

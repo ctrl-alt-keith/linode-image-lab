@@ -280,12 +280,15 @@ configured, the command uses `policy/region-policy.toml` by default; set
 `region_policy_file = "policy/staging-region-policy.toml"` only when an
 alternate checked-in artifact is intended. Group names resolve first from
 operator-owned `groups.*`, then from generated `generated_groups.*`. Deploy
-regions remain explicit operator intent and are always included in the resolved
-replication target set. Replication groups expand where the captured image is
-made available; they do not add deploy regions. Generated capability-scoped
-groups improve discoverability, but they do not bypass execution validation.
-Execute mode still validates every resolved replication target for
-`Object Storage` and fails before mutation if any requested target is invalid.
+regions remain explicit deploy intent only. Replication regions and
+replication groups control where image availability is expanded; deploy
+regions are not automatically added to the resolved replication target set
+when either replication input is configured. When no replication regions or
+groups are configured, deploy regions remain the backwards-compatible default
+replication target set. Generated capability-scoped groups improve
+discoverability, but they do not bypass execution validation. Execute mode
+still validates every resolved replication target for `Object Storage` and
+fails before mutation if any requested target is invalid.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -334,15 +337,20 @@ country groups include all provider regions for that country. Before creating
 the capture Linode, it validates any configured region policy artifact and
 verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
-provider-reported existing image regions plus resolved replication targets. If
-a requested group is unknown, malformed, stale, or references invalid regions,
-if a requested target lacks `Object Storage`, if the image response does not
-expose existing regions, or if requested replicas do not report available
-before the bounded wait expires, the workflow fails closed, cleans up temporary
-resources when any were created, and does not deploy. The captured custom image
-remains the workflow deliverable under the same artifact-tag semantics as
-capture-deploy. Capability validation records a check for every resolved target
-region before deciding whether the workflow can proceed.
+provider-reported existing image regions plus resolved replication targets, so
+the capture/original region is preserved through the provider-reported image
+region set rather than by treating every deploy region as a requested
+replication target. Deploy may still target an explicit deploy region outside
+the requested replication targets, relying on the provider's existing
+cross-region image deploy behavior. If a requested group is unknown,
+malformed, stale, or references invalid regions, if a requested target lacks
+`Object Storage`, if the image response does not expose existing regions, or if
+requested replicas do not report available before the bounded wait expires, the
+workflow fails closed, cleans up temporary resources when any were created, and
+does not deploy. The captured custom image remains the workflow deliverable
+under the same artifact-tag semantics as capture-deploy. Capability validation
+records a check for every resolved target region before deciding whether the
+workflow can proceed.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,

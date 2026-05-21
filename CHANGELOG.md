@@ -13,6 +13,10 @@
 - Allow `capture-replicate-deploy` to consume checked-in region policy groups
   as replication targets while keeping deploy regions explicit and mutation
   gated behind `--execute`.
+- Stop treating explicit deploy regions as requested replication targets when
+  `capture-replicate-deploy` is configured with replication regions or groups;
+  the replication request still preserves provider-reported existing image
+  regions before adding requested replication targets.
 - Resolve relative TTL inputs such as `"1 day"` at command runtime while
   preserving absolute UTC TTL values in manifests and cleanup tags.
 - Add `capture-replicate-deploy` to capture in the first requested region,
