@@ -213,9 +213,12 @@ Region policy artifacts keep provider facts separate from operator intent.
 Generated `[provider_regions.*]` sections contain public-safe provider region
 ids and capabilities from the current Linode regions API. Generated
 `[generated_groups.*]` sections are overwrite-safe convenience scaffolding
-derived from provider capabilities and provider country codes. Operator-
-maintained `[groups.*]` sections name semantic region groups for local
-workflows and remain the canonical intent layer.
+derived from provider capabilities and provider country codes. Base generated
+country groups such as `country_us` represent all provider regions for that
+country code. Capability-scoped country groups such as
+`country_us_object_storage` represent only regions in that country exposing the
+named capability. Operator-maintained `[groups.*]` sections name semantic
+region groups for local workflows and remain the canonical intent layer.
 
 Generate or refresh the default version-controlled artifact:
 
@@ -279,7 +282,10 @@ alternate checked-in artifact is intended. Group names resolve first from
 operator-owned `groups.*`, then from generated `generated_groups.*`. Deploy
 regions remain explicit operator intent and are always included in the resolved
 replication target set. Replication groups expand where the captured image is
-made available; they do not add deploy regions.
+made available; they do not add deploy regions. Generated capability-scoped
+groups improve discoverability, but they do not bypass execution validation.
+Execute mode still validates every resolved replication target for
+`Object Storage` and fails before mutation if any requested target is invalid.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -321,9 +327,12 @@ Linode.
 explicit deploy region, resolves replication targets from explicit
 `replication_regions`, checked-in `replication_groups`, or both, then deploys
 from the captured image only to the explicit deploy regions after bounded
-read-only status checks show the resolved image regions are `available`. Before
-creating the capture Linode, it validates any configured region policy artifact
-and verifies that each resolved replication target exposes the provider
+read-only status checks show the resolved image regions are `available`. For
+country-based replication, generated groups such as
+`country_us_object_storage` are the ergonomic starting point because base
+country groups include all provider regions for that country. Before creating
+the capture Linode, it validates any configured region policy artifact and
+verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
 provider-reported existing image regions plus resolved replication targets. If
 a requested group is unknown, malformed, stale, or references invalid regions,
@@ -613,7 +622,8 @@ entries include `resource_type` plus a sanitized `reason`, such as
   target regions to expose the provider `Object Storage` capability.
 - Region policy consumption: `replication_groups` expand image availability
   only. They do not infer geography, choose nearest regions, plan fallbacks,
-  auto-select deploy regions, or perform partial execution.
+  auto-select deploy regions, bypass capability validation, or perform partial
+  execution.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

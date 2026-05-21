@@ -12,8 +12,11 @@ capabilities = ["Linodes", "Object Storage"]
 [provider_regions.us-sea]
 capabilities = ["Linodes", "Object Storage"]
 
+[provider_regions.us-west]
+capabilities = ["Linodes"]
+
 [generated_groups.capability_linodes]
-regions = ["gb-lon", "us-east", "us-sea"]
+regions = ["gb-lon", "us-east", "us-sea", "us-west"]
 
 [generated_groups.capability_object_storage]
 regions = ["gb-lon", "us-east", "us-sea"]
@@ -21,7 +24,19 @@ regions = ["gb-lon", "us-east", "us-sea"]
 [generated_groups.country_gb]
 regions = ["gb-lon"]
 
+[generated_groups.country_gb_linodes]
+regions = ["gb-lon"]
+
+[generated_groups.country_gb_object_storage]
+regions = ["gb-lon"]
+
 [generated_groups.country_us]
+regions = ["us-east", "us-sea", "us-west"]
+
+[generated_groups.country_us_linodes]
+regions = ["us-east", "us-sea", "us-west"]
+
+[generated_groups.country_us_object_storage]
 regions = ["us-east", "us-sea"]
 
 [groups.eu]

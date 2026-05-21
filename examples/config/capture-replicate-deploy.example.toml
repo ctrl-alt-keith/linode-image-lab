@@ -5,7 +5,7 @@ ttl = "12h"
 
 [capture-replicate-deploy]
 deploy_regions = ["us-east"]
-replication_groups = ["country_us"]
+replication_groups = ["country_us_object_storage"]
 # region_policy_file = "policy/staging-region-policy.toml"
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"

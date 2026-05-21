@@ -310,16 +310,20 @@ def generated_region_groups(provider_regions: list[dict[str, Any]]) -> dict[str,
     groups: dict[str, list[str]] = {}
     capability_groups: dict[str, set[str]] = {}
     country_groups: dict[str, set[str]] = {}
+    country_capability_groups: dict[str, set[str]] = {}
     for entry in provider_regions:
         region = entry.get("region")
         if not isinstance(region, str) or not region.strip():
             continue
         region_id = region.strip()
+        country = normalize_country(entry.get("country"))
         for capability in normalize_capabilities(entry.get("capabilities", [])):
             group_name = generated_capability_group_name(capability)
             if group_name is not None:
                 capability_groups.setdefault(group_name, set()).add(region_id)
-        country = normalize_country(entry.get("country"))
+            country_group_name = generated_country_capability_group_name(country, capability)
+            if country_group_name is not None:
+                country_capability_groups.setdefault(country_group_name, set()).add(region_id)
         if country is not None:
             country_groups.setdefault(f"country_{country}", set()).add(region_id)
 
@@ -327,17 +331,35 @@ def generated_region_groups(provider_regions: list[dict[str, Any]]) -> dict[str,
         groups[name] = sorted(regions)
     for name, regions in sorted(country_groups.items()):
         groups[name] = sorted(regions)
+    for name, regions in sorted(country_capability_groups.items()):
+        groups[name] = sorted(regions)
     return groups
 
 
 def generated_capability_group_name(capability: str) -> str | None:
+    slug = generated_capability_slug(capability)
+    if slug is None:
+        return None
+    return f"capability_{slug}"
+
+
+def generated_country_capability_group_name(country: str | None, capability: str) -> str | None:
+    if country is None:
+        return None
+    slug = generated_capability_slug(capability)
+    if slug is None:
+        return None
+    return f"country_{country}_{slug}"
+
+
+def generated_capability_slug(capability: str) -> str | None:
     normalized = capability.strip().lower()
     if not normalized:
         return None
     slug = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
     if not slug:
         return None
-    return f"capability_{slug}"
+    return slug
 
 
 def load_operator_groups(path: Path) -> dict[str, list[str]]:

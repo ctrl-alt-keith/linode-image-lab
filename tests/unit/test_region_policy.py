@@ -7,6 +7,8 @@ from pathlib import Path
 
 from linode_image_lab.region_policy import (
     generate_region_policy_artifact,
+    generated_country_capability_group_name,
+    generated_region_groups,
     serialize_validation_report,
     validate_region_policy_artifact,
 )
@@ -63,10 +65,59 @@ regions = ["gb-lon", "us-sea"]
 [generated_groups.country_gb]
 regions = ["gb-lon"]
 
+[generated_groups.country_gb_linodes]
+regions = ["gb-lon"]
+
+[generated_groups.country_gb_object_storage]
+regions = ["gb-lon"]
+
 [generated_groups.country_us]
+regions = ["us-sea"]
+
+[generated_groups.country_us_linodes]
+regions = ["us-sea"]
+
+[generated_groups.country_us_object_storage]
 regions = ["us-sea"]
 """,
         )
+
+    def test_country_capability_groups_include_only_matching_regions(self) -> None:
+        groups = generated_region_groups(
+            [
+                {
+                    "region": "us-east",
+                    "capabilities": ["Linodes", "Object Storage"],
+                    "country": "us",
+                },
+                {
+                    "region": "us-west",
+                    "capabilities": ["Linodes"],
+                    "country": "us",
+                },
+                {
+                    "region": "gb-lon",
+                    "capabilities": ["Linodes", "Object Storage"],
+                    "country": "gb",
+                },
+            ]
+        )
+
+        self.assertEqual(groups["country_us"], ["us-east", "us-west"])
+        self.assertEqual(groups["country_us_linodes"], ["us-east", "us-west"])
+        self.assertEqual(groups["country_us_object_storage"], ["us-east"])
+        self.assertEqual(groups["country_gb_object_storage"], ["gb-lon"])
+
+    def test_country_capability_group_names_are_normalized(self) -> None:
+        self.assertEqual(
+            generated_country_capability_group_name("us", "Object Storage"),
+            "country_us_object_storage",
+        )
+        self.assertEqual(
+            generated_country_capability_group_name("gb", "ACLP Logs Datacenter LKE-E"),
+            "country_gb_aclp_logs_datacenter_lke_e",
+        )
+        self.assertEqual(generated_country_capability_group_name(None, "Object Storage"), None)
 
     def test_generation_preserves_operator_groups_from_existing_policy(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -93,6 +144,7 @@ regions = ["us-sea", "us-east"]
         self.assertIn("[provider_regions.us-east]\ncapabilities = [\"Linodes\"]", artifact)
         self.assertIn("[generated_groups.capability_object_storage]\nregions = [\"us-sea\"]", artifact)
         self.assertIn("[generated_groups.country_us]\nregions = [\"us-sea\"]", artifact)
+        self.assertIn("[generated_groups.country_us_object_storage]\nregions = [\"us-sea\"]", artifact)
         self.assertIn("[groups.us]\nregions = [\"us-sea\", \"us-east\"]", artifact)
         self.assertNotIn("old-region", artifact)
 
@@ -142,6 +194,7 @@ regions = ["us-east"]
 
         self.assertIn("[generated_groups.capability_linodes]\nregions = [\"us-east\"]", artifact)
         self.assertIn("[generated_groups.country_us]\nregions = [\"us-east\"]", artifact)
+        self.assertIn("[generated_groups.country_us_linodes]\nregions = [\"us-east\"]", artifact)
         self.assertIn("[groups.us]\nregions = [\"us-east\"]", artifact)
         self.assertNotIn("stale-region", artifact)
 
@@ -182,6 +235,12 @@ capabilities = ["Linodes"]
 regions = ["us-east", "us-sea"]
 [generated_groups.capability_object_storage]
 regions = ["us-east"]
+[generated_groups.country_us]
+regions = ["us-east", "us-sea"]
+[generated_groups.country_us_linodes]
+regions = ["us-east", "us-sea"]
+[generated_groups.country_us_object_storage]
+regions = ["us-east"]
 [groups.us]
 regions = ["us-sea", "us-east"]
 """,
@@ -189,8 +248,8 @@ regions = ["us-sea", "us-east"]
         )
         client = FakeRegionClient(
             [
-                {"region": "us-sea", "capabilities": ["Linodes"]},
-                {"region": "us-east", "capabilities": ["Object Storage", "Linodes"]},
+                {"region": "us-sea", "capabilities": ["Linodes"], "country": "us"},
+                {"region": "us-east", "capabilities": ["Object Storage", "Linodes"], "country": "us"},
             ]
         )
 
@@ -199,7 +258,7 @@ regions = ["us-sea", "us-east"]
         self.assertTrue(report["valid"])
         self.assertEqual(report["errors"], [])
         self.assertEqual(report["provider_region_count"], 2)
-        self.assertEqual(report["generated_group_count"], 2)
+        self.assertEqual(report["generated_group_count"], 5)
         self.assertEqual(report["group_count"], 1)
 
     def test_validation_rejects_unknown_provider_region(self) -> None:

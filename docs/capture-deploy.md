@@ -264,11 +264,20 @@ ttl = "12h"
 
 [capture-replicate-deploy]
 deploy_regions = ["us-east"]
-replication_groups = ["country_us"]
+replication_groups = ["country_us_object_storage"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345
 ```
+
+Prefer capability-scoped generated groups such as
+`country_us_object_storage` when the desired image availability boundary is a
+provider country code plus the image replication capability. Base country
+groups such as `country_us` intentionally include all provider regions for
+that country, including regions that may not expose `Object Storage`.
+Capability-scoped groups are generated convenience scaffolding only; execute
+mode still validates every resolved replication target and fails before
+mutation when any target lacks the required capability.
 
 When `replication_groups` is configured and `region_policy_file` is omitted,
 the command resolves groups from `policy/region-policy.toml`. Set

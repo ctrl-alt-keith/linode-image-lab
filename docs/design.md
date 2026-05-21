@@ -198,8 +198,13 @@ unneeded provider fields.
 
 `[generated_groups.*]` tables are generated convenience scaffolding. Capability
 groups are derived from provider capability names, and country groups are
-derived only from provider-exposed country codes. These groups are safe to
-overwrite on regeneration and are not an operator policy layer.
+derived only from provider-exposed country codes. Capability-scoped country
+groups, such as `country_us_object_storage`, are generated intersections of a
+provider country code and a normalized provider capability name. Base country
+groups continue to represent every provider region for the country code.
+Capability-scoped country groups are generated only when at least one region
+matches. These groups are safe to overwrite on regeneration and are not an
+operator policy layer.
 
 `[groups.*]` tables are operator-owned intent. Each group has an explicit
 `regions = [...]` list whose meaning is defined locally by the operator. A
@@ -232,7 +237,10 @@ requested group. Group names resolve from operator-owned `groups.*` first and
 generated `generated_groups.*` second, so operator intent wins when names
 overlap. This resolution expands image availability only; it does not infer
 geography, proximity, latency, fallback regions, deploy regions, or a "best"
-region.
+region. Generated capability-scoped groups improve discoverability for
+workflows such as image replication, but the execution layer still validates
+every resolved replication target for the required provider capability and
+fails before mutation if any requested target is invalid.
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:
