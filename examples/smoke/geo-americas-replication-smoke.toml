@@ -1,6 +1,7 @@
-# Capture-replicate-deploy execute smoke config for Americas.
-# Deploy intent uses the operator-owned geo_americas group.
+# Bounded capture-replicate-deploy execute smoke config for Americas.
+# Deploy intent uses one explicit region to keep provider smoke narrow.
 # Image availability uses the checked-in geo_americas_image_replication group.
+# This is not broad geo deploy fan-out coverage.
 # Review dry-run output before executing with --execute and LINODE_TOKEN.
 schema_version = 1
 
@@ -8,7 +9,7 @@ schema_version = 1
 ttl = "3h"
 
 [capture-replicate-deploy]
-deploy_groups = ["geo_americas"]
+deploy_regions = ["us-sea"]
 replication_groups = ["geo_americas_image_replication"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"

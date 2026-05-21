@@ -9,9 +9,9 @@
   provider policy snapshot for reviewing provider region and capability drift.
 - Add operator-owned geo groups to the checked-in region policy, including
   separate image-replication groups where the current policy supports them.
-- Add versioned per-geo `capture-replicate-deploy` smoke configs under
-  `examples/smoke/` for bounded provider validation of checked-in policy
-  semantics.
+- Add versioned bounded geo `capture-replicate-deploy` smoke configs under
+  `examples/smoke/` for provider validation of checked-in replication policy
+  semantics without broad deploy fan-out.
 - Add capability-scoped generated country helper groups, such as
   `country_us_object_storage`, while preserving strict execution-time
   capability validation.

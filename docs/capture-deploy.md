@@ -285,11 +285,18 @@ type = "g6-nanode-1"
 firewall_id = 12345
 ```
 
+The executable replication smoke configs in `examples/smoke/` intentionally use
+one explicit deploy region plus a geo image-replication group. They validate the
+checked-in replication policy surface without broad deploy fan-out.
+`deploy_groups` expansion is still validated by dry-run and unit behavior, not
+by deploying every geo member during each live smoke run.
+
 Operator-owned geo groups such as `geo_americas` are hand-maintained
 `groups.*` entries. They are reviewable local intent, not generated topology
 or placement logic. `geo_apac_north` currently has deploy targets but no
 matching checked-in image-replication group because `jp-tyo-3` is a documented
-image-replication provider discrepancy.
+image-replication provider discrepancy. Oceania also currently has no
+known-good geo image-replication group in the checked-in policy.
 
 Prefer image-replication generated groups such as
 `country_us_image_replication` when the desired image availability boundary is

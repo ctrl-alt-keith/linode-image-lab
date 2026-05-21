@@ -272,11 +272,15 @@ matching `geo_apac_north_image_replication` group because `jp-tyo-3` is a
 documented image-replication provider discrepancy.
 
 Versioned smoke configs under `examples/smoke/` make these policy semantics
-reviewable as operational tooling. They are bounded provider validation inputs:
-they preserve deploy intent separately from replication intent, use
-operator-owned geo image-replication groups only where they are checked in, and
-remain dry-run-first unless the operator explicitly passes `--execute` with a
-valid provider token.
+reviewable as operational tooling. They are bounded provider validation inputs,
+not broad deploy fan-out coverage: each executable smoke config uses one
+explicit deploy region for capture/deploy and one operator-owned geo
+image-replication group where a known-good group is checked in. `deploy_groups`
+expansion remains covered by dry-run and unit behavior. APAC North and Oceania
+currently have deploy geo groups but no executable replication smoke config
+because the checked-in policy has no known-good geo image-replication group for
+either geo. Smoke configs remain dry-run-first unless the operator explicitly
+passes `--execute` with a valid provider token.
 
 Image-replication-specific generated groups improve the default operator
 surface when a provider inconsistency is documented. The current documented

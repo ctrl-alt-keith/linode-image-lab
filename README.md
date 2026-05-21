@@ -181,12 +181,18 @@ for bounded provider validation against the checked-in region policy. They are
 safe by default because a config run is still a dry run unless `--execute` and
 `LINODE_TOKEN` are both provided.
 
-The geo smoke configs intentionally exercise current checked-in policy
-semantics: deploy intent uses operator-owned geo deploy groups, and replication
-intent uses matching operator-owned geo image-replication groups where the
-policy has known-good targets. Geos without a checked-in geo image-replication
-group omit `replication_groups` and explain the missing coverage in comments,
-including documented provider discrepancy behavior.
+The geo replication smoke configs intentionally use one explicit
+`deploy_regions` entry for capture and deploy, plus a checked-in geo
+`replication_groups` entry for image availability. They validate the
+replication policy surface without broad full-geo deploy fan-out. `deploy_groups`
+expansion remains covered by dry-run behavior and unit tests; every smoke
+execute does not need to deploy to every region in a geo group.
+
+APAC North and Oceania currently have deploy geo groups but no executable
+replication smoke config because the checked-in policy has no known-good geo
+image-replication group for either geo. Keeping those configs out of
+`examples/smoke/` avoids accidental fail-closed execute runs caused by the
+backwards-compatible no-replication-input default.
 
 ## Config Defaults
 
