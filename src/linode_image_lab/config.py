@@ -57,8 +57,15 @@ TABLE_FIELDS = {
         "authorized_keys_file",
     },
     "capture-replicate-deploy": {
+        "deploy_region",
+        "deploy_regions",
         "region",
         "regions",
+        "replication_group",
+        "replication_groups",
+        "replication_region",
+        "replication_regions",
+        "region_policy_file",
         "source_image",
         "type",
         "instance_type",
@@ -106,8 +113,11 @@ COMMAND_DEFAULT_FIELDS = {
         "user_data",
     ),
     "capture-replicate-deploy": (
-        "regions",
+        "deploy_regions",
         "ttl",
+        "replication_regions",
+        "replication_groups",
+        "region_policy_file",
         "source_image",
         "type",
         "image_project_tag",
@@ -128,7 +138,11 @@ COMMAND_DEFAULT_FIELDS = {
     ),
 }
 CLI_SOURCE_LABELS = {
+    "deploy_regions": "cli --region",
     "regions": "cli --region",
+    "replication_regions": "cli --replication-region",
+    "replication_groups": "cli --replication-group",
+    "region_policy_file": "cli --region-policy-file",
     "ttl": "cli --ttl",
     "source_image": "cli --source-image",
     "image_id": "cli --image-id",
@@ -243,6 +257,17 @@ def validate_table(table: str, values: dict[str, Any]) -> None:
     allowed = TABLE_FIELDS[table]
     if "region" in values and "regions" in values:
         raise ConfigError(f"config [{table}] cannot set both region and regions")
+    if "deploy_region" in values and "deploy_regions" in values:
+        raise ConfigError(f"config [{table}] cannot set both deploy_region and deploy_regions")
+    if ("deploy_region" in values or "deploy_regions" in values) and ("region" in values or "regions" in values):
+        raise ConfigError(f"config [{table}] cannot mix deploy_regions with legacy region or regions")
+    if "replication_region" in values and "replication_regions" in values:
+        raise ConfigError(f"config [{table}] cannot set both replication_region and replication_regions")
+    if "replication_group" in values and "replication_groups" in values:
+        raise ConfigError(f"config [{table}] cannot set both replication_group and replication_groups")
+    if table == "capture-replicate-deploy" and "region_policy_file" in values:
+        if "replication_group" not in values and "replication_groups" not in values:
+            raise ConfigError("config [capture-replicate-deploy].region_policy_file requires replication_groups")
     if "type" in values and "instance_type" in values:
         raise ConfigError(f"config [{table}] cannot set both type and instance_type")
 
@@ -264,11 +289,18 @@ def validate_key_is_safe(key: str, *, location: str) -> None:
 
 
 def validate_value(table: str, key: str, value: Any) -> None:
-    if key == "regions":
+    if key in {"regions", "deploy_regions", "replication_regions"}:
         if not isinstance(value, list) or not value:
-            raise ConfigError(f"config [{table}].regions must be a non-empty list of strings")
+            raise ConfigError(f"config [{table}].{key} must be a non-empty list of strings")
         if not all(isinstance(region, str) and region.strip() for region in value):
-            raise ConfigError(f"config [{table}].regions must be a non-empty list of strings")
+            raise ConfigError(f"config [{table}].{key} must be a non-empty list of strings")
+        return
+
+    if key == "replication_groups":
+        if not isinstance(value, list) or not value:
+            raise ConfigError(f"config [{table}].replication_groups must be a non-empty list of strings")
+        if not all(isinstance(group, str) and group.strip() for group in value):
+            raise ConfigError(f"config [{table}].replication_groups must be a non-empty list of strings")
         return
 
     if key == "firewall_id":
@@ -289,7 +321,7 @@ def validate_value(table: str, key: str, value: Any) -> None:
             raise ConfigError(str(exc)) from exc
         return
 
-    if key in {"authorized_keys_file", "user_data_file"}:
+    if key in {"authorized_keys_file", "user_data_file", "region_policy_file"}:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"config [{table}].{key} must be a non-empty string")
         return
@@ -314,6 +346,8 @@ def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any
             table["authorized_keys_file"] = str(resolve_config_path(table["authorized_keys_file"], base_dir=base_dir))
         if "user_data_file" in table:
             table["user_data_file"] = str(resolve_config_path(table["user_data_file"], base_dir=base_dir))
+        if "region_policy_file" in table:
+            table["region_policy_file"] = str(resolve_config_path(table["region_policy_file"], base_dir=base_dir))
         if "image_project_tag" in table:
             table["image_project_tag"] = normalize_image_project_tag(
                 table["image_project_tag"], f"config [{key}].image_project_tag"
@@ -390,6 +424,9 @@ def effective_command_defaults(
             continue
         resolved = resolve_default_field(config, command, field, cli_values)
         if resolved is None:
+            if field == "region_policy_file" and should_default_region_policy_file(config, command, cli_values):
+                effective_defaults[field] = "policy/region-policy.toml"
+                sources.append({"field": field, "source": "default policy/region-policy.toml"})
             continue
         value, source = resolved
         effective_defaults[field] = value
@@ -573,11 +610,36 @@ def dedupe_authorized_keys(keys: list[str]) -> list[str]:
 
 
 def resolve_table_field(table: dict[str, Any], field: str, label: str) -> tuple[Any, str] | None:
+    if field == "deploy_regions":
+        if "deploy_regions" in table:
+            return normalize_default_value(field, table["deploy_regions"]), f"{label}.deploy_regions"
+        if "deploy_region" in table:
+            return normalize_default_value(field, [table["deploy_region"]]), f"{label}.deploy_region"
+        if "regions" in table:
+            return normalize_default_value(field, table["regions"]), f"{label}.regions"
+        if "region" in table:
+            return normalize_default_value(field, [table["region"]]), f"{label}.region"
+        return None
+
     if field == "regions":
         if "regions" in table:
             return normalize_default_value(field, table["regions"]), f"{label}.regions"
         if "region" in table:
             return normalize_default_value(field, [table["region"]]), f"{label}.region"
+        return None
+
+    if field == "replication_regions":
+        if "replication_regions" in table:
+            return normalize_default_value(field, table["replication_regions"]), f"{label}.replication_regions"
+        if "replication_region" in table:
+            return normalize_default_value(field, [table["replication_region"]]), f"{label}.replication_region"
+        return None
+
+    if field == "replication_groups":
+        if "replication_groups" in table:
+            return normalize_default_value(field, table["replication_groups"]), f"{label}.replication_groups"
+        if "replication_group" in table:
+            return normalize_default_value(field, [table["replication_group"]]), f"{label}.replication_group"
         return None
 
     if field == "type":
@@ -593,18 +655,64 @@ def resolve_table_field(table: dict[str, Any], field: str, label: str) -> tuple[
 
 
 def normalize_default_value(field: str, value: Any) -> Any:
-    if field == "regions":
+    if field in {"regions", "deploy_regions", "replication_regions"}:
         regions = parse_regions(value)
         if not regions:
             raise ConfigError(
                 "config validate requires at least one non-empty --region when --region is provided"
             )
         return regions
+    if field == "replication_groups":
+        groups = parse_string_values(value)
+        if not groups:
+            raise ConfigError(
+                "config validate requires at least one non-empty --replication-group when provided"
+            )
+        return groups
     if field == "firewall_id":
         return normalize_firewall_id(value, "firewall_id")
     if field == "image_project_tag":
         return normalize_image_project_tag(value)
     return value
+
+
+def should_default_region_policy_file(
+    config: dict[str, Any],
+    command: str,
+    cli_values: dict[str, Any],
+) -> bool:
+    if command != "capture-replicate-deploy":
+        return False
+    if "replication_groups" in cli_values:
+        return True
+    command_values = config.get(command, {}) if command in COMMAND_TABLES else {}
+    return "replication_groups" in command_values or "replication_group" in command_values
+
+
+def parse_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_values = value.split(",")
+    elif isinstance(value, list):
+        raw_values = []
+        for item in value:
+            if isinstance(item, str):
+                raw_values.extend(item.split(","))
+            else:
+                raw_values.append(item)
+    else:
+        raw_values = [value]
+
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        parsed.append(normalized)
+    return parsed
 
 
 def normalize_firewall_id(value: Any, label: str) -> int:

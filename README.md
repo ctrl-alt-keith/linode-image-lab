@@ -108,10 +108,11 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 
 `LINODE_TOKEN` is required when `--execute` is used and when `cleanup
 --discover` is used. Dry-run commands, including plain `cleanup` and
-`replicate` and `capture-replicate-deploy`, do not read the token, call
-Linode, or mutate resources. `region-policy generate` and `region-policy
-validate` read public provider region metadata from the Linode regions API
-without account authentication and do not mutate resources.
+`replicate` and `capture-replicate-deploy`, do not read the token or mutate
+resources. `region-policy generate`, `region-policy validate`, and
+`capture-replicate-deploy` runs that resolve `replication_groups` read public
+provider region metadata from the Linode regions API without account
+authentication and do not mutate resources.
 
 Use any shell method that exports the variable:
 
@@ -192,7 +193,10 @@ Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
 `authorized_keys_file`, and `user_data_file`, depending on the command and
-table. `[capture].image_project_tag` and
+table. `[capture-replicate-deploy]` also accepts `deploy_regions`,
+`replication_regions`, `replication_groups`, and `region_policy_file`.
+`region` or `regions` remain supported there as legacy deploy-region aliases.
+`[capture].image_project_tag` and
 `[capture-deploy].image_project_tag` set only the captured custom image's
 artifact-facing `project=<value>` tag; temporary Linode lifecycle tags remain
 owned by `linode-image-lab`. A non-default image project tag places the
@@ -267,6 +271,16 @@ resource declarations from these groups. Generated groups are starting points,
 not policy. Operators own the meaning of each operator group, and later
 commands can validate against that explicit local intent.
 
+`capture-replicate-deploy` can consume these artifacts for replication target
+selection only. When `[capture-replicate-deploy].replication_groups` is
+configured, the command uses `policy/region-policy.toml` by default; set
+`region_policy_file = "policy/staging-region-policy.toml"` only when an
+alternate checked-in artifact is intended. Group names resolve first from
+operator-owned `groups.*`, then from generated `generated_groups.*`. Deploy
+regions remain explicit operator intent and are always included in the resolved
+replication target set. Replication groups expand where the captured image is
+made available; they do not add deploy regions.
+
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
 `authorized_keys`, configured `authorized_keys_file`, repeated
@@ -304,19 +318,22 @@ provider-reported existing regions, but it does not read `LINODE_TOKEN` or call
 Linode.
 
 `capture-replicate-deploy --execute` captures one custom image in the first
-requested region, submits explicit replication for the deploy region list, then
-deploys from the captured image only after bounded read-only status checks show
-the requested image regions are `available`. Before creating the capture
-Linode, it verifies that each requested replication target exposes the provider
+explicit deploy region, resolves replication targets from explicit
+`replication_regions`, checked-in `replication_groups`, or both, then deploys
+from the captured image only to the explicit deploy regions after bounded
+read-only status checks show the resolved image regions are `available`. Before
+creating the capture Linode, it validates any configured region policy artifact
+and verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
-provider-reported existing image regions plus requested deploy regions. If a
-requested target lacks that capability, the image response does not expose
-existing regions, or requested replicas do not report available before the
-bounded wait expires, the workflow fails closed, cleans up temporary resources
-when any were created, and does not deploy. The captured custom image remains
-the workflow deliverable under the same artifact-tag semantics as
-capture-deploy. Capability validation records a check for every requested
-target region before deciding whether the workflow can proceed.
+provider-reported existing image regions plus resolved replication targets. If
+a requested group is unknown, malformed, stale, or references invalid regions,
+if a requested target lacks `Object Storage`, if the image response does not
+expose existing regions, or if requested replicas do not report available
+before the bounded wait expires, the workflow fails closed, cleans up temporary
+resources when any were created, and does not deploy. The captured custom image
+remains the workflow deliverable under the same artifact-tag semantics as
+capture-deploy. Capability validation records a check for every resolved target
+region before deciding whether the workflow can proceed.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,
@@ -332,8 +349,11 @@ the command table, and CLI key inputs; user data can come from
 default flags such as `--region`, `--ttl`, `--source-image`, `--image-id`, or
 `--type` to preview config resolution for the selected command. For deploy
 defaults, `--firewall-id`, `--authorized-key`, `--authorized-keys-file`, and
-`--user-data-file` can also be previewed. Authorized key and user-data output
-reports safe metadata such as count, source, and byte count only.
+`--user-data-file` can also be previewed. For `capture-replicate-deploy`,
+`--region` previews `deploy_regions`, and `--replication-region`,
+`--replication-group`, and `--region-policy-file` preview policy input
+resolution. Authorized key and user-data output reports safe metadata such as
+count, source, and byte count only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, private SSH keys, inline cloud-init data, `execute`,
@@ -548,12 +568,14 @@ normal stdout.
 `capture-replicate-deploy --execute` emits one combined manifest with
 top-level `capture`, `replication`, `deploy_results`, `validation`, `cleanup`,
 and `summary` blocks. Dry-run manifests show the capture region, deploy
-regions, replication target regions, planned capture/replication/deploy phases,
-cleanup expectations, and `provider_calls: "not_attempted"`. Execute manifests
-record the capture result, replication capability checks, replication
-request/result, replica status checks, deploy results by region, validation
-summary, cleanup summary, and final `status` of `succeeded`, `partial`, or
-`failed`.
+regions, requested replication groups, policy file path when groups are used,
+group source namespace, resolved replication target regions, planned
+capture/replication/deploy phases, cleanup expectations, and
+`provider_calls: "not_attempted"`. Execute manifests record the policy
+validation result, resolved replication targets, replication capability checks,
+capture result, replication request/result, replica status checks, deploy
+results by explicit deploy region, validation summary, cleanup summary, and
+final `status` of `succeeded`, `partial`, or `failed`.
 
 Multi-region status is `succeeded` when every requested deploy region succeeds
 and capture cleanup completes, `partial` when some deploy regions fail or
@@ -589,6 +611,9 @@ entries include `resource_type` plus a sanitized `reason`, such as
   retry, or own replicas after the run.
 - Replication target eligibility: explicit image replication requires requested
   target regions to expose the provider `Object Storage` capability.
+- Region policy consumption: `replication_groups` expand image availability
+  only. They do not infer geography, choose nearest regions, plan fallbacks,
+  auto-select deploy regions, or perform partial execution.
 - Retry semantics: Retry behavior for some HTTP statuses (e.g., 5xx) is a
   project policy, not a provider guarantee.
 - Cleanup semantics: DELETE operations are single-attempt after re-fetch;

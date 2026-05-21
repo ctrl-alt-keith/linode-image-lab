@@ -40,6 +40,23 @@ class ValidationIssue:
         }
 
 
+@dataclass(frozen=True)
+class ResolvedRegionPolicyGroups:
+    path: Path
+    requested_groups: list[str]
+    regions: list[str]
+    group_sources: list[dict[str, Any]]
+    validation_report: dict[str, Any]
+
+
+class RegionPolicyGroupResolutionError(RegionPolicyError):
+    """Raised when requested policy groups cannot be resolved safely."""
+
+    def __init__(self, message: str, validation_report: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.validation_report = validation_report
+
+
 def generate_region_policy_artifact(
     *,
     client: LinodeClientProtocol | None = None,
@@ -156,6 +173,85 @@ def validation_report(
 
 def serialize_validation_report(report: dict[str, Any]) -> str:
     return json.dumps(redact(report), indent=2, sort_keys=True) + "\n"
+
+
+def resolve_region_policy_groups(
+    *,
+    path: Path,
+    group_names: list[str],
+    client: LinodeClientProtocol | None = None,
+) -> ResolvedRegionPolicyGroups:
+    requested_groups = unique_names(group_names)
+    report = validate_region_policy_artifact(path=path, client=client)
+    if not report["valid"]:
+        first_error = report["errors"][0] if report["errors"] else {}
+        code = first_error.get("code", "invalid_policy")
+        target = first_error.get("target", str(path))
+        raise RegionPolicyGroupResolutionError(
+            f"region policy validation failed before resolving replication groups: {code} at {target}",
+            report,
+        )
+
+    policy = load_policy(path)
+    operator_groups = policy.get("groups", {})
+    generated_groups = policy.get("generated_groups", {})
+    if not isinstance(operator_groups, dict):
+        operator_groups = {}
+    if not isinstance(generated_groups, dict):
+        generated_groups = {}
+
+    regions: list[str] = []
+    sources: list[dict[str, Any]] = []
+    for group_name in requested_groups:
+        source_namespace = ""
+        group: Any = None
+        if group_name in operator_groups:
+            source_namespace = "groups"
+            group = operator_groups[group_name]
+        elif group_name in generated_groups:
+            source_namespace = "generated_groups"
+            group = generated_groups[group_name]
+        else:
+            raise RegionPolicyGroupResolutionError(
+                f"unknown replication group in region policy: {group_name}",
+                report,
+            )
+
+        if not isinstance(group, dict) or not string_list(group.get("regions")) or not group.get("regions"):
+            raise RegionPolicyGroupResolutionError(
+                f"malformed replication group in region policy: {source_namespace}.{group_name}",
+                report,
+            )
+
+        group_regions = [str(region).strip().lower() for region in group["regions"]]
+        regions.extend(group_regions)
+        sources.append(
+            {
+                "group": group_name,
+                "source": source_namespace,
+                "regions": unique_names(group_regions),
+            }
+        )
+
+    return ResolvedRegionPolicyGroups(
+        path=path,
+        requested_groups=requested_groups,
+        regions=unique_names(regions),
+        group_sources=sources,
+        validation_report=report,
+    )
+
+
+def unique_names(values: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
 
 
 def current_provider_region_facts(

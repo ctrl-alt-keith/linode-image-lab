@@ -4,7 +4,9 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-regions = ["us-sea", "us-east"]
+deploy_regions = ["us-east"]
+replication_groups = ["country_us"]
+# region_policy_file = "policy/staging-region-policy.toml"
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345

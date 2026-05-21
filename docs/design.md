@@ -25,8 +25,8 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
   capture-deploy and capture-replicate-deploy validation runs.
 - No infrastructure ownership or planning model.
 - No automatic geography inference, nearest-region logic, latency probing,
-  fallback placement, long-lived resource reconciliation, or replication policy
-  execution from region policy artifacts.
+  fallback placement, auto-selection, partial execution, or long-lived resource
+  reconciliation from region policy artifacts.
 - CI exists to run `make check`.
 
 ## Execution Model Boundary
@@ -140,6 +140,9 @@ Supported config values are intentionally narrow:
   and the combined deploy workflows,
 - `user_data_file` in `[deploy]` for Linode metadata user data on deploy
   instances.
+- `deploy_regions`, `replication_regions`, `replication_groups`, and
+  `region_policy_file` for capture-replicate-deploy policy-backed replication
+  target resolution.
 
 `image_project_tag` config is a value for the captured image's
 `project=<value>` artifact tag, not a way to configure lifecycle tag keys, and
@@ -176,11 +179,13 @@ attempts.
 `replicate --execute` accepts multiple regions and submits one explicit image
 replication request. Replicate config can provide `region`, `regions`,
 `image_id`, and `ttl`.
-`capture-replicate-deploy --execute` accepts multiple regions, captures in the
-first region, treats the full region list as the deploy and replication target
-set, verifies requested replication targets expose the provider `Object Storage`
-capability before capture, and can receive the same deploy metadata defaults as
-`capture-deploy`.
+`capture-replicate-deploy --execute` accepts multiple explicit deploy regions,
+captures in the first deploy region, resolves replication target regions from
+explicit `replication_regions`, checked-in `replication_groups`, or both, and
+always includes all deploy regions in the replication target set. It verifies
+resolved replication targets expose the provider `Object Storage` capability
+before capture, deploys only to explicit deploy regions, and can receive the
+same deploy metadata defaults as `capture-deploy`.
 
 ## Region Policy Artifacts
 
@@ -217,6 +222,17 @@ The checked-in snapshot should not contain hand-authored `groups.*` tables
 unless that operator intent is deliberately documented. The operational
 maintenance loop is documented in
 [`README.md`](../README.md#maintaining-region-policy-artifacts).
+
+The first execution-policy consumer is `capture-replicate-deploy`.
+`replication_groups` default to `policy/region-policy.toml` and can be pointed
+at another checked-in artifact with `region_policy_file`. Resolution fails
+closed if the artifact is malformed, stale against current provider metadata,
+contains stale generated groups, references invalid regions, or omits a
+requested group. Group names resolve from operator-owned `groups.*` first and
+generated `generated_groups.*` second, so operator intent wins when names
+overlap. This resolution expands image availability only; it does not infer
+geography, proximity, latency, fallback regions, deploy regions, or a "best"
+region.
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:
@@ -347,32 +363,41 @@ the tool does not depend on that timing.
 ## Capture-Replicate-Deploy Execution Boundary
 
 `capture-replicate-deploy` without `--execute` remains non-mutating and does
-not read `LINODE_TOKEN`. `capture-replicate-deploy --execute` requires at least
-one region, a source image, a Linode type, and `LINODE_TOKEN`.
+not read `LINODE_TOKEN`. If replication groups are configured, dry-run resolves
+them through the selected region policy artifact and public provider metadata.
+`capture-replicate-deploy --execute` requires at least one explicit deploy
+region, a source image, a Linode type, and `LINODE_TOKEN`.
 
 The execute flow is bounded and has no durable ownership model:
 
-1. run capture in the first requested region with
+1. resolve configured `replication_groups` from the selected region policy
+   artifact, defaulting to `policy/region-policy.toml`,
+2. combine explicit `replication_regions`, group-expanded regions, and
+   explicit deploy regions into a deterministic replication target set,
+3. read each resolved replication target region and require the provider
+   `Object Storage` capability before capture,
+4. run capture in the first explicit deploy region with
    `mode=capture-replicate-deploy` and `component=capture`,
-2. before capture, read each requested replication target region and require
-   the provider `Object Storage` capability,
-3. read the captured image details and require `available` status plus exposed
+5. read the captured image details and require `available` status plus exposed
    existing image regions,
-4. submit one replication request for existing image regions plus all requested
-   deploy regions,
-5. perform a bounded read-only wait until the requested deploy regions report
-   image replica status `available`,
-6. deploy from the captured image to each requested region with bounded
+6. submit one replication request for existing image regions plus all resolved
+   replication target regions,
+7. perform a bounded read-only wait until resolved replication target regions
+   report image replica status `available`,
+8. deploy from the captured image only to explicit deploy regions with bounded
    deploy fan-out,
-7. clean up temporary capture and deploy Linodes by current-run tags,
-8. preserve the captured custom image as the workflow deliverable.
+9. clean up temporary capture and deploy Linodes by current-run tags,
+10. preserve the captured custom image as the workflow deliverable.
 
-The workflow fails closed before capture if a requested replication target
-region lacks the provider `Object Storage` capability. It fails closed before
-deploy if existing image regions are not exposed or if requested replica
-statuses do not report `available` before the bounded wait expires. It does
-not retry the replication mutation, repair replicas, reconcile desired regions,
-run a scheduler, write state, or own image placement after the run.
+The workflow fails closed before capture if policy validation fails, a
+requested group is unknown, a requested replication target region lacks the
+provider `Object Storage` capability, or a group references a region missing
+from current provider metadata. It fails closed before deploy if existing image
+regions are not exposed or if requested replica statuses do not report
+`available` before the bounded wait expires. It does not retry the replication
+mutation, repair replicas, reconcile desired regions, infer fallback regions,
+auto-select deploy regions, run a scheduler, write state, or own image
+placement after the run.
 
 ## Cleanup Semantics
 

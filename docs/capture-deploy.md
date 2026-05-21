@@ -210,37 +210,49 @@ default, the command returns a dry-run manifest and performs no Linode action.
 
 Execution steps:
 
-1. read each requested replication target region and require the provider
+1. resolve configured `replication_groups` from the selected region policy
+   artifact, defaulting to `policy/region-policy.toml`,
+2. combine explicit replication regions, group-expanded regions, and explicit
+   deploy regions into a deterministic replication target set,
+3. read each resolved replication target region and require the provider
    `Object Storage` capability,
-2. capture a custom image in the first requested region,
-3. read the captured image and require provider-reported `available` status
+4. capture a custom image in the first explicit deploy region,
+5. read the captured image and require provider-reported `available` status
    plus exposed existing image regions,
-4. submit one image replication request containing existing image regions plus
-   all requested deploy regions,
-5. wait with bounded read-only polling until requested deploy regions report
+6. submit one image replication request containing existing image regions plus
+   all resolved replication target regions,
+7. wait with bounded read-only polling until resolved replication targets report
    replica status `available`,
-6. deploy from the captured image to each requested region,
-7. clean up temporary capture-source and deploy validation Linodes by tag,
-8. preserve the captured custom image as the workflow deliverable.
+8. deploy from the captured image only to explicit deploy regions,
+9. clean up temporary capture-source and deploy validation Linodes by tag,
+10. preserve the captured custom image as the workflow deliverable.
 
-The command treats `regions` as deploy regions; the first region is also the
-capture region. Dry-run manifests show the capture region, deploy regions,
-replication target regions, planned capture/replication/deploy phases, cleanup
-expectations, and no provider calls.
+The command treats `--region`, `region`, `regions`, and `deploy_regions` as
+explicit deploy regions; the first deploy region is also the capture region.
+`replication_regions` and `replication_groups` expand where the captured image
+is made available, not where deploy validation runs. Dry-run manifests show the
+policy file path when groups are configured, requested deploy regions,
+requested replication groups, resolved replication target regions, whether
+groups came from `groups.*` or `generated_groups.*`, planned
+capture/replication/deploy phases, cleanup expectations, and no workflow
+mutation calls.
 
 Execute manifests include the capture result, replication request/result,
-replication target capability checks, replica status checks, per-region deploy
-results, validation summary, cleanup summary, and final `status`. If the
+policy validation result, resolved replication targets, replication target
+capability checks, replica status checks, deploy results only for explicit
+deploy regions, validation summary, cleanup summary, and final `status`. If the
 replication POST fails, the manifest also includes sanitized provider error
 details such as status code and provider reason or field values when the API
-response exposes them. The command fails closed before capture if a requested
-replication target lacks the provider `Object Storage` capability. It fails
-closed before deploy if existing image regions are not exposed, replication
-submission fails, or requested replicas do not report `available` before the
-bounded wait expires. Capability validation records every requested target
-region before deciding whether the workflow can proceed. It records only the
-emitted manifest, performs no background work, does not repair replicas, and
-keeps cleanup scoped to the run's temporary resources.
+response exposes them. The command fails closed before capture if policy
+validation fails, a group is unknown or malformed, a group references invalid
+regions, or a resolved replication target lacks the provider `Object Storage`
+capability. It fails closed before deploy if existing image regions are not
+exposed, replication submission fails, or requested replicas do not report
+`available` before the bounded wait expires. Capability validation records
+every resolved target region before deciding whether the workflow can proceed.
+It records only the emitted manifest, performs no background work, does not
+repair replicas, infer nearest regions, choose fallbacks, auto-select deploy
+regions, or keep cleanup beyond the run's temporary resources.
 
 Config-backed defaults use `[capture-replicate-deploy]`:
 
@@ -251,11 +263,18 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-regions = ["us-sea", "us-east"]
+deploy_regions = ["us-east"]
+replication_groups = ["country_us"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345
 ```
+
+When `replication_groups` is configured and `region_policy_file` is omitted,
+the command resolves groups from `policy/region-policy.toml`. Set
+`region_policy_file = "policy/staging-region-policy.toml"` only for an explicit
+artifact override. Operator-owned `groups.*` entries remain canonical intent;
+generated groups are convenience scaffolding.
 
 ## Cleanup
 
