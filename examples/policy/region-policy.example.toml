@@ -1,6 +1,7 @@
 # Example only. Use `linode-image-lab region-policy generate` to refresh
 # provider_regions and generated_groups from current provider metadata before
-# relying on a policy.
+# relying on a policy. provider_overrides entries are explicit documented
+# provider-discrepancy handling and are not raw provider facts.
 schema_version = 1
 
 [provider_regions.gb-lon]
@@ -9,19 +10,29 @@ capabilities = ["Linodes", "Object Storage"]
 [provider_regions.us-east]
 capabilities = ["Linodes", "Object Storage"]
 
+[provider_regions.us-iad-2]
+capabilities = ["Linodes", "Object Storage"]
+
 [provider_regions.us-sea]
 capabilities = ["Linodes", "Object Storage"]
 
 [provider_regions.us-west]
 capabilities = ["Linodes"]
 
+[provider_overrides.image_replication_excluded_regions]
+regions = ["us-iad-2"]
+reason = "Provider currently advertises Object Storage, but image replication POST rejects this region."
+
 [generated_groups.capability_linodes]
-regions = ["gb-lon", "us-east", "us-sea", "us-west"]
+regions = ["gb-lon", "us-east", "us-iad-2", "us-sea", "us-west"]
 
 [generated_groups.capability_object_storage]
-regions = ["gb-lon", "us-east", "us-sea"]
+regions = ["gb-lon", "us-east", "us-iad-2", "us-sea"]
 
 [generated_groups.country_gb]
+regions = ["gb-lon"]
+
+[generated_groups.country_gb_image_replication]
 regions = ["gb-lon"]
 
 [generated_groups.country_gb_linodes]
@@ -31,15 +42,16 @@ regions = ["gb-lon"]
 regions = ["gb-lon"]
 
 [generated_groups.country_us]
-regions = ["us-east", "us-sea", "us-west"]
+regions = ["us-east", "us-iad-2", "us-sea", "us-west"]
+
+[generated_groups.country_us_image_replication]
+regions = ["us-east", "us-sea"]
 
 [generated_groups.country_us_linodes]
-regions = ["us-east", "us-sea", "us-west"]
+regions = ["us-east", "us-iad-2", "us-sea", "us-west"]
 
-# Convenience scaffold for image replication targets. Execution still validates
-# every requested target for Object Storage before mutation.
 [generated_groups.country_us_object_storage]
-regions = ["us-east", "us-sea"]
+regions = ["us-east", "us-iad-2", "us-sea"]
 
 [groups.eu]
 regions = ["gb-lon"]

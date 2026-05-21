@@ -10,6 +10,9 @@
 - Add capability-scoped generated country helper groups, such as
   `country_us_object_storage`, while preserving strict execution-time
   capability validation.
+- Add narrow documented provider overrides for image-replication generated
+  helper groups, including `country_us_image_replication`, without mutating raw
+  provider facts or provider-backed capability groups.
 - Allow `capture-replicate-deploy` to consume checked-in region policy groups
   as replication targets while keeping deploy regions explicit and mutation
   gated behind `--execute`.

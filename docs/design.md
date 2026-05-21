@@ -209,6 +209,16 @@ Capability-scoped country groups are generated only when at least one region
 matches. These groups are safe to overwrite on regeneration and are not an
 operator policy layer.
 
+`[provider_overrides.*]` tables are narrow documented provider-discrepancy
+inputs to generated helper groups. The first supported override is
+`provider_overrides.image_replication_excluded_regions`, which lists provider
+regions to exclude only from `country_*_image_replication` generated groups.
+Raw `provider_regions.*` facts and provider-backed capability groups such as
+`country_us_object_storage` remain unchanged. The override exists because
+provider metadata can advertise `Object Storage` for a region while the image
+replication POST rejects that region. It is intentionally not a general rule
+engine, policy transform system, fallback mechanism, or execution-time filter.
+
 `[groups.*]` tables are operator-owned intent. Each group has an explicit
 `regions = [...]` list whose meaning is defined locally by the operator. A
 group can represent any semantic boundary useful to the operator, but the tool
@@ -216,19 +226,22 @@ does not infer that boundary from country, city, coordinates, network latency,
 provider labels, or region naming conventions.
 
 When generation writes to an existing policy file, it parses and preserves the
-supported `groups.*` tables while refreshing generated provider facts and
-generated helper groups. If the existing operator-owned groups are malformed or
-contain unsupported fields, generation fails rather than dropping operator
-intent. Stale or malformed `generated_groups.*` tables do not block generation
-because they are overwritten. `--replace-groups` is the explicit escape hatch
-for dropping operator-owned groups.
+supported `provider_overrides.*` and `groups.*` tables while refreshing
+generated provider facts and generated helper groups. If the existing
+provider overrides or operator-owned groups are malformed or contain
+unsupported fields, generation fails rather than dropping documented intent.
+Stale or malformed `generated_groups.*` tables do not block generation because
+they are overwritten. `--replace-groups` is the explicit escape hatch for
+dropping operator-owned groups; it does not drop documented provider
+overrides.
 
 The repository intentionally carries `policy/region-policy.toml` as the current
 full generated provider policy snapshot. Operators can rerun generation and
 review the version-control diff to detect provider region or capability drift.
 The checked-in snapshot should not contain hand-authored `groups.*` tables
-unless that operator intent is deliberately documented. The operational
-maintenance loop is documented in
+unless that operator intent is deliberately documented. It may contain narrow
+documented `provider_overrides.*` entries for known provider inconsistencies.
+The operational maintenance loop is documented in
 [`README.md`](../README.md#maintaining-region-policy-artifacts).
 
 The first execution-policy consumer is `capture-replicate-deploy`.
@@ -245,18 +258,23 @@ workflows such as image replication, but the execution layer still validates
 every resolved replication target for the required provider capability and
 fails before mutation if any requested target is invalid.
 
+Image-replication-specific generated groups improve the default operator
+surface when a provider inconsistency is documented, but they do not bypass
+validation or silently filter execution requests.
+
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:
 
 - `schema_version = 1`,
 - a non-empty `[provider_regions.*]` structure,
 - provider region entries with only `capabilities = [...]`,
+- supported provider override entries with `regions = [...]` and `reason`,
 - generated and operator group entries with only `regions = [...]`,
 - all provider regions in the artifact still exist,
 - all current provider regions are present in the artifact,
 - stored provider capabilities match current provider capabilities, and
-- every generated or operator group region reference points at a current
-  provider region.
+- every provider override and generated or operator group region reference
+  points at a current provider region.
 
 Validation is a policy-file freshness and shape check only. It does not choose
 where to deploy, expand groups into execution plans, run replication, probe

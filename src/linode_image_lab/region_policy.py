@@ -18,6 +18,10 @@ SCHEMA_VERSION = 1
 DEFAULT_REGION_POLICY_PATH = Path("policy/region-policy.toml")
 SUPPORTED_PROVIDER_REGION_KEYS = frozenset({"capabilities"})
 SUPPORTED_GROUP_KEYS = frozenset({"regions"})
+SUPPORTED_PROVIDER_OVERRIDES = frozenset({"image_replication_excluded_regions"})
+SUPPORTED_PROVIDER_OVERRIDE_KEYS = frozenset({"regions", "reason"})
+IMAGE_REPLICATION_CAPABILITY = "Object Storage"
+IMAGE_REPLICATION_GROUP_SUFFIX = "image_replication"
 BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
@@ -64,12 +68,16 @@ def generate_region_policy_artifact(
     replace_groups: bool = False,
 ) -> str:
     provider_regions = current_provider_region_facts(client=client)
-    generated_groups = generated_region_groups(provider_regions)
+    provider_overrides: dict[str, dict[str, Any]] = {}
     groups: dict[str, list[str]] = {}
-    if existing_policy_path is not None and existing_policy_path.exists() and not replace_groups:
-        groups = load_operator_groups(existing_policy_path)
+    if existing_policy_path is not None and existing_policy_path.exists():
+        provider_overrides = load_provider_overrides(existing_policy_path)
+        if not replace_groups:
+            groups = load_operator_groups(existing_policy_path)
+    generated_groups = generated_region_groups(provider_regions, provider_overrides=provider_overrides)
     return render_region_policy_toml(
         provider_regions=provider_regions,
+        provider_overrides=provider_overrides,
         generated_groups=generated_groups,
         groups=groups,
     )
@@ -123,6 +131,7 @@ def validate_region_policy_artifact(
     issues.extend(validate_policy_schema(policy))
     if not issues:
         issues.extend(validate_provider_regions_current(policy, provider_by_region))
+        issues.extend(validate_provider_overrides_current(policy, provider_by_region))
         issues.extend(validate_generated_groups(policy, provider_regions, provider_by_region))
         issues.extend(validate_region_groups(policy, "groups", provider_by_region))
 
@@ -306,11 +315,20 @@ def normalize_country(value: object) -> str | None:
     return country
 
 
-def generated_region_groups(provider_regions: list[dict[str, Any]]) -> dict[str, list[str]]:
+def generated_region_groups(
+    provider_regions: list[dict[str, Any]],
+    *,
+    provider_overrides: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     capability_groups: dict[str, set[str]] = {}
     country_groups: dict[str, set[str]] = {}
     country_capability_groups: dict[str, set[str]] = {}
+    country_image_replication_groups: dict[str, set[str]] = {}
+    image_replication_excluded = provider_override_regions(
+        provider_overrides if provider_overrides is not None else {},
+        "image_replication_excluded_regions",
+    )
     for entry in provider_regions:
         region = entry.get("region")
         if not isinstance(region, str) or not region.strip():
@@ -324,6 +342,15 @@ def generated_region_groups(provider_regions: list[dict[str, Any]]) -> dict[str,
             country_group_name = generated_country_capability_group_name(country, capability)
             if country_group_name is not None:
                 country_capability_groups.setdefault(country_group_name, set()).add(region_id)
+            if (
+                country is not None
+                and capability == IMAGE_REPLICATION_CAPABILITY
+                and region_id not in image_replication_excluded
+            ):
+                country_image_replication_groups.setdefault(
+                    generated_country_image_replication_group_name(country),
+                    set(),
+                ).add(region_id)
         if country is not None:
             country_groups.setdefault(f"country_{country}", set()).add(region_id)
 
@@ -332,6 +359,8 @@ def generated_region_groups(provider_regions: list[dict[str, Any]]) -> dict[str,
     for name, regions in sorted(country_groups.items()):
         groups[name] = sorted(regions)
     for name, regions in sorted(country_capability_groups.items()):
+        groups[name] = sorted(regions)
+    for name, regions in sorted(country_image_replication_groups.items()):
         groups[name] = sorted(regions)
     return groups
 
@@ -350,6 +379,10 @@ def generated_country_capability_group_name(country: str | None, capability: str
     if slug is None:
         return None
     return f"country_{country}_{slug}"
+
+
+def generated_country_image_replication_group_name(country: str) -> str:
+    return f"country_{country}_{IMAGE_REPLICATION_GROUP_SUFFIX}"
 
 
 def generated_capability_slug(capability: str) -> str | None:
@@ -388,6 +421,50 @@ def load_operator_groups(path: Path) -> dict[str, list[str]]:
     }
 
 
+def load_provider_overrides(path: Path) -> dict[str, dict[str, Any]]:
+    policy = load_policy(path)
+    provider_overrides = policy.get("provider_overrides", {})
+    if provider_overrides is None:
+        return {}
+    issues: list[ValidationIssue] = []
+    if not isinstance(provider_overrides, dict):
+        issues.append(
+            ValidationIssue(
+                "malformed_provider_overrides",
+                "provider_overrides must be a table",
+                "provider_overrides",
+            )
+        )
+    else:
+        issues.extend(provider_override_schema_issues(provider_overrides))
+    if issues:
+        first = issues[0]
+        raise RegionPolicyError(f"{first.target}: {first.message}")
+    return normalize_provider_overrides(provider_overrides)
+
+
+def normalize_provider_overrides(provider_overrides: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    normalized: dict[str, dict[str, Any]] = {}
+    for name, override in sorted(provider_overrides.items()):
+        if not isinstance(override, dict):
+            continue
+        normalized[str(name)] = {
+            "regions": unique_names(list(override.get("regions", []))),
+            "reason": str(override.get("reason", "")).strip(),
+        }
+    return normalized
+
+
+def provider_override_regions(provider_overrides: dict[str, Any], name: str) -> set[str]:
+    override = provider_overrides.get(name)
+    if not isinstance(override, dict):
+        return set()
+    regions = override.get("regions", [])
+    if not isinstance(regions, list):
+        return set()
+    return set(unique_names([region for region in regions if isinstance(region, str)]))
+
+
 def load_policy(path: Path) -> dict[str, Any]:
     try:
         content = path.read_text(encoding="utf-8")
@@ -404,7 +481,13 @@ def load_policy(path: Path) -> dict[str, Any]:
 
 def validate_policy_schema(policy: dict[str, Any]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
-    allowed_top_level = {"schema_version", "provider_regions", "generated_groups", "groups"}
+    allowed_top_level = {
+        "schema_version",
+        "provider_regions",
+        "provider_overrides",
+        "generated_groups",
+        "groups",
+    }
     for key in sorted(policy):
         if key not in allowed_top_level:
             issues.append(
@@ -436,6 +519,19 @@ def validate_policy_schema(policy: dict[str, Any]) -> list[ValidationIssue]:
     else:
         issues.extend(provider_region_schema_issues(provider_regions))
 
+    provider_overrides = policy.get("provider_overrides", {})
+    if provider_overrides is not None:
+        if not isinstance(provider_overrides, dict):
+            issues.append(
+                ValidationIssue(
+                    "malformed_provider_overrides",
+                    "provider_overrides must be a table",
+                    "provider_overrides",
+                )
+            )
+        else:
+            issues.extend(provider_override_schema_issues(provider_overrides))
+
     for namespace in ("generated_groups", "groups"):
         groups = policy.get(namespace, {})
         if groups is None:
@@ -444,6 +540,58 @@ def validate_policy_schema(policy: dict[str, Any]) -> list[ValidationIssue]:
             issues.append(ValidationIssue(f"malformed_{namespace}", f"{namespace} must be a table", namespace))
         else:
             issues.extend(group_schema_issues(groups, namespace))
+    return issues
+
+
+def provider_override_schema_issues(provider_overrides: dict[str, Any]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for name, override in sorted(provider_overrides.items()):
+        target = f"provider_overrides.{name}"
+        if name not in SUPPORTED_PROVIDER_OVERRIDES:
+            issues.append(
+                ValidationIssue(
+                    "unknown_provider_override",
+                    "provider override table is not supported",
+                    target,
+                )
+            )
+            continue
+        if not isinstance(override, dict):
+            issues.append(
+                ValidationIssue(
+                    "malformed_provider_override",
+                    "provider override entry must be a table",
+                    target,
+                )
+            )
+            continue
+        for key in sorted(override):
+            if key not in SUPPORTED_PROVIDER_OVERRIDE_KEYS:
+                issues.append(
+                    ValidationIssue(
+                        "unknown_provider_override_key",
+                        "provider override entry contains an unsupported key",
+                        f"{target}.{key}",
+                    )
+                )
+        regions = override.get("regions")
+        if not string_list(regions):
+            issues.append(
+                ValidationIssue(
+                    "malformed_provider_override_regions",
+                    "provider override regions must be a list of non-empty strings",
+                    f"{target}.regions",
+                )
+            )
+        reason = override.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            issues.append(
+                ValidationIssue(
+                    "malformed_provider_override_reason",
+                    "provider override reason must be a non-empty string",
+                    f"{target}.reason",
+                )
+            )
     return issues
 
 
@@ -552,6 +700,29 @@ def validate_provider_regions_current(
     return issues
 
 
+def validate_provider_overrides_current(
+    policy: dict[str, Any],
+    provider_by_region: dict[str, dict[str, Any]],
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    provider_overrides = policy.get("provider_overrides", {})
+    if not isinstance(provider_overrides, dict):
+        return issues
+    for name, override in sorted(provider_overrides.items()):
+        if not isinstance(override, dict) or not isinstance(override.get("regions"), list):
+            continue
+        for region in override["regions"]:
+            if region not in provider_by_region:
+                issues.append(
+                    ValidationIssue(
+                        "unknown_provider_override_region",
+                        "provider override references a region missing from current provider metadata",
+                        f"provider_overrides.{name}.regions",
+                    )
+                )
+    return issues
+
+
 def validate_generated_groups(
     policy: dict[str, Any],
     provider_regions: list[dict[str, Any]],
@@ -562,7 +733,13 @@ def validate_generated_groups(
     if not isinstance(generated_groups, dict):
         return issues
 
-    expected = generated_region_groups(provider_regions)
+    provider_overrides = policy.get("provider_overrides", {})
+    if not isinstance(provider_overrides, dict):
+        provider_overrides = {}
+    expected = generated_region_groups(
+        provider_regions,
+        provider_overrides=normalize_provider_overrides(provider_overrides),
+    )
     actual = normalized_group_region_map(generated_groups)
     if actual != expected:
         issues.append(
@@ -616,13 +793,15 @@ def string_list(value: object) -> bool:
 def render_region_policy_toml(
     *,
     provider_regions: list[dict[str, Any]],
+    provider_overrides: dict[str, dict[str, Any]] | None = None,
     generated_groups: dict[str, list[str]] | None = None,
     groups: dict[str, list[str]] | None = None,
 ) -> str:
     lines = [
         "# Generated by linode-image-lab region-policy generate.",
         "# Version this provider policy snapshot and review diffs for provider drift.",
-        "# provider_regions.* and generated_groups.* are generated; groups.* is operator-owned intent.",
+        "# provider_regions.* and generated_groups.* are generated; provider_overrides.* is documented.",
+        "# groups.* is operator-owned intent.",
         f"schema_version = {SCHEMA_VERSION}",
         "",
     ]
@@ -630,6 +809,12 @@ def render_region_policy_toml(
         region_id = str(region["region"])
         lines.append(f"[provider_regions.{toml_key(region_id)}]")
         lines.append(f"capabilities = {toml_string_list(normalize_capabilities(region.get('capabilities', [])))}")
+        lines.append("")
+
+    for override_name, override in sorted((provider_overrides or {}).items()):
+        lines.append(f"[provider_overrides.{toml_key(str(override_name))}]")
+        lines.append(f"regions = {toml_string_list(list(override.get('regions', [])))}")
+        lines.append(f"reason = {json.dumps(str(override.get('reason', '')).strip())}")
         lines.append("")
 
     for group_name, regions in sorted((generated_groups or {}).items()):

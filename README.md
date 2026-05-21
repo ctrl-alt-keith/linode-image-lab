@@ -217,8 +217,14 @@ derived from provider capabilities and provider country codes. Base generated
 country groups such as `country_us` represent all provider regions for that
 country code. Capability-scoped country groups such as
 `country_us_object_storage` represent only regions in that country exposing the
-named capability. Operator-maintained `[groups.*]` sections name semantic
-region groups for local workflows and remain the canonical intent layer.
+named capability. Image-replication country groups such as
+`country_us_image_replication` are narrow workflow-specific convenience
+scaffolding derived from Object Storage regions minus documented
+`provider_overrides.image_replication_excluded_regions` entries. The override
+table does not rewrite provider facts or capability groups; it records known
+provider discrepancies for image-replication helper groups only.
+Operator-maintained `[groups.*]` sections name semantic region groups for
+local workflows and remain the canonical intent layer.
 
 Generate or refresh the default version-controlled artifact:
 
@@ -227,16 +233,18 @@ linode-image-lab region-policy generate --output policy/region-policy.toml
 ```
 
 When the output file already exists, generation refreshes provider facts and
-generated helper groups while preserving supported `groups.*` tables. Use
-`--replace-groups` only when you intentionally want to drop operator-owned
-groups. Use `--output -` to print the TOML without writing a file.
+generated helper groups while preserving supported `provider_overrides.*` and
+`groups.*` tables. Use `--replace-groups` only when you intentionally want to
+drop operator-owned groups. Use `--output -` to print the TOML without writing
+a file.
 
 The repository intentionally includes `policy/region-policy.toml` as the full
 current generated provider policy snapshot. It is versioned so operators can
 rerun generation periodically and review the diff for provider region or
 capability drift. The checked-in snapshot is generated data and should not
 contain hand-authored operator-only groups unless that intent is deliberately
-documented.
+documented. Documented `provider_overrides.*` entries are allowed only for
+narrow provider-discrepancy handling such as image replication exclusions.
 
 ## Maintaining Region Policy Artifacts
 
@@ -252,8 +260,10 @@ git diff -- policy/region-policy.toml
 
 `policy/region-policy.toml` is intentionally versioned. Regeneration updates
 `provider_regions.*` and `generated_groups.*` from current public provider
-metadata. Operator-owned `groups.*` remains preserved unless `--replace-groups`
-is used. Generation and validation do not require `LINODE_TOKEN`, read no
+metadata. Documented `provider_overrides.*` remain preserved and are applied
+only to workflow-specific helper groups that explicitly name that behavior.
+Operator-owned `groups.*` remains preserved unless `--replace-groups` is used.
+Generation and validation do not require `LINODE_TOKEN`, read no
 account-specific data, and perform no provider mutations.
 
 Validate the artifact against current provider metadata:
@@ -264,15 +274,17 @@ linode-image-lab region-policy validate --path policy/region-policy.toml
 
 Validation emits sanitized JSON, fails closed on malformed TOML, unknown or
 missing provider regions, stale provider capabilities, stale generated groups,
-and generated or operator groups that reference regions missing from current
-provider metadata.
+malformed or stale provider overrides, and generated or operator groups that
+reference regions missing from current provider metadata.
 
 The policy file is deliberately not an automatic placement engine. The tool
 does not infer geography, measure latency, choose nearest regions, plan
 fallback placement, execute replication policy, or reconcile long-lived
 resource declarations from these groups. Generated groups are starting points,
-not policy. Operators own the meaning of each operator group, and later
-commands can validate against that explicit local intent.
+not policy. Workflow-specific generated groups can encode narrow documented
+provider discrepancies, but execution validation remains authoritative.
+Operators own the meaning of each operator group, and later commands can
+validate against that explicit local intent.
 
 `capture-replicate-deploy` can consume these artifacts for replication target
 selection only. When `[capture-replicate-deploy].replication_groups` is
@@ -285,10 +297,10 @@ replication groups control where image availability is expanded; deploy
 regions are not automatically added to the resolved replication target set
 when either replication input is configured. When no replication regions or
 groups are configured, deploy regions remain the backwards-compatible default
-replication target set. Generated capability-scoped groups improve
-discoverability, but they do not bypass execution validation. Execute mode
-still validates every resolved replication target for `Object Storage` and
-fails before mutation if any requested target is invalid.
+replication target set. Generated capability-scoped and image-replication
+groups improve discoverability, but they do not bypass execution validation.
+Execute mode still validates every resolved replication target for
+`Object Storage` and fails before mutation if any requested target is invalid.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -331,10 +343,12 @@ explicit deploy region, resolves replication targets from explicit
 `replication_regions`, checked-in `replication_groups`, or both, then deploys
 from the captured image only to the explicit deploy regions after bounded
 read-only status checks show the resolved image regions are `available`. For
-country-based replication, generated groups such as
-`country_us_object_storage` are the ergonomic starting point because base
-country groups include all provider regions for that country. Before creating
-the capture Linode, it validates any configured region policy artifact and
+country-based image replication, generated groups such as
+`country_us_image_replication` are the ergonomic starting point because base
+country groups include all provider regions for that country, and
+`country_us_object_storage` intentionally mirrors provider Object Storage
+metadata even when a provider discrepancy is documented. Before creating the
+capture Linode, it validates any configured region policy artifact and
 verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
 provider-reported existing image regions plus resolved replication targets, so
