@@ -266,17 +266,19 @@ class CaptureReplicateDeployTests(unittest.TestCase):
         )
         self.assertEqual(manifest["capture"]["cleanup"]["preserved"][0]["reason"], "deliverable")
 
-    def test_unsupported_replication_region_fails_before_capture(self) -> None:
+    def test_unsupported_replication_regions_fail_before_capture_after_full_check(self) -> None:
         client = FakeCaptureReplicateDeployClient(
             region_capabilities={
                 "us-sea": ["Linodes", "Object Storage"],
                 "us-west": ["Linodes"],
+                "us-east": ["Linodes", "Object Storage"],
+                "us-lax": ["Linodes"],
             }
         )
 
         with self.assertRaises(CaptureReplicateDeployError) as raised:
             capture_replicate_deploy_plan(
-                regions=["us-sea", "us-west"],
+                regions=["us-sea", "us-west", "us-east", "us-lax"],
                 run_id="run-test",
                 ttl="2030-01-01T00:00:00Z",
                 execute=True,
@@ -292,7 +294,7 @@ class CaptureReplicateDeployTests(unittest.TestCase):
         self.assertEqual(
             manifest["errors"],
             [
-                "requested replication target region us-west is missing required capability: "
+                "requested replication target regions us-west, us-lax are missing required capability: "
                 "Object Storage"
             ],
         )
@@ -308,10 +310,28 @@ class CaptureReplicateDeployTests(unittest.TestCase):
                         "status": "failed",
                         "missing_capability": "Object Storage",
                     },
+                    {"region": "us-east", "capability": "Object Storage", "status": "succeeded"},
+                    {
+                        "region": "us-lax",
+                        "capability": "Object Storage",
+                        "status": "failed",
+                        "missing_capability": "Object Storage",
+                    },
                 ],
             },
         )
+        self.assertEqual(
+            [call for call in client.calls if call.startswith("get_region_details:")],
+            [
+                "get_region_details:us-sea",
+                "get_region_details:us-west",
+                "get_region_details:us-east",
+                "get_region_details:us-lax",
+            ],
+        )
         self.assertEqual(manifest["validation"]["replication"]["status"], "failed")
+        self.assertEqual(manifest["summary"]["failed"], ["us-west", "us-lax"])
+        self.assertEqual(manifest["summary"]["succeeded"], [])
         self.assertEqual(manifest["capture"], {})
         self.assertEqual(manifest["deploy_results"], {})
         self.assertEqual(client.created_regions, [])

@@ -219,6 +219,7 @@ def execute_capture_replicate_deploy(
                 "status": "failed",
                 "region_capability_checks": exc.capability_checks,
             }
+            manifest["summary"]["failed"] = failed_capability_regions(exc.capability_checks)
         if capture_manifest is not None and cleanup_status(capture_manifest) == "deferred":
             cleanup_deferred_capture(run_client, capture_manifest)
             manifest["capture"] = capture_manifest
@@ -291,6 +292,20 @@ def replication_validation_summary(manifest: dict[str, Any], *, status: str) -> 
     if capability_checks:
         summary["region_capability_checks"] = capability_checks
     return summary
+
+
+def failed_capability_regions(capability_checks: dict[str, Any]) -> list[str]:
+    checks = capability_checks.get("checks", [])
+    if not isinstance(checks, list):
+        return []
+    failed: list[str] = []
+    for check in checks:
+        if not isinstance(check, dict) or check.get("status") != "failed":
+            continue
+        region = check.get("region")
+        if isinstance(region, str) and region.strip():
+            failed.append(region.strip())
+    return failed
 
 
 def base_manifest(options: CaptureReplicateDeployOptions, *, dry_run: bool, status: str) -> dict[str, Any]:

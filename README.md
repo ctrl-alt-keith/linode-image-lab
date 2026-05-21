@@ -247,7 +247,8 @@ existing regions, or requested replicas do not report available before the
 bounded wait expires, the workflow fails closed, cleans up temporary resources
 when any were created, and does not deploy. The captured custom image remains
 the workflow deliverable under the same artifact-tag semantics as
-capture-deploy.
+capture-deploy. Capability validation records a check for every requested
+target region before deciding whether the workflow can proceed.
 
 `config validate` parses the TOML file, applies the same safety checks as
 command execution, and emits a non-mutating JSON report with `precedence`,

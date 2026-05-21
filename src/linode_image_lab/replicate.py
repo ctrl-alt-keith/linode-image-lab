@@ -218,9 +218,11 @@ def validate_replication_region_capabilities(
         "required_capability": REPLICATION_REGION_CAPABILITY,
         "checks": [],
     }
+    failed_regions: list[str] = []
     for region in unique_region_ids(regions):
         details = client.get_region_details(region)
         if REPLICATION_REGION_CAPABILITY not in region_capabilities(details):
+            failed_regions.append(region)
             result["checks"].append(
                 {
                     "region": region,
@@ -229,11 +231,7 @@ def validate_replication_region_capabilities(
                     "missing_capability": REPLICATION_REGION_CAPABILITY,
                 }
             )
-            raise ReplicationRegionCapabilityError(
-                f"requested replication target region {region} is missing required capability: "
-                f"{REPLICATION_REGION_CAPABILITY}",
-                result,
-            )
+            continue
         result["checks"].append(
             {
                 "region": region,
@@ -241,7 +239,24 @@ def validate_replication_region_capabilities(
                 "status": "succeeded",
             }
         )
+    if failed_regions:
+        raise ReplicationRegionCapabilityError(
+            replication_region_capability_error_message(failed_regions),
+            result,
+        )
     return result
+
+
+def replication_region_capability_error_message(regions: list[str]) -> str:
+    if len(regions) == 1:
+        return (
+            f"requested replication target region {regions[0]} is missing required capability: "
+            f"{REPLICATION_REGION_CAPABILITY}"
+        )
+    return (
+        f"requested replication target regions {', '.join(regions)} are missing required capability: "
+        f"{REPLICATION_REGION_CAPABILITY}"
+    )
 
 
 def existing_region_ids(image: dict[str, Any]) -> list[str]:

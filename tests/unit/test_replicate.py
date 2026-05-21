@@ -300,12 +300,18 @@ class ReplicateExecutionTests(unittest.TestCase):
         self.assertEqual(raised.exception.manifest["resources"], [])
         self.assertEqual(raised.exception.manifest["errors"], ["requested region is unavailable"])
 
-    def test_execute_fails_when_requested_region_lacks_object_storage(self) -> None:
-        client = FakeReplicateClient(region_capabilities={"us-west": ["Linodes"]})
+    def test_execute_fails_after_reporting_all_regions_that_lack_object_storage(self) -> None:
+        client = FakeReplicateClient(
+            region_capabilities={
+                "us-west": ["Linodes"],
+                "us-sea": ["Linodes", "Object Storage"],
+                "us-lax": ["Linodes"],
+            }
+        )
 
         with self.assertRaises(ReplicateError) as raised:
             replicate_plan(
-                regions=["us-west"],
+                regions=["us-west", "us-sea", "us-lax"],
                 run_id="run-test",
                 ttl="2030-01-01T00:00:00Z",
                 execute=True,
@@ -319,8 +325,16 @@ class ReplicateExecutionTests(unittest.TestCase):
         self.assertEqual(
             manifest["errors"],
             [
-                "requested replication target region us-west is missing required capability: "
+                "requested replication target regions us-west, us-lax are missing required capability: "
                 "Object Storage"
+            ],
+        )
+        self.assertEqual(
+            [call for call in client.calls if call.startswith("get_region_details:")],
+            [
+                "get_region_details:us-west",
+                "get_region_details:us-sea",
+                "get_region_details:us-lax",
             ],
         )
         self.assertEqual(
@@ -333,7 +347,14 @@ class ReplicateExecutionTests(unittest.TestCase):
                         "capability": "Object Storage",
                         "status": "failed",
                         "missing_capability": "Object Storage",
-                    }
+                    },
+                    {"region": "us-sea", "capability": "Object Storage", "status": "succeeded"},
+                    {
+                        "region": "us-lax",
+                        "capability": "Object Storage",
+                        "status": "failed",
+                        "missing_capability": "Object Storage",
+                    },
                 ],
             },
         )

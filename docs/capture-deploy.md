@@ -237,9 +237,10 @@ response exposes them. The command fails closed before capture if a requested
 replication target lacks the provider `Object Storage` capability. It fails
 closed before deploy if existing image regions are not exposed, replication
 submission fails, or requested replicas do not report `available` before the
-bounded wait expires. It records only the emitted manifest, performs no
-background work, does not repair replicas, and keeps cleanup scoped to the
-run's temporary resources.
+bounded wait expires. Capability validation records every requested target
+region before deciding whether the workflow can proceed. It records only the
+emitted manifest, performs no background work, does not repair replicas, and
+keeps cleanup scoped to the run's temporary resources.
 
 Config-backed defaults use `[capture-replicate-deploy]`:
 
