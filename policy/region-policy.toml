@@ -104,7 +104,7 @@ capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block S
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_overrides.image_replication_excluded_regions]
-regions = ["de-fra-2", "us-iad-2"]
+regions = ["de-fra-2", "jp-tyo-3", "us-iad-2"]
 reason = "Provider currently advertises Object Storage, but image replication POST rejects these regions."
 
 [generated_groups.capability_aclp_logs_datacenter_lke_e]
@@ -827,9 +827,6 @@ regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
 [generated_groups.country_jp_gpu_linodes]
 regions = ["jp-osa", "jp-tyo-3"]
 
-[generated_groups.country_jp_image_replication]
-regions = ["jp-tyo-3"]
-
 [generated_groups.country_jp_kubernetes]
 regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
 
@@ -1132,9 +1129,6 @@ regions = ["br-gru", "us-east", "us-iad", "us-lax", "us-mia", "us-ord", "us-sea"
 
 [groups.geo_apac_north]
 regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
-
-[groups.geo_apac_north_image_replication]
-regions = ["jp-tyo-3"]
 
 [groups.geo_apac_southeast]
 regions = ["ap-south", "id-cgk", "sg-sin-2"]

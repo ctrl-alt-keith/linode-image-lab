@@ -278,16 +278,18 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-deploy_groups = ["geo_apac_north"]
-replication_groups = ["geo_apac_north_image_replication"]
+deploy_groups = ["geo_americas"]
+replication_groups = ["geo_americas_image_replication"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
 firewall_id = 12345
 ```
 
-Operator-owned geo groups such as `geo_apac_north` are hand-maintained
+Operator-owned geo groups such as `geo_americas` are hand-maintained
 `groups.*` entries. They are reviewable local intent, not generated topology
-or placement logic.
+or placement logic. `geo_apac_north` currently has deploy targets but no
+matching checked-in image-replication group because `jp-tyo-3` is a documented
+image-replication provider discrepancy.
 
 Prefer image-replication generated groups such as
 `country_us_image_replication` when the desired image availability boundary is
@@ -297,10 +299,11 @@ that country. Capability-scoped groups such as `country_us_object_storage`
 mirror provider capability metadata, including any documented provider
 discrepancies. Image-replication generated groups can apply narrow documented
 `provider_overrides.image_replication_excluded_regions` entries for known
-replication POST inconsistencies. These groups are generated convenience
-scaffolding only; execute mode still validates every resolved replication
-target and fails before mutation when any target lacks the required
-capability.
+replication POST inconsistencies, currently including `de-fra-2`, `jp-tyo-3`,
+and `us-iad-2`. These groups are generated convenience scaffolding only;
+execute mode still validates every resolved replication target and fails
+before mutation when any target lacks the required capability or the provider
+replication POST rejects it.
 
 When `deploy_groups` or `replication_groups` is configured and
 `region_policy_file` is omitted, the command resolves groups from

@@ -219,8 +219,10 @@ regions to exclude only from `country_*_image_replication` generated groups.
 Raw `provider_regions.*` facts and provider-backed capability groups such as
 `country_us_object_storage` remain unchanged. The override exists because
 provider metadata can advertise `Object Storage` for a region while the image
-replication POST rejects that region. It is intentionally not a general rule
-engine, policy transform system, fallback mechanism, or execution-time filter.
+replication POST rejects that region. If every Object Storage region for a
+country is excluded, no `country_*_image_replication` helper is generated for
+that country. It is intentionally not a general rule engine, policy transform
+system, fallback mechanism, or execution-time filter.
 
 `[groups.*]` tables are operator-owned intent. Each group has an explicit
 `regions = [...]` list whose meaning is defined locally by the operator. A
@@ -264,11 +266,15 @@ resolution does not infer geography, proximity, latency, fallback regions, or
 a "best" region. Generated capability-scoped groups improve discoverability
 for workflows such as image replication, but the execution layer still
 validates every resolved replication target for the required provider
-capability and fails before mutation if any requested target is invalid.
+capability and fails before mutation if any requested target is invalid. Under
+the checked-in policy, `geo_apac_north` currently has deploy targets but no
+matching `geo_apac_north_image_replication` group because `jp-tyo-3` is a
+documented image-replication provider discrepancy.
 
 Image-replication-specific generated groups improve the default operator
-surface when a provider inconsistency is documented, but they do not bypass
-validation or silently filter execution requests.
+surface when a provider inconsistency is documented. The current documented
+image-replication exclusions are `de-fra-2`, `jp-tyo-3`, and `us-iad-2`.
+They do not bypass validation or silently filter execution requests.
 
 `region-policy validate` reads the artifact and current provider region
 metadata, then emits sanitized JSON. It validates:

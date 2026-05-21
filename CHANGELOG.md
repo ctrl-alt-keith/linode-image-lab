@@ -15,6 +15,9 @@
 - Add narrow documented provider overrides for image-replication generated
   helper groups, including `country_us_image_replication`, without mutating raw
   provider facts or provider-backed capability groups.
+- Extend image-replication provider discrepancy handling to exclude
+  `jp-tyo-3` from image-replication helper groups while preserving raw
+  provider facts and Object Storage capability groups.
 - Allow `capture-replicate-deploy` to consume checked-in region policy groups
   as replication targets while keeping deploy regions explicit and mutation
   gated behind `--execute`.

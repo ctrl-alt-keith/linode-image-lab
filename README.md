@@ -223,7 +223,9 @@ named capability. Image-replication country groups such as
 scaffolding derived from Object Storage regions minus documented
 `provider_overrides.image_replication_excluded_regions` entries. The override
 table does not rewrite provider facts or capability groups; it records known
-provider discrepancies for image-replication helper groups only.
+provider discrepancies for image-replication helper groups only. When every
+Object Storage region for a generated country image-replication helper is
+excluded, that helper group is omitted rather than emitted empty.
 Operator-maintained `[groups.*]` sections name semantic region groups for
 local workflows and remain the canonical intent layer.
 
@@ -304,7 +306,10 @@ backwards-compatible default replication target set. Generated
 capability-scoped and image-replication groups improve discoverability, but
 they do not bypass execution validation. Execute mode still validates every
 resolved replication target for `Object Storage` and fails before mutation if
-any requested target is invalid.
+any requested target is invalid. Under the checked-in policy, `geo_apac_north`
+currently has deploy targets but no corresponding known-good
+`geo_apac_north_image_replication` group because `jp-tyo-3` is a documented
+image-replication provider discrepancy.
 
 Deploy metadata defaults are field-specific. `firewall_id` is a scalar default
 for deploy instances. Authorized keys are additive: configured
@@ -352,7 +357,9 @@ country-based image replication, generated groups such as
 `country_us_image_replication` are the ergonomic starting point because base
 country groups include all provider regions for that country, and
 `country_us_object_storage` intentionally mirrors provider Object Storage
-metadata even when a provider discrepancy is documented. Before creating the
+metadata even when a provider discrepancy is documented. The checked-in
+provider discrepancy exclusions currently include `de-fra-2`, `jp-tyo-3`, and
+`us-iad-2` for image-replication helper groups only. Before creating the
 capture Linode, it validates any configured region policy artifact and
 verifies that each resolved replication target exposes the provider
 `Object Storage` capability. The replication request preserves
@@ -648,6 +655,10 @@ entries include `resource_type` plus a sanitized `reason`, such as
   retry, or own replicas after the run.
 - Replication target eligibility: explicit image replication requires requested
   target regions to expose the provider `Object Storage` capability.
+- Image replication provider discrepancies: `de-fra-2`, `jp-tyo-3`, and
+  `us-iad-2` currently advertise Object Storage but are excluded from
+  generated image-replication helper groups and matching operator
+  image-replication groups in the checked-in policy.
 - Region policy consumption: `deploy_groups` expand deploy targets, while
   `replication_groups` expand image availability only. They do not infer
   geography, choose nearest regions, plan fallbacks, bypass capability
