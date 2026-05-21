@@ -1,0 +1,16 @@
+# Bounded capture-replicate-deploy execute smoke config for APAC Southeast.
+# Deploy intent uses one explicit region to keep provider smoke narrow.
+# Image availability uses the checked-in geo_apac_southeast_image_replication group.
+# sg-sin-2 remains a deploy target but is excluded from image replication by policy.
+# This is not broad geo deploy fan-out coverage.
+# Review dry-run output before executing with --execute and LINODE_TOKEN.
+schema_version = 1
+
+[defaults]
+ttl = "3h"
+
+[capture-replicate-deploy]
+deploy_regions = ["id-cgk"]
+replication_groups = ["geo_apac_southeast_image_replication"]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"

@@ -49,13 +49,17 @@ class CaptureReplicateDeployError(ValueError):
 
 @dataclass(frozen=True)
 class CaptureReplicateDeployOptions:
+    explicit_deploy_regions: list[str]
     deploy_regions: list[str]
+    deploy_groups: list[str]
     replication_regions: list[str]
     replication_groups: list[str]
+    replication_enabled: bool
     replication_target_regions: list[str]
     replication_target_source: str
     region_policy_file: Path | None = None
-    region_policy_resolution: ResolvedRegionPolicyGroups | None = None
+    deploy_policy_resolution: ResolvedRegionPolicyGroups | None = None
+    replication_policy_resolution: ResolvedRegionPolicyGroups | None = None
     run_id: str | None = None
     ttl: str | None = None
     execute: bool = False
@@ -71,8 +75,10 @@ class CaptureReplicateDeployOptions:
 def capture_replicate_deploy_plan(
     *,
     regions: list[str],
+    deploy_groups: list[str] | None = None,
     replication_regions: list[str] | None = None,
     replication_groups: list[str] | None = None,
+    replication_enabled: bool = True,
     region_policy_file: str | None = None,
     run_id: str | None = None,
     ttl: str | None = None,
@@ -87,34 +93,66 @@ def capture_replicate_deploy_plan(
     client: LinodeClientProtocol | None = None,
     region_policy_client: LinodeClientProtocol | None = None,
 ) -> dict[str, Any]:
-    deploy_regions = unique_region_ids(regions)
+    explicit_deploy_regions = unique_region_ids(regions)
+    requested_deploy_groups = unique_region_ids(deploy_groups or [])
     explicit_replication_regions = unique_region_ids(replication_regions or [])
     requested_replication_groups = unique_region_ids(replication_groups or [])
-    if region_policy_file is not None and not requested_replication_groups:
-        raise CaptureReplicateDeployError("--region-policy-file requires at least one --replication-group")
+    if not replication_enabled and (explicit_replication_regions or requested_replication_groups):
+        raise CaptureReplicateDeployError(
+            "replication_enabled=false cannot be combined with replication regions or groups"
+        )
+    if region_policy_file is not None and not requested_deploy_groups and not requested_replication_groups:
+        raise CaptureReplicateDeployError(
+            "--region-policy-file requires at least one --deploy-group or --replication-group"
+        )
     policy_file = resolved_policy_file(
         region_policy_file=region_policy_file,
+        deploy_groups=requested_deploy_groups,
         replication_groups=requested_replication_groups,
     )
-    policy_resolution = resolve_replication_groups(
+    deploy_policy_resolution = resolve_policy_groups(
         policy_file=policy_file,
-        replication_groups=requested_replication_groups,
+        group_names=requested_deploy_groups,
+        target="deploy",
         client=region_policy_client,
     )
-    group_regions = policy_resolution.regions if policy_resolution is not None else []
-    replication_target_regions, replication_target_source = resolve_replication_target_regions(
-        deploy_regions=deploy_regions,
-        replication_regions=explicit_replication_regions,
-        group_regions=group_regions,
+    replication_policy_resolution = None
+    if replication_enabled:
+        replication_policy_resolution = resolve_policy_groups(
+            policy_file=policy_file,
+            group_names=requested_replication_groups,
+            target="replication",
+            client=region_policy_client,
+        )
+    deploy_group_regions = deploy_policy_resolution.regions if deploy_policy_resolution is not None else []
+    deploy_regions = resolve_deploy_target_regions(
+        explicit_deploy_regions=explicit_deploy_regions,
+        group_regions=deploy_group_regions,
     )
+    replication_group_regions = (
+        replication_policy_resolution.regions if replication_policy_resolution is not None else []
+    )
+    if replication_enabled:
+        replication_target_regions, replication_target_source = resolve_replication_target_regions(
+            deploy_regions=deploy_regions,
+            replication_regions=explicit_replication_regions,
+            group_regions=replication_group_regions,
+        )
+    else:
+        replication_target_regions = []
+        replication_target_source = "replication_disabled"
     options = CaptureReplicateDeployOptions(
+        explicit_deploy_regions=explicit_deploy_regions,
         deploy_regions=deploy_regions,
+        deploy_groups=requested_deploy_groups,
         replication_regions=explicit_replication_regions,
         replication_groups=requested_replication_groups,
+        replication_enabled=replication_enabled,
         replication_target_regions=replication_target_regions,
         replication_target_source=replication_target_source,
         region_policy_file=policy_file,
-        region_policy_resolution=policy_resolution,
+        deploy_policy_resolution=deploy_policy_resolution,
+        replication_policy_resolution=replication_policy_resolution,
         run_id=run_id,
         ttl=ttl,
         execute=execute,
@@ -143,18 +181,30 @@ def dry_run_manifest(options: CaptureReplicateDeployOptions) -> dict[str, Any]:
         "instance_type": options.instance_type,
     }
     manifest["replication_plan"] = {
-        "requested_deploy_regions": list(options.deploy_regions),
+        "replication_enabled": options.replication_enabled,
+        "status": "planned" if options.replication_enabled else "skipped",
+        "skip_reason": replication_skip_reason(options),
+        "explicit_deploy_regions": list(options.explicit_deploy_regions),
+        "requested_deploy_groups": list(options.deploy_groups),
+        "deploy_group_sources": deploy_group_sources(options),
+        "deploy_target_regions": list(options.deploy_regions),
         "explicit_replication_regions": list(options.replication_regions),
         "requested_replication_groups": list(options.replication_groups),
         "region_policy_file": str(options.region_policy_file) if options.region_policy_file is not None else None,
-        "group_sources": group_sources(options),
+        "replication_group_sources": replication_group_sources(options),
+        "group_sources": replication_group_sources(options),
         "replication_target_regions": list(options.replication_target_regions),
         "replication_target_source": options.replication_target_source,
-        "provider_request": "execute mode submits existing image regions plus resolved replication target regions",
-        "replica_status_check": "execute mode waits for resolved replication target replicas to report available",
+        "provider_request": replication_provider_request_manifest(options),
+        "replica_status_check": replication_status_check_manifest(options),
     }
     manifest["region_policy"] = region_policy_manifest(options)
-    manifest["deploy_plan"] = {"deploy_regions": list(options.deploy_regions)}
+    manifest["deploy_plan"] = {
+        "explicit_deploy_regions": list(options.explicit_deploy_regions),
+        "requested_deploy_groups": list(options.deploy_groups),
+        "group_sources": deploy_group_sources(options),
+        "deploy_regions": list(options.deploy_regions),
+    }
     manifest["cleanup_expectations"] = {
         "capture_source": "temporary Linode deleted after capture or failure when tags match",
         "deploy_instances": "temporary validation Linodes deleted after each deploy unless preserved",
@@ -195,16 +245,19 @@ def execute_capture_replicate_deploy(
         run_client.preflight()
         finish_step(manifest, "preflight_api_access")
 
-        append_step(manifest, "preflight_replication_target_regions", mutates=False, status="running")
-        manifest["replication"]["region_capability_checks"] = validate_replication_region_capabilities(
-            run_client,
-            options.replication_target_regions,
-        )
-        manifest["validation"]["replication"] = {
-            "status": "succeeded",
-            "region_capability_checks": manifest["replication"]["region_capability_checks"],
-        }
-        finish_step(manifest, "preflight_replication_target_regions")
+        if options.replication_enabled:
+            append_step(manifest, "preflight_replication_target_regions", mutates=False, status="running")
+            manifest["replication"]["region_capability_checks"] = validate_replication_region_capabilities(
+                run_client,
+                options.replication_target_regions,
+            )
+            manifest["validation"]["replication"] = {
+                "status": "succeeded",
+                "region_capability_checks": manifest["replication"]["region_capability_checks"],
+            }
+            finish_step(manifest, "preflight_replication_target_regions")
+        else:
+            manifest["validation"]["replication"] = replication_validation_summary(manifest, status="skipped")
 
         append_step(manifest, "run_capture_phase", mutates=True, status="running")
         capture_manifest = execute_capture(
@@ -230,13 +283,14 @@ def execute_capture_replicate_deploy(
         finish_step(manifest, "run_capture_phase")
 
         image_id = required_text(capture_manifest.get("custom_image", {}).get("image_id"))
-        run_replication_phase(
-            manifest,
-            run_client,
-            image_id=image_id,
-            deploy_regions=options.deploy_regions,
-            replication_target_regions=options.replication_target_regions,
-        )
+        if options.replication_enabled:
+            run_replication_phase(
+                manifest,
+                run_client,
+                image_id=image_id,
+                deploy_regions=options.deploy_regions,
+                replication_target_regions=options.replication_target_regions,
+            )
 
         deploy_manifests = execute_region_deploys(
             regions=manifest["summary"]["deploy_regions"],
@@ -352,10 +406,30 @@ def run_replication_phase(
 
 def replication_validation_summary(manifest: dict[str, Any], *, status: str) -> dict[str, Any]:
     summary: dict[str, Any] = {"status": status}
+    if status == "skipped":
+        summary["reason"] = "replication_enabled=false"
     capability_checks = manifest["replication"].get("region_capability_checks")
     if capability_checks:
         summary["region_capability_checks"] = capability_checks
     return summary
+
+
+def replication_skip_reason(options: CaptureReplicateDeployOptions) -> str | None:
+    if options.replication_enabled:
+        return None
+    return "replication_enabled=false"
+
+
+def replication_provider_request_manifest(options: CaptureReplicateDeployOptions) -> str:
+    if not options.replication_enabled:
+        return "skipped because replication_enabled=false"
+    return "execute mode submits existing image regions plus resolved replication target regions"
+
+
+def replication_status_check_manifest(options: CaptureReplicateDeployOptions) -> str:
+    if not options.replication_enabled:
+        return "skipped because replication_enabled=false"
+    return "execute mode waits for resolved replication target replicas to report available"
 
 
 def failed_capability_regions(capability_checks: dict[str, Any]) -> list[str]:
@@ -386,7 +460,7 @@ def base_manifest(options: CaptureReplicateDeployOptions, *, dry_run: bool, stat
     )
     component_tags = component_lifecycle_tags(run_id=base["run_id"], ttl=base["ttl"])
     base["component_tags"] = component_tags
-    base["planned_actions"] = [
+    planned_actions = [
         planned_action(
             "capture",
             options.deploy_regions[0],
@@ -394,16 +468,36 @@ def base_manifest(options: CaptureReplicateDeployOptions, *, dry_run: bool, stat
             component_tags["capture"],
             mutates=not dry_run,
         ),
-        planned_action("replicate", "all", "replicate", component_tags["replicate"], mutates=not dry_run),
-        *[
-            planned_action("deploy", region, "deploy", component_tags["deploy"], mutates=not dry_run)
-            for region in options.deploy_regions
-        ],
-        planned_action("cleanup", "temporary-resources", "capture", component_tags["capture"], mutates=not dry_run),
     ]
+    if options.replication_enabled:
+        planned_actions.append(
+            planned_action("replicate", "all", "replicate", component_tags["replicate"], mutates=not dry_run)
+        )
+    else:
+        skipped_replication = planned_action(
+            "skip_replication",
+            "all",
+            "replicate",
+            component_tags["replicate"],
+            mutates=False,
+        )
+        skipped_replication["reason"] = replication_skip_reason(options)
+        planned_actions.append(skipped_replication)
+    planned_actions.extend(
+        planned_action("deploy", region, "deploy", component_tags["deploy"], mutates=not dry_run)
+        for region in options.deploy_regions
+    )
+    planned_actions.append(
+        planned_action("cleanup", "temporary-resources", "capture", component_tags["capture"], mutates=not dry_run)
+    )
+    base["planned_actions"] = planned_actions
     base["summary"] = {
         "capture_region": options.deploy_regions[0],
+        "explicit_deploy_regions": list(options.explicit_deploy_regions),
+        "requested_deploy_groups": list(options.deploy_groups),
         "deploy_regions": list(options.deploy_regions),
+        "replication_enabled": options.replication_enabled,
+        "replication_skip_reason": replication_skip_reason(options),
         "explicit_replication_regions": list(options.replication_regions),
         "requested_replication_groups": list(options.replication_groups),
         "replication_target_regions": list(options.replication_target_regions),
@@ -441,8 +535,30 @@ def planned_action(
 
 
 def empty_replication_block(options: CaptureReplicateDeployOptions) -> dict[str, Any]:
+    if not options.replication_enabled:
+        return {
+            "status": "skipped",
+            "enabled": False,
+            "skip_reason": replication_skip_reason(options),
+            "source": {},
+            "request": {
+                "deploy_regions": list(options.deploy_regions),
+                "requested_regions": [],
+                "submitted_regions": [],
+            },
+            "result": {},
+            "provider_response_summary": {},
+            "replica_status_checks": {"status": "skipped", "reason": replication_skip_reason(options)},
+            "region_capability_checks": {
+                "status": "skipped",
+                "reason": replication_skip_reason(options),
+                "required_capability": "Object Storage",
+                "checks": [],
+            },
+        }
     return {
         "status": "not_started",
+        "enabled": True,
         "source": {},
         "request": {
             "deploy_regions": list(options.deploy_regions),
@@ -514,8 +630,11 @@ def aggregate_validation_status(validation: dict[str, Any]) -> str:
                     statuses.append(nested["status"])
     if any(status == "failed" for status in statuses):
         return "failed"
-    if statuses and all(status == "succeeded" for status in statuses):
+    active_statuses = [status for status in statuses if status != "skipped"]
+    if active_statuses and all(status == "succeeded" for status in active_statuses):
         return "succeeded"
+    if statuses and not active_statuses:
+        return "skipped"
     if statuses:
         return "partial"
     return "not_started"
@@ -537,12 +656,25 @@ def attach_deploy_config(manifest: dict[str, Any], options: CaptureReplicateDepl
         manifest["deploy_config"] = deploy_config
 
 
-def resolved_policy_file(*, region_policy_file: str | None, replication_groups: list[str]) -> Path | None:
+def resolved_policy_file(
+    *,
+    region_policy_file: str | None,
+    deploy_groups: list[str],
+    replication_groups: list[str],
+) -> Path | None:
     if region_policy_file is not None:
         return Path(region_policy_file)
-    if replication_groups:
+    if deploy_groups or replication_groups:
         return DEFAULT_REGION_POLICY_PATH
     return None
+
+
+def resolve_deploy_target_regions(
+    *,
+    explicit_deploy_regions: list[str],
+    group_regions: list[str],
+) -> list[str]:
+    return unique_region_ids([*explicit_deploy_regions, *group_regions])
 
 
 def resolve_replication_target_regions(
@@ -557,23 +689,30 @@ def resolve_replication_target_regions(
     return list(deploy_regions), "deploy_regions_default"
 
 
-def resolve_replication_groups(
+def resolve_policy_groups(
     *,
     policy_file: Path | None,
-    replication_groups: list[str],
+    group_names: list[str],
+    target: str,
     client: LinodeClientProtocol | None,
 ) -> ResolvedRegionPolicyGroups | None:
-    if not replication_groups:
+    if not group_names:
         return None
     if policy_file is None:
-        raise CaptureReplicateDeployError("replication groups require a region policy file")
-    return resolve_region_policy_groups(path=policy_file, group_names=replication_groups, client=client)
+        raise CaptureReplicateDeployError(f"{target} groups require a region policy file")
+    return resolve_region_policy_groups(path=policy_file, group_names=group_names, client=client)
 
 
-def group_sources(options: CaptureReplicateDeployOptions) -> list[dict[str, Any]]:
-    if options.region_policy_resolution is None:
+def deploy_group_sources(options: CaptureReplicateDeployOptions) -> list[dict[str, Any]]:
+    if options.deploy_policy_resolution is None:
         return []
-    return [dict(source) for source in options.region_policy_resolution.group_sources]
+    return [dict(source) for source in options.deploy_policy_resolution.group_sources]
+
+
+def replication_group_sources(options: CaptureReplicateDeployOptions) -> list[dict[str, Any]]:
+    if options.replication_policy_resolution is None:
+        return []
+    return [dict(source) for source in options.replication_policy_resolution.group_sources]
 
 
 def region_policy_manifest(options: CaptureReplicateDeployOptions) -> dict[str, Any]:
@@ -581,21 +720,33 @@ def region_policy_manifest(options: CaptureReplicateDeployOptions) -> dict[str, 
         return {
             "status": "not_configured",
             "path": None,
+            "replication_enabled": options.replication_enabled,
+            "requested_deploy_groups": [],
+            "deploy_group_sources": [],
+            "requested_replication_groups": [],
+            "replication_group_sources": [],
             "requested_groups": [],
             "group_sources": [],
         }
+    resolved = options.deploy_policy_resolution is not None or options.replication_policy_resolution is not None
     return {
-        "status": "resolved" if options.region_policy_resolution is not None else "not_used",
+        "status": "resolved" if resolved else "not_used",
         "path": str(options.region_policy_file),
+        "replication_enabled": options.replication_enabled,
+        "requested_deploy_groups": list(options.deploy_groups),
+        "deploy_group_sources": deploy_group_sources(options),
+        "requested_replication_groups": list(options.replication_groups),
+        "replication_group_sources": replication_group_sources(options),
         "requested_groups": list(options.replication_groups),
-        "group_sources": group_sources(options),
+        "group_sources": replication_group_sources(options),
     }
 
 
 def policy_validation_manifest(options: CaptureReplicateDeployOptions) -> dict[str, Any]:
-    if options.region_policy_resolution is None:
+    resolution = options.deploy_policy_resolution or options.replication_policy_resolution
+    if resolution is None:
         return {"status": "not_required"}
-    report = options.region_policy_resolution.validation_report
+    report = resolution.validation_report
     return {
         "status": "succeeded",
         "region_policy": {
@@ -613,7 +764,7 @@ def policy_validation_manifest(options: CaptureReplicateDeployOptions) -> dict[s
 def validate_regions(options: CaptureReplicateDeployOptions) -> None:
     if not options.deploy_regions:
         raise CaptureReplicateDeployError("capture-replicate-deploy requires at least one non-empty --region")
-    if not options.replication_target_regions:
+    if options.replication_enabled and not options.replication_target_regions:
         raise CaptureReplicateDeployError(
             "capture-replicate-deploy requires at least one resolved replication target region"
         )

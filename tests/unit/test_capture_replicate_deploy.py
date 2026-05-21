@@ -223,6 +223,299 @@ class FakeRegionPolicyClient:
 
 
 class CaptureReplicateDeployTests(unittest.TestCase):
+    def test_dry_run_resolves_deploy_group_to_deploy_targets(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-sea"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ]
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+        ):
+            manifest = capture_replicate_deploy_plan(
+                regions=[],
+                deploy_groups=["operator_deploy"],
+                replication_regions=["us-east"],
+                region_policy_file=str(policy_path),
+                run_id="run-test",
+                ttl="2030-01-01T00:00:00Z",
+                client=ExplodingClient(),
+                region_policy_client=policy_client,
+            )
+
+        self.assertTrue(manifest["dry_run"])
+        self.assertEqual(manifest["provider_calls"], "not_attempted")
+        self.assertEqual(manifest["summary"]["explicit_deploy_regions"], [])
+        self.assertEqual(manifest["summary"]["requested_deploy_groups"], ["operator_deploy"])
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-sea"])
+        self.assertEqual(manifest["summary"]["capture_region"], "us-sea")
+        self.assertEqual(manifest["summary"]["replication_target_regions"], ["us-east"])
+        self.assertEqual(
+            manifest["deploy_plan"]["group_sources"],
+            [{"group": "operator_deploy", "source": "groups", "regions": ["us-sea"]}],
+        )
+        self.assertEqual(manifest["region_policy"]["requested_deploy_groups"], ["operator_deploy"])
+
+    def test_mixed_deploy_regions_and_deploy_groups_dedupe_deterministically(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-lax", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-sea", "us-lax"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-lax", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ]
+        )
+
+        manifest = capture_replicate_deploy_plan(
+            regions=["US-EAST", "us-east", "us-sea"],
+            deploy_groups=["operator_deploy", "operator_deploy"],
+            replication_regions=["us-east"],
+            region_policy_file=str(policy_path),
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-east", "us-sea", "us-lax"])
+        self.assertEqual(manifest["summary"]["capture_region"], "us-east")
+        self.assertEqual(manifest["deploy_plan"]["deploy_regions"], ["us-east", "us-sea", "us-lax"])
+
+    def test_deploy_group_prefers_operator_group_over_generated_group(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-lax", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"country_us": ["us-lax"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-lax", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ]
+        )
+
+        manifest = capture_replicate_deploy_plan(
+            regions=["us-east"],
+            deploy_groups=["country_us"],
+            replication_regions=["us-east"],
+            region_policy_file=str(policy_path),
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-east", "us-lax"])
+        self.assertEqual(
+            manifest["region_policy"]["deploy_group_sources"],
+            [{"group": "country_us", "source": "groups", "regions": ["us-lax"]}],
+        )
+
+    def test_deploy_groups_and_replication_groups_do_not_cross_over(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={
+                "operator_deploy": ["us-west"],
+                "operator_replication": ["us-east"],
+            },
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ]
+        )
+
+        manifest = capture_replicate_deploy_plan(
+            regions=[],
+            deploy_groups=["operator_deploy"],
+            replication_groups=["operator_replication"],
+            region_policy_file=str(policy_path),
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-west"])
+        self.assertEqual(manifest["summary"]["replication_target_regions"], ["us-east"])
+        self.assertNotIn("us-west", manifest["summary"]["replication_target_regions"])
+        self.assertNotIn("us-east", manifest["summary"]["deploy_regions"])
+
+    def test_no_replication_input_defaults_to_resolved_deploy_targets(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-sea"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ]
+        )
+
+        manifest = capture_replicate_deploy_plan(
+            regions=["us-east"],
+            deploy_groups=["operator_deploy"],
+            region_policy_file=str(policy_path),
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-east", "us-sea"])
+        self.assertEqual(manifest["summary"]["replication_target_regions"], ["us-east", "us-sea"])
+        self.assertEqual(manifest["summary"]["replication_target_source"], "deploy_regions_default")
+        self.assertTrue(manifest["summary"]["replication_enabled"])
+
+    def test_replication_disabled_does_not_default_deploy_targets_to_replication_targets(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-west"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ]
+        )
+
+        manifest = capture_replicate_deploy_plan(
+            regions=["us-east"],
+            deploy_groups=["operator_deploy"],
+            replication_enabled=False,
+            region_policy_file=str(policy_path),
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-east", "us-west"])
+        self.assertFalse(manifest["summary"]["replication_enabled"])
+        self.assertEqual(manifest["summary"]["replication_skip_reason"], "replication_enabled=false")
+        self.assertEqual(manifest["summary"]["replication_target_regions"], [])
+        self.assertEqual(manifest["summary"]["replication_target_source"], "replication_disabled")
+        self.assertEqual(manifest["replication_plan"]["status"], "skipped")
+        self.assertEqual(manifest["replication_plan"]["skip_reason"], "replication_enabled=false")
+        self.assertEqual(manifest["region_policy"]["requested_deploy_groups"], ["operator_deploy"])
+
+    def test_replication_disabled_rejects_replication_inputs(self) -> None:
+        with self.assertRaises(CaptureReplicateDeployError) as raised:
+            capture_replicate_deploy_plan(
+                regions=["us-east"],
+                replication_regions=["us-sea"],
+                replication_enabled=False,
+            )
+
+        self.assertIn("replication_enabled=false", str(raised.exception))
+
+    def test_execute_with_deploy_groups_captures_and_deploys_resolved_deploy_targets_only(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-sea", "us-east"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            ]
+        )
+        client = FakeCaptureReplicateDeployClient(image_regions=[{"region": "us-east", "status": "available"}])
+
+        manifest = capture_replicate_deploy_plan(
+            regions=[],
+            deploy_groups=["operator_deploy"],
+            replication_regions=["us-east"],
+            region_policy_file=str(policy_path),
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/alpine3.23",
+            instance_type="g6-nanode-1",
+            client=client,
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertEqual(manifest["summary"]["capture_region"], "us-sea")
+        self.assertEqual(manifest["summary"]["deploy_regions"], ["us-sea", "us-east"])
+        self.assertEqual(manifest["summary"]["replication_target_regions"], ["us-east"])
+        self.assertEqual(client.created_regions[0], "us-sea")
+        self.assertEqual(set(manifest["deploy_results"]), {"us-sea", "us-east"})
+        self.assertEqual(client.submitted_regions, ["us-east"])
+
+    def test_execute_with_replication_disabled_skips_replication_api_path(self) -> None:
+        policy_path = self.write_policy(
+            provider_regions=[
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ],
+            generated_groups={},
+            groups={"operator_deploy": ["us-west", "us-east"]},
+        )
+        policy_client = FakeRegionPolicyClient(
+            [
+                {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+                {"region": "us-west", "capabilities": ["Linodes"], "country": "us"},
+            ]
+        )
+        client = FakeCaptureReplicateDeployClient(region_capabilities={"us-west": ["Linodes"]})
+
+        manifest = capture_replicate_deploy_plan(
+            regions=[],
+            deploy_groups=["operator_deploy"],
+            replication_enabled=False,
+            region_policy_file=str(policy_path),
+            run_id="run-test",
+            ttl="2030-01-01T00:00:00Z",
+            execute=True,
+            source_image="linode/alpine3.23",
+            instance_type="g6-nanode-1",
+            client=client,
+            region_policy_client=policy_client,
+        )
+
+        self.assertEqual(manifest["status"], "succeeded")
+        self.assertFalse(manifest["summary"]["replication_enabled"])
+        self.assertEqual(manifest["replication"]["status"], "skipped")
+        self.assertEqual(manifest["validation"]["replication"]["status"], "skipped")
+        self.assertEqual(manifest["validation"]["status"], "succeeded")
+        self.assertEqual(manifest["summary"]["replication_target_regions"], [])
+        self.assertEqual(set(manifest["deploy_results"]), {"us-west", "us-east"})
+        self.assertIn("create_deploy_instance:us-west", client.calls)
+        self.assertIn("create_deploy_instance:us-east", client.calls)
+        self.assertNotIn("get_image_details", client.calls)
+        self.assertNotIn("replicate_image", client.calls)
+        self.assertNotIn("wait_image_regions_available", client.calls)
+        self.assertEqual([call for call in client.calls if call.startswith("get_region_details:")], [])
+
     def test_dry_run_resolves_generated_group_to_replication_targets(self) -> None:
         policy_path = self.write_policy(
             provider_regions=[

@@ -7,15 +7,29 @@
   generated provider facts from operator-owned grouping intent.
 - Add generated helper groups and a checked-in `policy/region-policy.toml`
   provider policy snapshot for reviewing provider region and capability drift.
+- Add operator-owned geo groups to the checked-in region policy, including
+  separate image-replication groups where the current policy supports them.
+- Add versioned bounded geo `capture-replicate-deploy` smoke configs under
+  `examples/smoke/` for provider validation of checked-in replication policy
+  semantics without broad deploy fan-out.
+- Add `replication_enabled = false` for explicit deploy-only
+  `capture-replicate-deploy` validation, plus broader geo deploy validation
+  configs under `examples/geo/`.
 - Add capability-scoped generated country helper groups, such as
   `country_us_object_storage`, while preserving strict execution-time
   capability validation.
 - Add narrow documented provider overrides for image-replication generated
   helper groups, including `country_us_image_replication`, without mutating raw
   provider facts or provider-backed capability groups.
+- Extend image-replication provider discrepancy handling to exclude
+  `au-mel`, `fr-par-2`, `gb-lon`, `jp-tyo-3`, and `sg-sin-2` from
+  image-replication helper groups while preserving raw provider facts and
+  provider-backed capability groups.
 - Allow `capture-replicate-deploy` to consume checked-in region policy groups
   as replication targets while keeping deploy regions explicit and mutation
   gated behind `--execute`.
+- Allow `capture-replicate-deploy` to consume `deploy_groups` as deploy target
+  expansion while keeping deploy intent and replication intent separate.
 - Stop treating explicit deploy regions as requested replication targets when
   `capture-replicate-deploy` is configured with replication regions or groups;
   the replication request still preserves provider-reported existing image

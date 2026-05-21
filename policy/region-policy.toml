@@ -104,7 +104,7 @@ capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block S
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_overrides.image_replication_excluded_regions]
-regions = ["de-fra-2", "us-iad-2"]
+regions = ["au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"]
 reason = "Provider currently advertises Object Storage, but image replication POST rejects these regions."
 
 [generated_groups.capability_aclp_logs_datacenter_lke_e]
@@ -563,9 +563,6 @@ regions = ["eu-west", "gb-lon"]
 [generated_groups.country_gb_gpu_linodes]
 regions = ["gb-lon"]
 
-[generated_groups.country_gb_image_replication]
-regions = ["gb-lon"]
-
 [generated_groups.country_gb_kubernetes]
 regions = ["eu-west", "gb-lon"]
 
@@ -827,9 +824,6 @@ regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
 [generated_groups.country_jp_gpu_linodes]
 regions = ["jp-osa", "jp-tyo-3"]
 
-[generated_groups.country_jp_image_replication]
-regions = ["jp-tyo-3"]
-
 [generated_groups.country_jp_kubernetes]
 regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
 
@@ -1010,9 +1004,6 @@ regions = ["ap-south", "sg-sin-2"]
 [generated_groups.country_sg_gpu_linodes]
 regions = ["ap-south", "sg-sin-2"]
 
-[generated_groups.country_sg_image_replication]
-regions = ["sg-sin-2"]
-
 [generated_groups.country_sg_kubernetes]
 regions = ["ap-south", "sg-sin-2"]
 
@@ -1123,3 +1114,33 @@ regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "u
 
 [generated_groups.country_us_vpcs]
 regions = ["us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
+
+[groups.geo_americas]
+regions = ["br-gru", "ca-central", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
+
+[groups.geo_americas_image_replication]
+regions = ["br-gru", "us-east", "us-iad", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+
+[groups.geo_apac_north]
+regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
+
+[groups.geo_apac_southeast]
+regions = ["ap-south", "id-cgk", "sg-sin-2"]
+
+[groups.geo_apac_southeast_image_replication]
+regions = ["id-cgk"]
+
+[groups.geo_europe]
+regions = ["de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "it-mil", "nl-ams", "se-sto"]
+
+[groups.geo_europe_image_replication]
+regions = ["fr-par"]
+
+[groups.geo_india]
+regions = ["ap-west", "in-bom-2", "in-maa"]
+
+[groups.geo_india_image_replication]
+regions = ["in-maa"]
+
+[groups.geo_oceania]
+regions = ["ap-southeast", "au-mel"]

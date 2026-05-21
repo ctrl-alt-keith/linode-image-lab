@@ -1,0 +1,15 @@
+# Broad capture-replicate-deploy validation config for Americas.
+# Deploy intent uses the operator-owned geo_americas group.
+# Image availability uses the checked-in geo_americas_image_replication group.
+# This is broader and longer-running than bounded smoke configs.
+# Review dry-run output before executing with --execute and LINODE_TOKEN.
+schema_version = 1
+
+[defaults]
+ttl = "3h"
+
+[capture-replicate-deploy]
+deploy_groups = ["geo_americas"]
+replication_groups = ["geo_americas_image_replication"]
+source_image = "linode/alpine3.23"
+type = "g6-nanode-1"

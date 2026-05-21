@@ -74,6 +74,11 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
 
 def add_replication_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--deploy-group",
+        action="append",
+        help="Region policy group to expand into deploy targets. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
         "--replication-region",
         action="append",
         help="Explicit image replication target region. May be repeated or comma-separated.",
@@ -281,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
         "capture-replicate-deploy",
         help="Plan or execute capture, explicit replication, and deploy validation.",
     )
+    capture_replicate_deploy.set_defaults(replication_enabled=True)
     add_version_arg(capture_replicate_deploy, version_text)
     add_config_arg(capture_replicate_deploy, dest="command_config")
     add_region_args(capture_replicate_deploy, required=True)
@@ -367,13 +373,19 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
     config = load_config(config_path(args))
     defaults = command_defaults(config, args.command)
 
+    if args.command == "capture-replicate-deploy":
+        if args.deploy_group is None and "deploy_groups" in defaults:
+            args.deploy_group = defaults["deploy_groups"]
+
     if args.command in {"plan", "capture", "deploy", "capture-deploy", "capture-replicate-deploy", "replicate"}:
         if args.region is None:
             if args.command == "capture-replicate-deploy":
                 args.region = config_deploy_regions(defaults)
             else:
                 args.region = config_regions(defaults)
-        if not parse_regions(args.region):
+        if not parse_regions(args.region) and (
+            args.command != "capture-replicate-deploy" or not parse_string_values(args.deploy_group)
+        ):
             raise ValueError("at least one non-empty --region is required")
 
     if hasattr(args, "ttl") and args.ttl is None and "ttl" in defaults:
@@ -408,10 +420,12 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
         args.user_data = resolved_user_data(defaults, args)
 
     if args.command == "capture-replicate-deploy":
-        if args.replication_region is None and "replication_regions" in defaults:
-            args.replication_region = defaults["replication_regions"]
         if args.replication_group is None and "replication_groups" in defaults:
             args.replication_group = defaults["replication_groups"]
+        if args.replication_region is None and "replication_regions" in defaults:
+            args.replication_region = defaults["replication_regions"]
+        if "replication_enabled" in defaults:
+            args.replication_enabled = defaults["replication_enabled"]
         if args.region_policy_file is None and "region_policy_file" in defaults:
             args.region_policy_file = defaults["region_policy_file"]
 
@@ -477,6 +491,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
     region_field = "deploy_regions" if target_command == "capture-replicate-deploy" else "regions"
     candidate_values = {
         region_field: args.region,
+        "deploy_groups": getattr(args, "deploy_group", None),
         "ttl": args.ttl,
         "replication_regions": args.replication_region,
         "replication_groups": args.replication_group,
@@ -496,6 +511,7 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
     }
     option_names = {
         "deploy_regions": "--region",
+        "deploy_groups": "--deploy-group",
         "regions": "--region",
         "ttl": "--ttl",
         "replication_regions": "--replication-region",
@@ -637,8 +653,10 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "capture-replicate-deploy":
         return capture_replicate_deploy_plan(
             regions=parse_regions(args.region),
+            deploy_groups=parse_string_values(args.deploy_group),
             replication_regions=parse_regions(args.replication_region),
             replication_groups=parse_string_values(args.replication_group),
+            replication_enabled=args.replication_enabled,
             region_policy_file=args.region_policy_file,
             run_id=args.run_id,
             ttl=args.ttl,
