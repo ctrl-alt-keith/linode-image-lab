@@ -14,6 +14,8 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
 - Allow explicit image replication submission only after explicit opt-in.
 - Allow a bounded operator path that captures, explicitly replicates, waits for
   requested replicas to report available, and deploys from that captured image.
+- Generate and validate a version-controlled region policy artifact that keeps
+  provider region facts separate from operator-owned grouping intent.
 
 ## Non-Goals
 
@@ -22,6 +24,9 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
   general-purpose multi-region orchestration outside bounded
   capture-deploy and capture-replicate-deploy validation runs.
 - No infrastructure ownership or planning model.
+- No automatic geography inference, nearest-region logic, latency probing,
+  fallback placement, long-lived resource reconciliation, or replication policy
+  execution from region policy artifacts.
 - CI exists to run `make check`.
 
 ## Execution Model Boundary
@@ -45,6 +50,8 @@ first-class outcome.
   replication submission.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
   serialization.
+- `region_policy.py` owns provider-backed region policy TOML generation and
+  validation.
 - `regions.py` owns one-or-many region parsing.
 - `cleanup.py` owns tag-based cleanup candidate selection and standalone
   cleanup execution.
@@ -174,6 +181,59 @@ first region, treats the full region list as the deploy and replication target
 set, verifies requested replication targets expose the provider `Object Storage`
 capability before capture, and can receive the same deploy metadata defaults as
 `capture-deploy`.
+
+## Region Policy Artifacts
+
+`region-policy generate` reads public Linode provider region metadata through
+the API boundary and writes deterministic TOML. The generated
+`[provider_regions.*]` tables are provider fact data: region id plus normalized
+capability names only. They intentionally omit labels, resolver IPs, account
+limits, private resource identifiers, and any other account-specific or
+unneeded provider fields.
+
+`[generated_groups.*]` tables are generated convenience scaffolding. Capability
+groups are derived from provider capability names, and country groups are
+derived only from provider-exposed country codes. These groups are safe to
+overwrite on regeneration and are not an operator policy layer.
+
+`[groups.*]` tables are operator-owned intent. Each group has an explicit
+`regions = [...]` list whose meaning is defined locally by the operator. A
+group can represent any semantic boundary useful to the operator, but the tool
+does not infer that boundary from country, city, coordinates, network latency,
+provider labels, or region naming conventions.
+
+When generation writes to an existing policy file, it parses and preserves the
+supported `groups.*` tables while refreshing generated provider facts and
+generated helper groups. If the existing operator-owned groups are malformed or
+contain unsupported fields, generation fails rather than dropping operator
+intent. Stale or malformed `generated_groups.*` tables do not block generation
+because they are overwritten. `--replace-groups` is the explicit escape hatch
+for dropping operator-owned groups.
+
+The repository intentionally carries `policy/region-policy.toml` as the current
+full generated provider policy snapshot. Operators can rerun generation and
+review the version-control diff to detect provider region or capability drift.
+The checked-in snapshot should not contain hand-authored `groups.*` tables
+unless that operator intent is deliberately documented. The operational
+maintenance loop is documented in
+[`README.md`](../README.md#maintaining-region-policy-artifacts).
+
+`region-policy validate` reads the artifact and current provider region
+metadata, then emits sanitized JSON. It validates:
+
+- `schema_version = 1`,
+- a non-empty `[provider_regions.*]` structure,
+- provider region entries with only `capabilities = [...]`,
+- generated and operator group entries with only `regions = [...]`,
+- all provider regions in the artifact still exist,
+- all current provider regions are present in the artifact,
+- stored provider capabilities match current provider capabilities, and
+- every generated or operator group region reference points at a current
+  provider region.
+
+Validation is a policy-file freshness and shape check only. It does not choose
+where to deploy, expand groups into execution plans, run replication, probe
+latency, create fallbacks, or manage long-lived resource declarations.
 
 ## Capture Execution Boundary
 
