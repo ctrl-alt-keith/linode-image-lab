@@ -13,6 +13,7 @@ from unittest.mock import patch
 from linode_image_lab.cli import build_parser, main
 from linode_image_lab.config import AUTHORIZED_KEYS_FILE_MAX_BYTES
 from linode_image_lab.linode_api import LinodeTokenError
+from linode_image_lab.region_policy import generated_region_groups
 from linode_image_lab.user_data import USER_DATA_FILE_MAX_BYTES
 
 PUBLIC_KEY_ONE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA one@example"
@@ -553,6 +554,87 @@ regions = ["us-ghost"]
         self.assertNotIn(PUBLIC_KEY_ONE, payload_text)
         self.assertNotIn(USER_DATA, payload_text)
 
+    def test_capture_replicate_deploy_config_uses_default_policy_for_groups(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        provider_regions = [
+            {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            {"region": "us-sea", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+        ]
+        self.write_region_policy(root / "policy" / "region-policy.toml", provider_regions=provider_regions)
+        config_path = root / "lab.toml"
+        config_path.write_text(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            deploy_regions = ["us-east"]
+            replication_groups = ["country_us"]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """,
+            encoding="utf-8",
+        )
+
+        output = StringIO()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("linode_image_lab.region_policy.LinodeClient", return_value=FakeRegionClient(provider_regions)),
+                patch("linode_image_lab.linode_api.LinodeClient.from_env", side_effect=AssertionError("token lookup")),
+                redirect_stdout(output),
+            ):
+                code = main(["capture-replicate-deploy", "--config", str(config_path)])
+        finally:
+            os.chdir(original_cwd)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["region_policy"]["path"], "policy/region-policy.toml")
+        self.assertEqual(payload["summary"]["deploy_regions"], ["us-east"])
+        self.assertEqual(payload["summary"]["replication_target_regions"], ["us-east", "us-sea"])
+
+    def test_capture_replicate_deploy_config_uses_policy_file_override(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        provider_regions = [
+            {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+            {"region": "us-lax", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
+        ]
+        policy_path = root / "policy" / "staging-region-policy.toml"
+        self.write_region_policy(policy_path, provider_regions=provider_regions)
+        config_path = root / "lab.toml"
+        config_path.write_text(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            deploy_regions = ["us-east"]
+            replication_groups = ["country_us"]
+            region_policy_file = "policy/staging-region-policy.toml"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """,
+            encoding="utf-8",
+        )
+
+        output = StringIO()
+        with (
+            patch("linode_image_lab.region_policy.LinodeClient", return_value=FakeRegionClient(provider_regions)),
+            redirect_stdout(output),
+        ):
+            code = main(["capture-replicate-deploy", "--config", str(config_path)])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["region_policy"]["path"], str(policy_path))
+        self.assertEqual(payload["summary"]["replication_target_regions"], ["us-east", "us-lax"])
+
     def test_duplicate_global_and_command_local_config_fails_clearly(self) -> None:
         global_config_path = self.write_config(
             """
@@ -1070,12 +1152,62 @@ regions = ["us-ghost"]
 
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(payload["effective_defaults"]["regions"], ["us-sea", "us-east"])
+        self.assertEqual(payload["effective_defaults"]["deploy_regions"], ["us-sea", "us-east"])
         self.assertEqual(payload["effective_defaults"]["source_image"], "linode/alpine3.23")
         self.assertEqual(payload["effective_defaults"]["type"], "g6-nanode-1")
         self.assertEqual(payload["effective_defaults"]["firewall_id"], "[REDACTED]")
         self.assertEqual(payload["effective_defaults"]["authorized_keys"], {"enabled": True, "authorized_key_count": 1})
         self.assertEqual(payload["precedence"], ["cli", "[deploy]", "[capture-replicate-deploy]", "[defaults]"])
+
+    def test_config_validate_reports_capture_replicate_policy_inputs(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            deploy_regions = ["us-east"]
+            replication_regions = ["us-sea"]
+            replication_groups = ["country_us"]
+            region_policy_file = "policy/staging-region-policy.toml"
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["config", "validate", "--config", config_path, "--command", "capture-replicate-deploy"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["deploy_regions"], ["us-east"])
+        self.assertEqual(payload["effective_defaults"]["replication_regions"], ["us-sea"])
+        self.assertEqual(payload["effective_defaults"]["replication_groups"], ["country_us"])
+        self.assertTrue(payload["effective_defaults"]["region_policy_file"].endswith("policy/staging-region-policy.toml"))
+        self.assertIn({"field": "replication_groups", "source": "[capture-replicate-deploy].replication_groups"}, payload["sources"])
+        self.assertIn({"field": "region_policy_file", "source": "[capture-replicate-deploy].region_policy_file"}, payload["sources"])
+
+    def test_config_validate_reports_default_region_policy_file_for_groups(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [capture-replicate-deploy]
+            deploy_regions = ["us-east"]
+            replication_groups = ["country_us"]
+            source_image = "linode/alpine3.23"
+            type = "g6-nanode-1"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["config", "validate", "--config", config_path, "--command", "capture-replicate-deploy"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["effective_defaults"]["region_policy_file"], "policy/region-policy.toml")
+        self.assertIn({"field": "region_policy_file", "source": "default policy/region-policy.toml"}, payload["sources"])
 
     def test_capture_replicate_deploy_config_rejects_user_data_file_in_command_table(self) -> None:
         config_path = self.write_config(
@@ -1797,6 +1929,21 @@ regions = ["us-ghost"]
         path = Path(directory.name) / name
         path.write_bytes(data)
         return str(path)
+
+    def write_region_policy(self, path: Path, *, provider_regions: list[dict[str, object]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        generated_groups = generated_region_groups(provider_regions)
+        lines = ["schema_version = 1", ""]
+        for region in provider_regions:
+            lines.append(f"[provider_regions.{region['region']}]")
+            capabilities = ", ".join(f'"{capability}"' for capability in region["capabilities"])
+            lines.append(f"capabilities = [{capabilities}]")
+            lines.append("")
+        for group, regions in sorted(generated_groups.items()):
+            lines.append(f"[generated_groups.{group}]")
+            lines.append("regions = [" + ", ".join(f'"{region}"' for region in regions) + "]")
+            lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

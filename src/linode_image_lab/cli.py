@@ -25,6 +25,7 @@ from .config import (
     load_user_data,
     normalize_firewall_id,
     normalize_authorized_key,
+    parse_string_values,
 )
 from .deploy import DeployError, deploy_plan
 from .firewall_sync import FirewallSyncError, firewall_sync_plan
@@ -69,6 +70,23 @@ def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
     )
     parser.add_argument("--run-id", type=run_id_value, help="Optional run id for deterministic planning.")
     parser.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp or relative duration like '1 day'.")
+
+
+def add_replication_policy_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--replication-region",
+        action="append",
+        help="Explicit image replication target region. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--replication-group",
+        action="append",
+        help="Region policy group to expand into image replication targets. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--region-policy-file",
+        help="Region policy artifact to use when resolving replication groups.",
+    )
 
 
 def add_firewall_arg(parser: argparse.ArgumentParser) -> None:
@@ -193,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_firewall_arg(config_validate)
     add_authorized_keys_args(config_validate)
     add_user_data_arg(config_validate)
+    add_replication_policy_args(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -276,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_firewall_arg(capture_replicate_deploy)
     add_authorized_keys_args(capture_replicate_deploy)
     add_user_data_arg(capture_replicate_deploy)
+    add_replication_policy_args(capture_replicate_deploy)
     capture_replicate_deploy.add_argument(
         "--preserve-instance",
         action="store_true",
@@ -349,7 +369,10 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
 
     if args.command in {"plan", "capture", "deploy", "capture-deploy", "capture-replicate-deploy", "replicate"}:
         if args.region is None:
-            args.region = config_regions(defaults)
+            if args.command == "capture-replicate-deploy":
+                args.region = config_deploy_regions(defaults)
+            else:
+                args.region = config_regions(defaults)
         if not parse_regions(args.region):
             raise ValueError("at least one non-empty --region is required")
 
@@ -383,6 +406,14 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             args.firewall_id = defaults["firewall_id"]
         args.authorized_keys = merged_authorized_keys(defaults, args)
         args.user_data = resolved_user_data(defaults, args)
+
+    if args.command == "capture-replicate-deploy":
+        if args.replication_region is None and "replication_regions" in defaults:
+            args.replication_region = defaults["replication_regions"]
+        if args.replication_group is None and "replication_groups" in defaults:
+            args.replication_group = defaults["replication_groups"]
+        if args.region_policy_file is None and "region_policy_file" in defaults:
+            args.region_policy_file = defaults["region_policy_file"]
 
     if args.command == "firewall-sync":
         for field in (
@@ -443,9 +474,13 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
     allowed_fields = set(COMMAND_DEFAULT_FIELDS[target_command])
     values: dict[str, Any] = {}
 
+    region_field = "deploy_regions" if target_command == "capture-replicate-deploy" else "regions"
     candidate_values = {
-        "regions": args.region,
+        region_field: args.region,
         "ttl": args.ttl,
+        "replication_regions": args.replication_region,
+        "replication_groups": args.replication_group,
+        "region_policy_file": args.region_policy_file,
         "source_image": args.source_image,
         "image_id": args.image_id,
         "type": args.instance_type,
@@ -460,8 +495,12 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "managed_label": getattr(args, "managed_label", None),
     }
     option_names = {
+        "deploy_regions": "--region",
         "regions": "--region",
         "ttl": "--ttl",
+        "replication_regions": "--replication-region",
+        "replication_groups": "--replication-group",
+        "region_policy_file": "--region-policy-file",
         "source_image": "--source-image",
         "image_id": "--image-id",
         "type": "--type",
@@ -502,6 +541,12 @@ def config_regions(defaults: dict[str, Any]) -> list[str] | None:
     if "region" in defaults:
         return [defaults["region"]]
     return None
+
+
+def config_deploy_regions(defaults: dict[str, Any]) -> list[str] | None:
+    if "deploy_regions" in defaults:
+        return list(defaults["deploy_regions"])
+    return config_regions(defaults)
 
 
 def config_instance_type(defaults: dict[str, Any]) -> str | None:
@@ -592,6 +637,9 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "capture-replicate-deploy":
         return capture_replicate_deploy_plan(
             regions=parse_regions(args.region),
+            replication_regions=parse_regions(args.replication_region),
+            replication_groups=parse_string_values(args.replication_group),
+            region_policy_file=args.region_policy_file,
             run_id=args.run_id,
             ttl=args.ttl,
             execute=args.execute,
