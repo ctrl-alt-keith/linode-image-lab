@@ -1,7 +1,7 @@
 # Bounded capture-replicate-deploy execute smoke config for Europe.
 # Deploy intent uses one explicit region to keep provider smoke narrow.
 # Image availability uses the checked-in geo_europe_image_replication group.
-# gb-lon remains a deploy target but is excluded from image replication by policy.
+# de-fra-2 and gb-lon remain deploy targets but are excluded from image replication by policy.
 # This is not broad geo deploy fan-out coverage.
 # Review dry-run output before executing with --execute and LINODE_TOKEN.
 schema_version = 1
@@ -10,7 +10,7 @@ schema_version = 1
 ttl = "3h"
 
 [capture-replicate-deploy]
-deploy_regions = ["fr-par"]
+deploy_regions = ["de-fra-2"]
 replication_groups = ["geo_europe_image_replication"]
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
