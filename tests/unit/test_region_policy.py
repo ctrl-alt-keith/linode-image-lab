@@ -9,6 +9,7 @@ from linode_image_lab.region_policy import (
     generate_region_policy_artifact,
     generated_country_capability_group_name,
     generated_region_groups,
+    load_policy,
     serialize_validation_report,
     validate_region_policy_artifact,
 )
@@ -23,6 +24,68 @@ class FakeRegionClient:
 
 
 class RegionPolicyTests(unittest.TestCase):
+    def test_checked_in_policy_contains_operator_geo_groups(self) -> None:
+        policy_path = Path(__file__).resolve().parents[2] / "policy" / "region-policy.toml"
+        policy = load_policy(policy_path)
+
+        groups = policy["groups"]
+        self.assertEqual(
+            policy["provider_overrides"]["image_replication_excluded_regions"]["regions"],
+            ["au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"],
+        )
+        self.assertEqual(
+            groups["geo_americas"]["regions"],
+            [
+                "br-gru",
+                "ca-central",
+                "us-central",
+                "us-east",
+                "us-iad",
+                "us-iad-2",
+                "us-lax",
+                "us-mia",
+                "us-ord",
+                "us-sea",
+                "us-southeast",
+                "us-west",
+            ],
+        )
+        self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par"])
+        self.assertEqual(groups["geo_apac_north"]["regions"], ["ap-northeast", "jp-osa", "jp-tyo-3"])
+        self.assertEqual(groups["geo_apac_southeast_image_replication"]["regions"], ["id-cgk"])
+        self.assertEqual(groups["geo_india_image_replication"]["regions"], ["in-maa"])
+        self.assertEqual(
+            policy["provider_regions"]["jp-tyo-3"]["capabilities"],
+            [
+                "ACLP Logs Datacenter LKE-E",
+                "Backups",
+                "Block Storage",
+                "Block Storage Encryption",
+                "Cloud Firewall",
+                "Disk Encryption",
+                "GPU Linodes",
+                "Kubernetes",
+                "Linode Interfaces",
+                "Linodes",
+                "Maintenance Policy",
+                "Managed Databases",
+                "Metadata",
+                "NodeBalancers",
+                "Object Storage",
+                "Placement Group",
+                "Premium Plans",
+                "StackScripts",
+                "VPCs",
+                "Vlans",
+            ],
+        )
+        self.assertEqual(policy["generated_groups"]["country_jp_object_storage"]["regions"], ["jp-tyo-3"])
+        self.assertNotIn("country_jp_image_replication", policy["generated_groups"])
+        self.assertNotIn("country_gb_image_replication", policy["generated_groups"])
+        self.assertNotIn("country_sg_image_replication", policy["generated_groups"])
+        self.assertNotIn("geo_apac_north_image_replication", groups)
+        self.assertNotIn("geo_oceania_image_replication", groups)
+
     def test_generation_is_deterministic_and_normalizes_capabilities(self) -> None:
         client = FakeRegionClient(
             [
@@ -135,6 +198,11 @@ regions = ["us-sea"]
                 "country": "us",
             },
             {
+                "region": "jp-tyo-3",
+                "capabilities": ["Linodes", "Object Storage"],
+                "country": "jp",
+            },
+            {
                 "region": "us-west",
                 "capabilities": ["Linodes"],
                 "country": "us",
@@ -144,7 +212,7 @@ regions = ["us-sea"]
             provider_regions,
             provider_overrides={
                 "image_replication_excluded_regions": {
-                    "regions": ["de-fra-2", "us-iad-2"],
+                    "regions": ["de-fra-2", "jp-tyo-3", "us-iad-2"],
                     "reason": "provider discrepancy",
                 }
             },
@@ -153,9 +221,12 @@ regions = ["us-sea"]
         self.assertEqual(groups["country_de"], ["de-fra-2"])
         self.assertEqual(groups["country_de_object_storage"], ["de-fra-2"])
         self.assertNotIn("country_de_image_replication", groups)
+        self.assertEqual(groups["country_jp"], ["jp-tyo-3"])
+        self.assertEqual(groups["country_jp_object_storage"], ["jp-tyo-3"])
+        self.assertNotIn("country_jp_image_replication", groups)
         self.assertEqual(groups["country_us"], ["us-east", "us-iad-2", "us-west"])
         self.assertEqual(groups["country_us_object_storage"], ["us-east", "us-iad-2"])
-        self.assertEqual(groups["capability_object_storage"], ["de-fra-2", "us-east", "us-iad-2"])
+        self.assertEqual(groups["capability_object_storage"], ["de-fra-2", "jp-tyo-3", "us-east", "us-iad-2"])
         self.assertEqual(groups["country_us_image_replication"], ["us-east"])
 
     def test_country_capability_group_names_are_normalized(self) -> None:
@@ -323,21 +394,29 @@ regions = ["us-sea", "us-east"]
 capabilities = ["Linodes", "Object Storage"]
 [provider_regions.us-iad-2]
 capabilities = ["Linodes", "Object Storage"]
+[provider_regions.jp-tyo-3]
+capabilities = ["Linodes", "Object Storage"]
 [provider_regions.de-fra-2]
 capabilities = ["Linodes", "Object Storage"]
 [provider_overrides.image_replication_excluded_regions]
-regions = ["de-fra-2", "us-iad-2"]
+regions = ["de-fra-2", "jp-tyo-3", "us-iad-2"]
 reason = "Provider advertises Object Storage, but image replication rejects these regions."
 [generated_groups.capability_linodes]
-regions = ["de-fra-2", "us-east", "us-iad-2"]
+regions = ["de-fra-2", "jp-tyo-3", "us-east", "us-iad-2"]
 [generated_groups.capability_object_storage]
-regions = ["de-fra-2", "us-east", "us-iad-2"]
+regions = ["de-fra-2", "jp-tyo-3", "us-east", "us-iad-2"]
 [generated_groups.country_de]
 regions = ["de-fra-2"]
 [generated_groups.country_de_linodes]
 regions = ["de-fra-2"]
 [generated_groups.country_de_object_storage]
 regions = ["de-fra-2"]
+[generated_groups.country_jp]
+regions = ["jp-tyo-3"]
+[generated_groups.country_jp_linodes]
+regions = ["jp-tyo-3"]
+[generated_groups.country_jp_object_storage]
+regions = ["jp-tyo-3"]
 [generated_groups.country_us]
 regions = ["us-east", "us-iad-2"]
 [generated_groups.country_us_image_replication]
@@ -352,6 +431,7 @@ regions = ["us-east", "us-iad-2"]
         client = FakeRegionClient(
             [
                 {"region": "de-fra-2", "capabilities": ["Linodes", "Object Storage"], "country": "de"},
+                {"region": "jp-tyo-3", "capabilities": ["Linodes", "Object Storage"], "country": "jp"},
                 {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
                 {"region": "us-iad-2", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
             ]
@@ -369,7 +449,7 @@ regions = ["us-east", "us-iad-2"]
         policy_path.write_text(
             """schema_version = 1
 [provider_overrides.image_replication_excluded_regions]
-regions = ["de-fra-2", "us-iad-2"]
+regions = ["de-fra-2", "jp-tyo-3", "us-iad-2"]
 reason = "Provider advertises Object Storage, but image replication rejects these regions."
 """,
             encoding="utf-8",
@@ -377,6 +457,7 @@ reason = "Provider advertises Object Storage, but image replication rejects thes
         client = FakeRegionClient(
             [
                 {"region": "de-fra-2", "capabilities": ["Linodes", "Object Storage"], "country": "de"},
+                {"region": "jp-tyo-3", "capabilities": ["Linodes", "Object Storage"], "country": "jp"},
                 {"region": "us-east", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
                 {"region": "us-iad-2", "capabilities": ["Linodes", "Object Storage"], "country": "us"},
             ]
@@ -387,11 +468,14 @@ reason = "Provider advertises Object Storage, but image replication rejects thes
 
         self.assertEqual(artifact, second_artifact)
         self.assertIn("[provider_regions.de-fra-2]\ncapabilities = [\"Linodes\", \"Object Storage\"]", artifact)
+        self.assertIn("[provider_regions.jp-tyo-3]\ncapabilities = [\"Linodes\", \"Object Storage\"]", artifact)
         self.assertIn("[provider_regions.us-iad-2]\ncapabilities = [\"Linodes\", \"Object Storage\"]", artifact)
         self.assertIn("[provider_overrides.image_replication_excluded_regions]", artifact)
-        self.assertIn("regions = [\"de-fra-2\", \"us-iad-2\"]", artifact)
+        self.assertIn("regions = [\"de-fra-2\", \"jp-tyo-3\", \"us-iad-2\"]", artifact)
         self.assertIn("[generated_groups.country_de_object_storage]\nregions = [\"de-fra-2\"]", artifact)
         self.assertNotIn("[generated_groups.country_de_image_replication]", artifact)
+        self.assertIn("[generated_groups.country_jp_object_storage]\nregions = [\"jp-tyo-3\"]", artifact)
+        self.assertNotIn("[generated_groups.country_jp_image_replication]", artifact)
         self.assertIn("[generated_groups.country_us_object_storage]\nregions = [\"us-east\", \"us-iad-2\"]", artifact)
         self.assertIn("[generated_groups.country_us_image_replication]\nregions = [\"us-east\"]", artifact)
 

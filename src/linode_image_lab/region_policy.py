@@ -197,7 +197,7 @@ def resolve_region_policy_groups(
         code = first_error.get("code", "invalid_policy")
         target = first_error.get("target", str(path))
         raise RegionPolicyGroupResolutionError(
-            f"region policy validation failed before resolving replication groups: {code} at {target}",
+            f"region policy validation failed before resolving policy groups: {code} at {target}",
             report,
         )
 
@@ -222,13 +222,13 @@ def resolve_region_policy_groups(
             group = generated_groups[group_name]
         else:
             raise RegionPolicyGroupResolutionError(
-                f"unknown replication group in region policy: {group_name}",
+                f"unknown group in region policy: {group_name}",
                 report,
             )
 
         if not isinstance(group, dict) or not string_list(group.get("regions")) or not group.get("regions"):
             raise RegionPolicyGroupResolutionError(
-                f"malformed replication group in region policy: {source_namespace}.{group_name}",
+                f"malformed group in region policy: {source_namespace}.{group_name}",
                 report,
             )
 

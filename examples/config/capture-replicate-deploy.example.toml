@@ -4,10 +4,10 @@ schema_version = 1
 ttl = "12h"
 
 [capture-replicate-deploy]
-# Deploy regions are explicit deploy intent. Replication groups expand image
-# availability only and do not automatically add or remove deploy regions.
-deploy_regions = ["us-east"]
-replication_groups = ["country_us_image_replication"]
+# Deploy groups expand deploy targets. Replication groups expand image
+# availability only; neither surface automatically expands the other.
+deploy_groups = ["geo_americas"]
+replication_groups = ["geo_americas_image_replication"]
 # region_policy_file = "policy/staging-region-policy.toml"
 source_image = "linode/alpine3.23"
 type = "g6-nanode-1"
