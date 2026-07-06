@@ -158,6 +158,32 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(findings, ["README.md: email-like value detected"])
 
+    def test_git_checkout_scans_untracked_non_ignored_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            email_like = "person" + "@" + "example.com"
+            note = root / "NOTES.md"
+            note.write_text(f"contact {email_like}\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, ["NOTES.md: email-like value detected"])
+
+    def test_git_checkout_skips_ignored_untracked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            (root / ".gitignore").write_text("local-output/\n", encoding="utf-8")
+            email_like = "person" + "@" + "example.com"
+            ignored = root / "local-output" / "generated.md"
+            ignored.parent.mkdir()
+            ignored.write_text(f"contact {email_like}\n", encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, [])
+
 
 if __name__ == "__main__":
     unittest.main()

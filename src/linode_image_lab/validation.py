@@ -105,7 +105,7 @@ def iter_scanned_files(root: Path) -> list[Path]:
         return iter_local_files(root)
 
     result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z"],
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -117,7 +117,9 @@ def iter_scanned_files(root: Path) -> list[Path]:
     for name in result.stdout.decode("utf-8").split("\0"):
         if not name:
             continue
-        files.append(root / Path(name))
+        path = root / Path(name)
+        if path.is_file() and not should_skip_local_path(path.relative_to(root)):
+            files.append(path)
     return files
 
 
