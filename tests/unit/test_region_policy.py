@@ -6,10 +6,12 @@ import unittest
 from pathlib import Path
 
 from linode_image_lab.region_policy import (
+    RegionPolicyGroupResolutionError,
     generate_region_policy_artifact,
     generated_country_capability_group_name,
     generated_region_groups,
     load_policy,
+    resolve_region_policy_groups,
     serialize_validation_report,
     validate_region_policy_artifact,
 )
@@ -500,6 +502,40 @@ regions = ["us-east", "us-ghost"]
 
         self.assertFalse(report["valid"])
         self.assertIn("unknown_provider_region", {error["code"] for error in report["errors"]})
+
+    def test_group_resolution_rejects_invalid_policy_before_expansion(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        policy_path = Path(directory.name) / "region-policy.toml"
+        policy_path.write_text(
+            """schema_version = 1
+[provider_regions.us-east]
+capabilities = ["Linodes"]
+[provider_regions.us-ghost]
+capabilities = ["Linodes"]
+[generated_groups.capability_linodes]
+regions = ["us-east", "us-ghost"]
+[groups.us]
+regions = ["us-east"]
+""",
+            encoding="utf-8",
+        )
+        client = FakeRegionClient([{"region": "us-east", "capabilities": ["Linodes"]}])
+
+        with self.assertRaises(RegionPolicyGroupResolutionError) as raised:
+            resolve_region_policy_groups(path=policy_path, group_names=["us"], client=client)
+
+        report = raised.exception.validation_report
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertFalse(report["valid"])
+        self.assertEqual(report["errors"][0]["code"], "unknown_provider_region")
+        self.assertEqual(report["errors"][0]["target"], "provider_regions.us-ghost")
+        self.assertIn(
+            "region policy validation failed before resolving policy groups: "
+            "unknown_provider_region at provider_regions.us-ghost",
+            str(raised.exception),
+        )
 
     def test_validation_rejects_group_referencing_unknown_region(self) -> None:
         directory = tempfile.TemporaryDirectory()
