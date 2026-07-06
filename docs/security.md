@@ -68,7 +68,8 @@ execution fails safely because cleanup depends on rediscoverable tags.
 
 ## Public-Safety Scan
 
-`make security-check` scans repository text files for:
+`make security-check` scans tracked text files and untracked non-ignored text
+files for:
 
 - sensitive value assignments,
 - email-like values,
