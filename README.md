@@ -621,10 +621,11 @@ custom image identity as `artifact_tags`; the legacy top-level `tags` field is
 kept as a compatibility alias for `lifecycle_tags`. Consumers should treat
 `lifecycle_tags` as the cleanup/validation tag contract and must not treat
 `tags` as captured custom image tags.
-Use `--manifest-file PATH` with `capture`, `deploy`, `capture-deploy`, or
-`cleanup` to persist the exact redacted JSON string emitted on stdout. The
-parent directory must already exist, and partial failure manifests are written
-when execution has a manifest to report.
+Use `--manifest-file PATH` with `capture`, `deploy`, `capture-deploy`,
+`capture-replicate-deploy`, `replicate`, or `cleanup` to persist the exact
+redacted JSON string emitted on stdout. The parent directory must already
+exist, and partial failure manifests are written when execution has a manifest
+to report.
 Multi-region `capture-deploy --execute` emits one combined manifest with
 top-level `status`, `regions`, `capture`, `deploy_results`, and `summary`.
 The nested `capture` value is the single capture manifest, and each

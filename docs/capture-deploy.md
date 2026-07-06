@@ -340,19 +340,20 @@ required tags are present:
 
 - `project=linode-image-lab`
 - `run_id=<unique-id>`
-- `mode=<capture|deploy|capture-deploy>`
-- `component=<capture|deploy>`
+- `mode=<capture|deploy|capture-deploy|capture-replicate-deploy|replicate>`
+- `component=<capture|deploy|replicate>`
 - `ttl=<absolute-utc-timestamp>`
 
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
 
-Execute-mode cleanup inside capture, deploy, and capture-deploy is narrower
-than standalone cleanup. Capture only attempts to delete the current run's
-temporary capture-source Linode, deploy only attempts to delete the current
-run's temporary deploy Linode, and capture-deploy only attempts to delete those
-two temporary Linodes for the current combined run. In all cases, cleanup
-proceeds only when the resource has all required tags matching the current run.
+Execute-mode cleanup inside capture, deploy, capture-deploy, and
+capture-replicate-deploy is narrower than standalone cleanup. Capture only
+attempts to delete the current run's temporary capture-source Linode, deploy
+only attempts to delete the current run's temporary deploy Linode, and combined
+workflows only attempt to delete temporary Linodes for the current run. In all
+cases, cleanup proceeds only when the resource has all required tags matching
+the current run.
 If tags are missing or do not match, cleanup preserves the resource and records
 `reason=tag_mismatch`.
 

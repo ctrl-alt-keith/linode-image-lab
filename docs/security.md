@@ -9,8 +9,8 @@ opt-in.
 - `LINODE_TOKEN` may appear as an environment variable name.
 - Secret values must never be committed.
 - The CLI reads `LINODE_TOKEN` for `capture --execute`, `deploy --execute`,
-  `capture-deploy --execute`, `replicate --execute`, `cleanup --discover`, and
-  `cleanup --execute`.
+  `capture-deploy --execute`, `capture-replicate-deploy --execute`,
+  `replicate --execute`, `cleanup --discover`, and `cleanup --execute`.
 - Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
@@ -47,8 +47,9 @@ selected command table, then `[defaults]`.
 ## Execute Permissions
 
 `capture --execute`, `deploy --execute`, `capture-deploy --execute`,
-`replicate --execute`, `cleanup --discover`, and `cleanup --execute` need a
-personal access token or equivalent OAuth access that can:
+`capture-replicate-deploy --execute`, `replicate --execute`,
+`cleanup --discover`, and `cleanup --execute` need a personal access token or
+equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - read regions, Linode types, images, and configured firewalls for input
@@ -84,22 +85,23 @@ loss prevention system.
 
 ## Mutation Safety
 
-`plan` is dry-run only. `capture`, `deploy`, `capture-deploy`, `replicate`, and
-`cleanup` are dry-run unless `--execute` is provided. Plain `cleanup` is a
-local manifest preview only; it does not read `LINODE_TOKEN` or call Linode.
-`cleanup --discover` is the explicit read-only provider discovery path.
+`plan` is dry-run only. `capture`, `deploy`, `capture-deploy`,
+`capture-replicate-deploy`, `replicate`, and `cleanup` are dry-run unless
+`--execute` is provided. Plain `cleanup` is a local manifest preview only; it
+does not read `LINODE_TOKEN` or call Linode. `cleanup --discover` is the
+explicit read-only provider discovery path.
 
-`capture --execute`, `deploy --execute`, and `capture-deploy --execute` fail
-before mutation if required options or `LINODE_TOKEN` are missing. They perform
-non-mutating token preflight and read-only region, type, and image input
-preflight before creating resources. When a firewall is configured, they also
-preflight the firewall before resource creation and include `firewall_id` in the
-create payload only for deploy instances. Explicit user-data files are loaded,
-checked as non-empty UTF-8 text, Base64 encoded, and included as
-`metadata.user_data` only for deploy instance creation. Partial-failure cleanup
-only targets resources whose required tags exactly match the current run. Tag
-mismatches are represented as preserved resources in manifests, not as deletion
-attempts.
+`capture --execute`, `deploy --execute`, `capture-deploy --execute`, and
+`capture-replicate-deploy --execute` fail before mutation if required options or
+`LINODE_TOKEN` are missing. They perform non-mutating token preflight and
+read-only region, type, and image input preflight before creating resources.
+When a firewall is configured, they also preflight the firewall before resource
+creation and include `firewall_id` in the create payload only for deploy
+instances. Explicit user-data files are loaded, checked as non-empty UTF-8 text,
+Base64 encoded, and included as `metadata.user_data` only for deploy instance
+creation. Partial-failure cleanup only targets resources whose required tags
+exactly match the current run. Tag mismatches are represented as preserved
+resources in manifests, not as deletion attempts.
 
 `replicate --execute` fails before mutation if `--image-id`, one or more
 regions, or `LINODE_TOKEN` are missing. It performs token preflight, reads the
