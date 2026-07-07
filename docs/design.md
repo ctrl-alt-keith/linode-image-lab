@@ -16,6 +16,8 @@ capture/deploy workflows while keeping mutation paths explicit and narrow.
   requested replicas to report available, and deploys from that captured image.
 - Generate and validate a version-controlled region policy artifact that keeps
   provider region facts separate from operator-owned grouping intent.
+- Allow explicit Trusted Network Registry consumption to plan or apply one
+  managed inbound allowlist rule on an existing Cloud Firewall.
 
 ## Non-Goals
 
@@ -37,6 +39,18 @@ Runs remain ephemeral validation workflows with explicit mutation entrypoints,
 provider/API-level validation, tagged temporary resources, and cleanup as a
 first-class outcome.
 
+No infrastructure ownership means the repository does not model an account as
+desired state, create durable infrastructure declarations, reconcile resource
+graphs, or take ownership of operator-managed resources. Commands that accept
+existing resource identifiers treat those resources as operator-owned inputs.
+`firewall-sync` is intentionally narrower than firewall management: it reads a
+private registry, reads one existing Cloud Firewall, and plans or applies only
+the single inbound rule identified by its configured label and fixed managed
+description. It preserves every rule outside that marker, fails closed when the
+marker is ambiguous, and does not create firewalls, attach firewalls, manage
+outbound policy, split allowlists across rules, schedule continuous sync, cache
+fallback CIDRs, or reconcile a broader firewall configuration.
+
 ## Components
 
 - `cli.py` owns command parsing and JSON output.
@@ -50,6 +64,9 @@ first-class outcome.
   replication submission.
 - `manifest.py` owns manifest creation, tag generation, and sanitized
   serialization.
+- `trusted_registry.py` owns Trusted Network Registry fetch and validation.
+- `firewall_sync.py` owns single-managed-rule firewall allowlist planning and
+  explicit execute-mode update.
 - `region_policy.py` owns provider-backed region policy TOML generation and
   validation.
 - `regions.py` owns one-or-many region parsing.

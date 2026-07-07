@@ -475,6 +475,9 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`,
   `capture-deploy`, `capture-replicate-deploy`, `replicate`, `cleanup`, and
   `firewall-sync`.
+- Existing resources passed to commands remain operator-owned inputs.
+  `firewall-sync` is limited to one labeled inbound allowlist rule on an
+  existing Cloud Firewall, not broader firewall management.
 - Provider behavior assumptions are tracked in
   [docs/provider-assumptions.md](docs/provider-assumptions.md).
 - Scalar config values fill omitted command options; CLI scalar flags override
@@ -510,7 +513,7 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
 ## What This Does Not Do
 
 - SSH, cloud-init, service, or application-level validation.
-- Manage long-lived infrastructure.
+- Manage long-lived infrastructure or broader firewall configuration.
 - General-purpose multi-region orchestration outside bounded
   `capture-deploy --execute` and `capture-replicate-deploy --execute`
   validation runs.

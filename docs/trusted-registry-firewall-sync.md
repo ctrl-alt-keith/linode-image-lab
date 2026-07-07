@@ -7,6 +7,13 @@ target Linode Cloud Firewall rules, and plans one managed inbound allow rule.
 The command is dry-run by default. It mutates the firewall only when
 `--execute` is provided.
 
+This is not general firewall management. The target firewall is an
+operator-owned existing resource, and the registry controls only the CIDRs for
+one managed inbound allowlist rule. `firewall-sync` does not create or attach
+firewalls, change outbound policy, split allowlists across multiple rules,
+cache fallback CIDRs, run continuously, or reconcile the rest of the firewall
+configuration.
+
 ## Compatibility Contract
 
 - Consumer: `ctrl-alt-keith/linode-image-lab` `firewall-sync`.
