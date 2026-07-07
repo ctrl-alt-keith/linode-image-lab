@@ -44,6 +44,30 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(findings, ["sample.py:2: hidden Unicode bidi control detected"])
 
+    def test_reports_private_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "config.toml"
+            private_url = "http://" + "10." + "0.0.1:8000"
+            path.write_text(f'endpoint = "{private_url}"\n', encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, ["config.toml: private URL detected"])
+
+    def test_reports_secret_like_assignments_without_leaking_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "config.toml"
+            key = "api_" + "key"
+            value = "abcdefgh12345678"
+            path.write_text(f'{key} = "{value}"\n', encoding="utf-8")
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(findings, ["config.toml: secret-like assignment detected"])
+        self.assertNotIn(value, "\n".join(findings))
+
     def test_reports_legacy_workflow_terms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
