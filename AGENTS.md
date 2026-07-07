@@ -30,6 +30,8 @@ Repo-local rules take precedence only for repo-specific behavior.
   `capture-deploy --execute`; default behavior remains non-mutating.
 - M5 permits explicit bounded multi-region capture-deploy execution only through
   `capture-deploy --execute`; default behavior remains non-mutating.
+- `firewall-sync --execute` may update only the documented single managed
+  inbound allowlist rule on an existing Cloud Firewall.
 - Do not add additional real Linode mutation behavior until a later milestone
   explicitly asks for it.
 
@@ -41,6 +43,9 @@ Repo-local rules take precedence only for repo-specific behavior.
 - Do not introduce desired-state management concepts.
 - Do not add state files, drift reconciliation, resource graphs, dependency
   planning, or Terraform-like behavior.
+- Do not expand `firewall-sync` into general firewall management, firewall
+  creation or attachment, outbound policy management, continuous sync, or broad
+  firewall reconciliation.
 - Future multi-region support must remain execution fan-out for disposable
   validation runs, not infrastructure ownership.
 - Keep cleanup and validation first-class in any execution path.
