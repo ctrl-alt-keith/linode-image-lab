@@ -7,6 +7,22 @@ target Linode Cloud Firewall rules, and plans one managed inbound allow rule.
 The command is dry-run by default. It mutates the firewall only when
 `--execute` is provided.
 
+## Compatibility Contract
+
+- Consumer: `ctrl-alt-keith/linode-image-lab` `firewall-sync`.
+- Producer: `ctrl-alt-keith/trusted-network-registry`.
+- Artifact: Trusted Network Registry registry JSON.
+- Accepted schema version: registry schema v1, identified by top-level
+  `schema_version: 1`.
+- Compatibility fixture:
+  [`../tests/fixtures/sanitized/trusted-network-registry.v1.example.json`](../tests/fixtures/sanitized/trusted-network-registry.v1.example.json),
+  vendored from the producer's public-safe v1 registry fixture.
+
+The compatibility test feeds the vendored fixture through the trusted registry
+validator and firewall-sync planning path. Incompatible producer artifact
+changes require a new schema/version, and this consumer must explicitly opt in
+before accepting incompatible schema versions.
+
 ## Required Inputs
 
 Non-secret inputs can come from CLI flags or `[firewall-sync]` config:
