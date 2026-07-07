@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -14,6 +15,10 @@ from linode_image_lab.trusted_registry import (
     fetch_registry_from_object_storage,
     validate_registry,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PRODUCER_REGISTRY_FIXTURE = ROOT / "tests/fixtures/sanitized/trusted-network-registry.v1.example.json"
 
 
 class FakeHTTPResponse:
@@ -158,6 +163,28 @@ class TrustedRegistryTests(unittest.TestCase):
 
         self.assertEqual(registry.ipv4_cidrs, ("198.51.100.0/24",))
         self.assertEqual(registry.ipv6_cidrs, ("2001:db8:100::/64",))
+
+    def test_accepts_vendored_producer_registry_v1_fixture(self) -> None:
+        payload = json.loads(PRODUCER_REGISTRY_FIXTURE.read_text(encoding="utf-8"))
+
+        registry = validate_registry(
+            payload,
+            now=dt.datetime(2026, 5, 17, 0, 30, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(registry.name, "trusted-network-registry")
+        self.assertEqual(registry.ipv4_cidrs, ("198.51.100.0/24", "203.0.113.10/32"))
+        self.assertEqual(registry.ipv6_cidrs, ("2001:db8::10/128", "2001:db8:100::/64"))
+
+    def test_rejects_unsupported_registry_schema_version(self) -> None:
+        payload = json.loads(PRODUCER_REGISTRY_FIXTURE.read_text(encoding="utf-8"))
+        payload["schema_version"] = 2
+
+        with self.assertRaisesRegex(RegistryValidationError, "schema_version is not supported"):
+            validate_registry(
+                payload,
+                now=dt.datetime(2026, 5, 17, 0, 30, tzinfo=dt.timezone.utc),
+            )
 
 
 if __name__ == "__main__":

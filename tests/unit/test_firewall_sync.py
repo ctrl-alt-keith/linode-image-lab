@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
+from pathlib import Path
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -12,6 +14,11 @@ from linode_image_lab.firewall_sync import (
     FirewallSyncError,
     firewall_sync_plan,
 )
+from linode_image_lab.trusted_registry import validate_registry
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PRODUCER_REGISTRY_FIXTURE = ROOT / "tests/fixtures/sanitized/trusted-network-registry.v1.example.json"
 
 
 class FakeFirewallClient:
@@ -115,6 +122,35 @@ class FirewallSyncTests(unittest.TestCase):
         self.assertEqual(manifest["planned_action"], "add_managed_rule")
         self.assertEqual(manifest["diff"]["additions"]["ipv4"], ["198.51.100.0/24"])
         self.assertEqual(manifest["diff"]["additions"]["ipv6"], ["2001:db8:100::/64"])
+        self.assertEqual(client.updates, [])
+
+    def test_firewall_sync_accepts_vendored_producer_registry_fixture(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        payload = json.loads(PRODUCER_REGISTRY_FIXTURE.read_text(encoding="utf-8"))
+
+        def validate_with_fixture_clock(registry_payload: dict[str, object]):
+            return validate_registry(
+                registry_payload,
+                now=dt.datetime(2026, 5, 17, 0, 30, tzinfo=dt.timezone.utc),
+            )
+
+        with (
+            patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=payload),
+            patch("linode_image_lab.firewall_sync.validate_registry", side_effect=validate_with_fixture_clock),
+        ):
+            manifest = firewall_sync_plan(
+                firewall_id=12345,
+                registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                registry_bucket="example-bucket",
+                registry_object_key="registry.json",
+                ports="22",
+                client=client,
+                environ={},
+            )
+
+        self.assertEqual(manifest["registry"]["cidr_count"], 4)
+        self.assertEqual(manifest["diff"]["additions"]["ipv4"], ["198.51.100.0/24", "203.0.113.10/32"])
+        self.assertEqual(manifest["diff"]["additions"]["ipv6"], ["2001:db8:100::/64", "2001:db8::10/128"])
         self.assertEqual(client.updates, [])
 
     def test_execute_requires_explicit_flag(self) -> None:
