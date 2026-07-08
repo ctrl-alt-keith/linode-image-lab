@@ -30,6 +30,8 @@ Before opening a PR:
 - confirm read-only cleanup discovery remains limited to explicit
   `cleanup --discover`,
 - confirm real mutation remains limited to explicit `capture --execute`,
-  `deploy --execute`, `capture-deploy --execute`, and `cleanup --execute`,
+  `deploy --execute`, `capture-deploy --execute`,
+  `capture-replicate-deploy --execute`, `replicate --execute`,
+  `cleanup --execute`, and `firewall-sync --execute`,
 - confirm cleanup only targets resources with complete matching tags,
 - confirm docs describe behavior without private context.

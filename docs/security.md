@@ -10,7 +10,8 @@ opt-in.
 - Secret values must never be committed.
 - The CLI reads `LINODE_TOKEN` for `capture --execute`, `deploy --execute`,
   `capture-deploy --execute`, `capture-replicate-deploy --execute`,
-  `replicate --execute`, `cleanup --discover`, and `cleanup --execute`.
+  `replicate --execute`, `cleanup --discover`, `cleanup --execute`,
+  `firewall-sync` dry-runs, and `firewall-sync --execute`.
 - Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
@@ -48,8 +49,8 @@ selected command table, then `[defaults]`.
 
 `capture --execute`, `deploy --execute`, `capture-deploy --execute`,
 `capture-replicate-deploy --execute`, `replicate --execute`,
-`cleanup --discover`, and `cleanup --execute` need a personal access token or
-equivalent OAuth access that can:
+`cleanup --discover`, `cleanup --execute`, and `firewall-sync` need a personal
+access token or equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - read regions, Linode types, images, and configured firewalls for input
@@ -66,6 +67,10 @@ and standalone cleanup does not create custom images. Standalone cleanup can
 delete only discovered lab-owned images with the default project tag and a
 complete expired cleanup tag set. If tags cannot be applied or later verified,
 execution fails safely because cleanup depends on rediscoverable tags.
+`firewall-sync` dry-runs read one existing Cloud Firewall and require Object
+Storage registry credentials from `LINODE_OBJ_ACCESS_KEY` and
+`LINODE_OBJ_SECRET_KEY`; `firewall-sync --execute` also needs permission to
+update the target firewall rules document.
 
 ## Public-Safety Scan
 
@@ -86,10 +91,10 @@ loss prevention system.
 ## Mutation Safety
 
 `plan` is dry-run only. `capture`, `deploy`, `capture-deploy`,
-`capture-replicate-deploy`, `replicate`, and `cleanup` are dry-run unless
-`--execute` is provided. Plain `cleanup` is a local manifest preview only; it
-does not read `LINODE_TOKEN` or call Linode. `cleanup --discover` is the
-explicit read-only provider discovery path.
+`capture-replicate-deploy`, `replicate`, `cleanup`, and `firewall-sync` are
+dry-run unless `--execute` is provided. Plain `cleanup` is a local manifest
+preview only; it does not read `LINODE_TOKEN` or call Linode. `cleanup
+--discover` is the explicit read-only provider discovery path.
 
 `capture --execute`, `deploy --execute`, `capture-deploy --execute`, and
 `capture-replicate-deploy --execute` fail before mutation if required options or
