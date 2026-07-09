@@ -50,10 +50,10 @@ The run receipt is the redacted manifest that records:
 - cleanup evidence,
 - preserved or failed cleanup entries when cleanup cannot or should not delete.
 
-The receipt is evidence of a bounded operation. It is not a durable ownership
-record for infrastructure. The repository may preserve custom images as
-deliverables, but it does not preserve ownership of an account, deployment, or
-long-lived environment.
+The receipt is evidence of a bounded operation. Custom images may remain as
+explicit workflow deliverables when intentionally requested, but the durable
+product remains the operational run receipt and public-safe evidence, not
+ongoing ownership of infrastructure, deployments, accounts, or environments.
 
 ## Repository Boundaries
 
