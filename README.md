@@ -14,6 +14,9 @@ Safe, repeatable Linode image capture and deploy validation with automatic clean
 - Cleans up temporary resources while preserving custom images as deliverables.
 - Emits redacted, public-safe manifests for review and automation.
 
+See [Product Boundary](docs/product-boundary.md) for the repository's product
+role, durable object, and non-goals.
+
 ## Quick Start
 
 Requires Python 3.12 or newer.
