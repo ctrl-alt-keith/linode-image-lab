@@ -26,15 +26,20 @@ reported safely.
 ## Core Invariant
 
 Every provider mutation must be explicitly requested, preceded by bounded
-validation, limited to the current workflow or explicitly owned resources,
-cleaned up according to repository ownership rules, and reported as public-safe
-evidence without becoming durable infrastructure ownership.
+validation, limited to the current workflow or explicitly owned resources, and
+reported as public-safe evidence without expanding into durable infrastructure
+ownership. Temporary workflow resources are cleaned up according to repository
+ownership rules where applicable. Intentionally persistent repository-owned
+resources, such as the single managed inbound allowlist rule, remain narrowly
+scoped and explicitly defined.
 
 This means mutation paths stay opt-in. Preflight checks run before mutation.
 Created or discovered resources are handled only when they match the current
 workflow, explicit operator input, or the repository's managed tag contract.
-Cleanup is part of the workflow result, not a background ownership promise.
-Normal output remains safe to publish and does not expose provider identifiers.
+Temporary cleanup is part of the workflow result, not a background ownership
+promise. Persistent managed resources stay within their documented ownership
+marker and do not become broader infrastructure ownership. Normal output
+remains safe to publish and does not expose provider identifiers.
 
 ## Product Object
 
