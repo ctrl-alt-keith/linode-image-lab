@@ -23,6 +23,9 @@ PROVIDER_IDENTIFIER_KEYS = {
     "image_id",
     "linode_id",
     "provider_id",
+    "registry_bucket",
+    "registry_endpoint_url",
+    "registry_object_key",
     "resource_id",
     "user_id",
 }

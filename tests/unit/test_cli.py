@@ -1146,6 +1146,71 @@ regions = ["us-ghost"]
         self.assertEqual(payload["effective_defaults"]["firewall_id"], "[REDACTED]")
         self.assertIn({"field": "firewall_id", "source": "cli --firewall-id"}, payload["sources"])
 
+    def test_config_validate_previews_firewall_sync_cli_overrides_safely(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [firewall-sync]
+            firewall_id = 12345
+            registry_endpoint_url = "https://us-east-1.linodeobjects.com"
+            registry_bucket = "config-bucket"
+            registry_object_key = "config-registry.json"
+            registry_region = "us-east-1"
+            protocol = "TCP"
+            ports = "22"
+            managed_label = "config-allowlist"
+            """
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "config",
+                    "validate",
+                    "--config",
+                    config_path,
+                    "--command",
+                    "firewall-sync",
+                    "--registry-endpoint-url",
+                    "https://us-ord-1.linodeobjects.com",
+                    "--registry-bucket",
+                    "private-bucket",
+                    "--registry-object-key",
+                    "network/registry.json",
+                    "--registry-region",
+                    "us-ord-1",
+                    "--protocol",
+                    "UDP",
+                    "--ports",
+                    "51820",
+                    "--managed-label",
+                    "wireguard-allowlist",
+                ]
+            )
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["target_command"], "firewall-sync")
+        self.assertEqual(payload["effective_defaults"]["registry_endpoint_url"], "[REDACTED]")
+        self.assertEqual(payload["effective_defaults"]["registry_bucket"], "[REDACTED]")
+        self.assertEqual(payload["effective_defaults"]["registry_object_key"], "[REDACTED]")
+        self.assertEqual(payload["effective_defaults"]["registry_region"], "us-ord-1")
+        self.assertEqual(payload["effective_defaults"]["protocol"], "UDP")
+        self.assertEqual(payload["effective_defaults"]["ports"], "51820")
+        self.assertEqual(payload["effective_defaults"]["managed_label"], "wireguard-allowlist")
+        self.assertNotIn("private-bucket", payload_text)
+        self.assertNotIn("network/registry.json", payload_text)
+        self.assertIn({"field": "registry_endpoint_url", "source": "cli --registry-endpoint-url"}, payload["sources"])
+        self.assertIn({"field": "registry_bucket", "source": "cli --registry-bucket"}, payload["sources"])
+        self.assertIn({"field": "registry_object_key", "source": "cli --registry-object-key"}, payload["sources"])
+        self.assertIn({"field": "registry_region", "source": "cli --registry-region"}, payload["sources"])
+        self.assertIn({"field": "protocol", "source": "cli --protocol"}, payload["sources"])
+        self.assertIn({"field": "ports", "source": "cli --ports"}, payload["sources"])
+        self.assertIn({"field": "managed_label", "source": "cli --managed-label"}, payload["sources"])
+
     def test_config_validate_reports_authorized_key_metadata_without_raw_keys(self) -> None:
         keys_path = self.write_file(f"{PUBLIC_KEY_TWO}\n")
         config_path = self.write_config(
@@ -1614,6 +1679,13 @@ regions = ["us-ghost"]
             ("cleanup", ["--authorized-key", PUBLIC_KEY_ONE], "--authorized-key"),
             ("cleanup", ["--authorized-keys-file", keys_path], "--authorized-keys-file"),
             ("cleanup", ["--user-data-file", user_data_path], "--user-data-file"),
+            ("capture", ["--registry-endpoint-url", "https://us-east-1.linodeobjects.com"], "--registry-endpoint-url"),
+            ("capture", ["--registry-bucket", "example-bucket"], "--registry-bucket"),
+            ("capture", ["--registry-object-key", "registry.json"], "--registry-object-key"),
+            ("capture", ["--registry-region", "us-east-1"], "--registry-region"),
+            ("capture", ["--protocol", "TCP"], "--protocol"),
+            ("capture", ["--ports", "22"], "--ports"),
+            ("capture", ["--managed-label", "tnr-allowlist"], "--managed-label"),
         ]
         for command, args, option in cases:
             with self.subTest(command=command, option=option):
