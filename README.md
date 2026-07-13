@@ -429,8 +429,11 @@ defaults, `--firewall-id`, `--authorized-key`, `--authorized-keys-file`, and
 `--user-data-file` can also be previewed. For `capture-replicate-deploy`,
 `--region` previews `deploy_regions`, and `--replication-region`,
 `--replication-group`, and `--region-policy-file` preview policy input
-resolution. Authorized key and user-data output reports safe metadata such as
-count, source, and byte count only.
+resolution. For `firewall-sync`, `--registry-endpoint-url`,
+`--registry-bucket`, `--registry-object-key`, `--registry-region`,
+`--protocol`, `--ports`, and `--managed-label` can also be previewed.
+Authorized key, user-data, provider identifier, and registry location output
+reports safe metadata or redacted values only.
 
 Config is only for execution defaults. It cannot contain `LINODE_TOKEN`, token
 values, passwords, private SSH keys, inline cloud-init data, `execute`,

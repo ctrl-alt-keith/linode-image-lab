@@ -124,6 +124,10 @@ def add_user_data_arg(parser: argparse.ArgumentParser) -> None:
 
 def add_registry_firewall_sync_args(parser: argparse.ArgumentParser) -> None:
     add_firewall_arg(parser)
+    add_registry_args(parser)
+
+
+def add_registry_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--registry-endpoint-url", help="Linode Object Storage HTTPS endpoint URL.")
     parser.add_argument("--registry-bucket", help="Object Storage bucket containing the trusted registry.")
     parser.add_argument("--registry-object-key", help="Object Storage object key for the trusted registry JSON.")
@@ -217,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_authorized_keys_args(config_validate)
     add_user_data_arg(config_validate)
     add_replication_policy_args(config_validate)
+    add_registry_args(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -522,6 +527,13 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "type": "--type",
         "firewall_id": "--firewall-id",
         "user_data": "--user-data-file",
+        "registry_endpoint_url": "--registry-endpoint-url",
+        "registry_bucket": "--registry-bucket",
+        "registry_object_key": "--registry-object-key",
+        "registry_region": "--registry-region",
+        "protocol": "--protocol",
+        "ports": "--ports",
+        "managed_label": "--managed-label",
     }
 
     for field, value in candidate_values.items():
