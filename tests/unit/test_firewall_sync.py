@@ -22,14 +22,19 @@ PRODUCER_REGISTRY_FIXTURE = ROOT / "tests/fixtures/sanitized/trusted-network-reg
 
 
 class FakeFirewallClient:
-    def __init__(self, rules: dict[str, object]) -> None:
+    def __init__(self, rules: dict[str, object], *, update_failure: bool = False) -> None:
         self.rules = rules
+        self.update_failure = update_failure
+        self.update_attempts = 0
         self.updates: list[dict[str, object]] = []
 
     def get_firewall_rules(self, firewall_id: int) -> dict[str, object]:
         return self.rules
 
     def update_firewall_rules(self, firewall_id: int, rules: dict[str, object]) -> dict[str, object]:
+        self.update_attempts += 1
+        if self.update_failure:
+            raise ValueError("provider response included private details")
         self.updates.append(rules)
         return {}
 
@@ -231,6 +236,45 @@ class FirewallSyncTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "unchanged")
         self.assertFalse(manifest["applied"])
         self.assertEqual(client.updates, [])
+
+    def test_cli_execute_update_failure_emits_safe_unapplied_plan(self) -> None:
+        client = FakeFirewallClient(firewall_rules(), update_failure=True)
+        output = StringIO()
+        error = StringIO()
+
+        with (
+            patch("linode_image_lab.firewall_sync.LinodeClient.from_env", return_value=client),
+            patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()),
+            redirect_stdout(output),
+            patch("sys.stderr", error),
+        ):
+            code = main(
+                [
+                    "firewall-sync",
+                    "--firewall-id",
+                    "12345",
+                    "--registry-endpoint-url",
+                    "https://us-east-1.linodeobjects.com",
+                    "--registry-bucket",
+                    "example-bucket",
+                    "--registry-object-key",
+                    "registry.json",
+                    "--ports",
+                    "22",
+                    "--execute",
+                ]
+            )
+
+        payload_text = output.getvalue()
+        payload = json.loads(payload_text)
+        self.assertEqual(code, 1)
+        self.assertEqual(client.update_attempts, 1)
+        self.assertEqual(client.updates, [])
+        self.assertEqual(payload["status"], "planned")
+        self.assertNotIn("applied", payload)
+        self.assertEqual(error.getvalue().splitlines()[-1], "firewall-sync --execute failed")
+        self.assertNotIn("provider response included private details", payload_text)
+        self.assertNotIn("provider response included private details", error.getvalue())
 
     def test_ambiguous_managed_label_fails_closed(self) -> None:
         client = FakeFirewallClient(
