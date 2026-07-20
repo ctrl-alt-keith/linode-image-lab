@@ -109,6 +109,81 @@ def managed_rule(*, ipv4: list[str] | None = None, ipv6: list[str] | None = None
 
 
 class FirewallSyncTests(unittest.TestCase):
+    def test_protocol_and_ports_validation_fails_closed_before_provider_calls(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+
+        cases = [
+            (
+                {"protocol": "TCP", "ports": None},
+                "--ports is required for TCP firewall rules",
+            ),
+            (
+                {"protocol": "udp", "ports": "   "},
+                "--ports must be non-empty when provided",
+            ),
+            (
+                {"protocol": "ICMP", "ports": "22"},
+                "--ports is not allowed for ICMP firewall rules",
+            ),
+            (
+                {"protocol": "gre", "ports": None},
+                "--protocol must be one of TCP, UDP, ICMP, or IPENCAP",
+            ),
+        ]
+
+        for overrides, expected_error in cases:
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(FirewallSyncError, expected_error):
+                    firewall_sync_plan(
+                        firewall_id=12345,
+                        registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                        registry_bucket="example-bucket",
+                        registry_object_key="registry.json",
+                        client=client,
+                        environ={},
+                        **overrides,
+                    )
+
+        self.assertEqual(client.updates, [])
+
+    def test_managed_label_is_trimmed_and_rejects_blank_or_oversized_values(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            manifest = firewall_sync_plan(
+                firewall_id=12345,
+                registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                registry_bucket="example-bucket",
+                registry_object_key="registry.json",
+                protocol="tcp",
+                ports="22",
+                managed_label="  custom-managed-label  ",
+                client=client,
+                environ={},
+            )
+
+        self.assertEqual(manifest["target"]["managed_label"], "custom-managed-label")
+        self.assertEqual(manifest["managed_rule"]["label"], "custom-managed-label")
+
+        for managed_label, expected_error in (
+            ("  ", "--managed-label must be between 3 and 32 characters"),
+            ("x" * 33, "--managed-label must be between 3 and 32 characters"),
+        ):
+            with self.subTest(managed_label=managed_label):
+                with self.assertRaisesRegex(FirewallSyncError, expected_error):
+                    firewall_sync_plan(
+                        firewall_id=12345,
+                        registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                        registry_bucket="example-bucket",
+                        registry_object_key="registry.json",
+                        ports="22",
+                        managed_label=managed_label,
+                        client=client,
+                        environ={},
+                    )
+
+        self.assertEqual(client.updates, [])
+
     def test_dry_run_diff_adds_registry_cidrs_without_mutating(self) -> None:
         client = FakeFirewallClient(firewall_rules())
 
