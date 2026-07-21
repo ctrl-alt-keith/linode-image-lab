@@ -158,6 +158,25 @@ class TrustedRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryValidationError, "universal allow"):
             validate_registry(registry_payload(cidr="0.0.0.0/0"))
 
+    def test_inactive_registry_entry_is_rejected(self) -> None:
+        payload = registry_payload()
+        payload["entries"][0]["status"] = "stale"
+
+        with self.assertRaisesRegex(RegistryValidationError, "inactive entries"):
+            validate_registry(payload)
+
+    def test_address_family_must_match_cidr(self) -> None:
+        for cidr, address_family in (
+            ("198.51.100.0/24", "ipv6"),
+            ("2001:db8:100::/64", "ipv4"),
+        ):
+            with self.subTest(cidr=cidr, address_family=address_family):
+                payload = registry_payload(cidr=cidr)
+                payload["entries"][0]["address_family"] = address_family
+
+                with self.assertRaisesRegex(RegistryValidationError, "address_family does not match cidr"):
+                    validate_registry(payload)
+
     def test_ipv4_and_ipv6_cidrs_are_supported(self) -> None:
         registry = validate_registry(registry_payload())
 
