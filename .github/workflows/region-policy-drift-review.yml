@@ -1,0 +1,362 @@
+name: Region policy drift review
+
+on:
+  # 17:20 UTC is Monday 09:20 PST or 10:20 PDT. The fixed UTC schedule
+  # intentionally runs 20 minutes after the weekly chaos workflow.
+  schedule:
+    - cron: "20 17 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: region-policy-drift-review-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  POLICY_PATH: policy/region-policy.toml
+  EVIDENCE_DIR: ${{ runner.temp }}/region-policy-drift-evidence
+  GENERATED_POLICY_PATH: ${{ runner.temp }}/region-policy-drift-evidence/regenerated-region-policy.toml
+  PUBLIC_METADATA_SOURCE: https://api.linode.com/v4/regions
+  GENERATION_COMMAND: linode-image-lab region-policy generate --output [runner-temp]/regenerated-region-policy.toml
+  VALIDATION_COMMAND: linode-image-lab region-policy validate --path [runner-temp]/regenerated-region-policy.toml
+  CANONICAL_COMMAND: make check
+
+jobs:
+  review:
+    name: Regenerate, validate, and compare region policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Initialize hosted evidence
+        id: initialize
+        shell: bash
+        env:
+          HOSTED_RUNNER_NAME: ${{ runner.name }}
+          HOSTED_RUNNER_OS: ${{ runner.os }}
+          HOSTED_RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          {
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'workflow_run=https://github.com/%s/actions/runs/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'requested_sha=%s\n' "$GITHUB_SHA"
+            printf 'runner=%s (%s/%s)\n' "$HOSTED_RUNNER_NAME" "$HOSTED_RUNNER_OS" "$HOSTED_RUNNER_ARCH"
+            printf 'public_metadata_source=%s\n' "$PUBLIC_METADATA_SOURCE"
+            printf 'generation_command=%s\n' "$GENERATION_COMMAND"
+            printf 'validation_command=%s\n' "$VALIDATION_COMMAND"
+            printf 'canonical_command=%s\n' "$CANONICAL_COMMAND"
+          } > "$EVIDENCE_DIR/run-metadata.txt"
+
+      - name: Check out exact requested commit
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact tested commit and clean checkout
+        id: verify_sha
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          printf 'tested_sha=%s\n' "$tested_sha" | tee "$EVIDENCE_DIR/tested-sha.txt"
+          test "$tested_sha" = "$GITHUB_SHA"
+          status="$(git status --porcelain=v1 --untracked-files=all --ignored)"
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status" | tee "$EVIDENCE_DIR/initial-repository-state.txt"
+            printf 'Exact checkout was not clean.\n' >&2
+            exit 1
+          fi
+          printf 'clean\n' > "$EVIDENCE_DIR/initial-repository-state.txt"
+
+      - name: Set up Python
+        id: setup_python
+        if: steps.checkout.outcome == 'success' && steps.verify_sha.outcome == 'success'
+        continue-on-error: true
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install repository dependencies
+        id: install
+        if: steps.setup_python.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install --disable-pip-version-check -e . 2>&1 | tee "$EVIDENCE_DIR/dependency-setup.log"
+
+      - name: Regenerate region policy from public metadata
+        id: generate
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$POLICY_PATH" "$EVIDENCE_DIR/checked-in-region-policy.toml"
+          cp "$POLICY_PATH" "$GENERATED_POLICY_PATH"
+          set +e
+          linode-image-lab region-policy generate \
+            --output "$GENERATED_POLICY_PATH" \
+            > "$EVIDENCE_DIR/generation.stdout" \
+            2> "$EVIDENCE_DIR/generation.stderr"
+          generation_status=$?
+          set -e
+          if [[ "$generation_status" -ne 0 ]]; then
+            cat "$EVIDENCE_DIR/generation.stderr" >&2
+            if python -c 'from linode_image_lab.linode_api import LinodeClient; regions = LinodeClient().list_regions(); assert regions' \
+              > "$EVIDENCE_DIR/public-metadata-probe.stdout" \
+              2> "$EVIDENCE_DIR/public-metadata-probe.stderr"; then
+              printf 'failed\n' > "$EVIDENCE_DIR/generation-failure-class.txt"
+            else
+              printf 'unable\n' > "$EVIDENCE_DIR/generation-failure-class.txt"
+            fi
+            exit "$generation_status"
+          fi
+          printf 'success\n' > "$EVIDENCE_DIR/generation-outcome.txt"
+
+      - name: Validate regenerated region policy
+        id: validate
+        if: steps.generate.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          linode-image-lab region-policy validate \
+            --path "$GENERATED_POLICY_PATH" \
+            > "$EVIDENCE_DIR/validation.json" \
+            2> "$EVIDENCE_DIR/validation.stderr"
+          validation_status=$?
+          set -e
+          if [[ "$validation_status" -ne 0 ]]; then
+            cat "$EVIDENCE_DIR/validation.stderr" >&2
+            if python -c 'from linode_image_lab.linode_api import LinodeClient; regions = LinodeClient().list_regions(); assert regions' \
+              > "$EVIDENCE_DIR/public-metadata-probe.stdout" \
+              2> "$EVIDENCE_DIR/public-metadata-probe.stderr"; then
+              printf 'failed\n' > "$EVIDENCE_DIR/validation-failure-class.txt"
+            else
+              printf 'unable\n' > "$EVIDENCE_DIR/validation-failure-class.txt"
+            fi
+            exit "$validation_status"
+          fi
+          cat "$EVIDENCE_DIR/validation.json"
+
+      - name: Run canonical repository validation
+        id: canonical
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          make check 2>&1 | tee "$EVIDENCE_DIR/canonical-validation.log"
+
+      - name: Compare checked-in and regenerated policies
+        id: compare
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_in_sha256="$(sha256sum "$EVIDENCE_DIR/checked-in-region-policy.toml" | cut -d ' ' -f 1)"
+          generated_sha256="$(sha256sum "$GENERATED_POLICY_PATH" | cut -d ' ' -f 1)"
+          printf '%s\n' "$checked_in_sha256" > "$EVIDENCE_DIR/checked-in-region-policy.sha256"
+          printf '%s\n' "$generated_sha256" > "$EVIDENCE_DIR/regenerated-region-policy.sha256"
+          set +e
+          (
+            cd "$EVIDENCE_DIR"
+            git diff --no-index --no-ext-diff -- \
+              checked-in-region-policy.toml \
+              regenerated-region-policy.toml
+          ) > "$EVIDENCE_DIR/region-policy.diff"
+          diff_status=$?
+          set -e
+          if [[ "$diff_status" -eq 0 ]]; then
+            printf 'false\n' > "$EVIDENCE_DIR/drift-detected.txt"
+          elif [[ "$diff_status" -eq 1 ]]; then
+            printf 'true\n' > "$EVIDENCE_DIR/drift-detected.txt"
+          else
+            printf 'Policy comparison failed with status %s.\n' "$diff_status" >&2
+            exit "$diff_status"
+          fi
+
+      - name: Verify repository state stayed read-only
+        id: repository_state
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status" | tee "$EVIDENCE_DIR/final-repository-state.txt"
+            printf 'Unexpected repository changes were detected.\n' >&2
+            exit 1
+          fi
+
+          ignored_paths="$(git status --porcelain=v1 --untracked-files=all --ignored | sed -n 's/^!! //p')"
+          unexpected_ignored=""
+          while IFS= read -r path; do
+            case "$path" in
+              "") ;;
+              src/linode_image_lab.egg-info/ | src/linode_image_lab.egg-info/*) ;;
+              src/linode_image_lab/__pycache__/ | src/linode_image_lab/__pycache__/*) ;;
+              tests/unit/__pycache__/ | tests/unit/__pycache__/*) ;;
+              *) unexpected_ignored+="$path"$'\n' ;;
+            esac
+          done <<< "$ignored_paths"
+          if [[ -n "$unexpected_ignored" ]]; then
+            printf '%s' "$unexpected_ignored" | tee "$EVIDENCE_DIR/unexpected-ignored-state.txt"
+            printf 'Unexpected ignored repository files were detected.\n' >&2
+            exit 1
+          fi
+
+          {
+            printf 'clean; regenerated policy and diff are outside the repository workspace\n'
+            printf 'expected ignored setup/test outputs:\n%s\n' "${ignored_paths:-none}"
+          } > "$EVIDENCE_DIR/final-repository-state.txt"
+
+      - name: Classify result and publish job summary
+        id: classify
+        if: always() && !cancelled()
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          VERIFY_SHA_OUTCOME: ${{ steps.verify_sha.outcome }}
+          SETUP_PYTHON_OUTCOME: ${{ steps.setup_python.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          GENERATION_OUTCOME: ${{ steps.generate.outcome }}
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+          CANONICAL_OUTCOME: ${{ steps.canonical.outcome }}
+          COMPARISON_OUTCOME: ${{ steps.compare.outcome }}
+          REPOSITORY_STATE_OUTCOME: ${{ steps.repository_state.outcome }}
+          HOSTED_RUNNER_NAME: ${{ runner.name }}
+          HOSTED_RUNNER_OS: ${{ runner.os }}
+          HOSTED_RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          result="Failed"
+          reason="One or more required hosted execution steps failed."
+
+          if [[ "$CHECKOUT_OUTCOME" != "success" || "$VERIFY_SHA_OUTCOME" != "success" || \
+                "$SETUP_PYTHON_OUTCOME" != "success" || "$INSTALL_OUTCOME" != "success" ]]; then
+            reason="Checkout, exact-SHA verification, runtime setup, or dependency setup failed."
+          elif [[ "$GENERATION_OUTCOME" != "success" ]]; then
+            if [[ "$(cat "$EVIDENCE_DIR/generation-failure-class.txt" 2>/dev/null || true)" == "unable" ]]; then
+              result="Unable to verify"
+              reason="Required public Linode region metadata could not be retrieved reliably."
+            else
+              reason="Region-policy generation failed after hosted setup completed."
+            fi
+          elif [[ "$VALIDATION_OUTCOME" != "success" ]]; then
+            if [[ "$(cat "$EVIDENCE_DIR/validation-failure-class.txt" 2>/dev/null || true)" == "unable" ]]; then
+              result="Unable to verify"
+              reason="Required public Linode region metadata could not be retrieved reliably during validation."
+            else
+              reason="The regenerated region policy failed repository-owned validation."
+            fi
+          elif [[ "$CANONICAL_OUTCOME" != "success" || "$COMPARISON_OUTCOME" != "success" || \
+                  "$REPOSITORY_STATE_OUTCOME" != "success" ]]; then
+            reason="Canonical validation, policy comparison, or repository-state verification failed."
+          elif [[ "$(cat "$EVIDENCE_DIR/drift-detected.txt")" == "true" ]]; then
+            result="Drift detected"
+            reason="Generation and validation succeeded, but the regenerated policy differs from the checked-in policy."
+          else
+            result="Clean"
+            reason="Generation and validation succeeded, and the regenerated policy matches the checked-in policy."
+          fi
+
+          tested_sha="$(cut -d= -f2 "$EVIDENCE_DIR/tested-sha.txt" 2>/dev/null || printf 'unavailable')"
+          checked_in_sha256="$(cat "$EVIDENCE_DIR/checked-in-region-policy.sha256" 2>/dev/null || printf 'unavailable')"
+          generated_sha256="$(cat "$EVIDENCE_DIR/regenerated-region-policy.sha256" 2>/dev/null || printf 'unavailable')"
+          drift="$(cat "$EVIDENCE_DIR/drift-detected.txt" 2>/dev/null || printf 'unknown')"
+
+          {
+            printf '# Region policy drift review\n\n'
+            printf '**Result:** %s\n\n' "$result"
+            printf '%s\n\n' "$reason"
+            printf '| Evidence | Value |\n'
+            printf '| --- | --- |\n'
+            printf '| Repository | `%s` |\n' "$GITHUB_REPOSITORY"
+            printf '| Workflow run | [%s](https://github.com/%s/actions/runs/%s) |\n' "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf '| Event | `%s` |\n' "$GITHUB_EVENT_NAME"
+            printf '| Requested SHA | `%s` |\n' "$GITHUB_SHA"
+            printf '| Tested SHA | `%s` |\n' "$tested_sha"
+            printf '| Runner | `%s` (`%s/%s`) |\n' "$HOSTED_RUNNER_NAME" "$HOSTED_RUNNER_OS" "$HOSTED_RUNNER_ARCH"
+            printf '| Public metadata | `%s` |\n' "$PUBLIC_METADATA_SOURCE"
+            printf '| Generation | `%s` — %s |\n' "$GENERATION_COMMAND" "$GENERATION_OUTCOME"
+            printf '| Policy validation | `%s` — %s |\n' "$VALIDATION_COMMAND" "$VALIDATION_OUTCOME"
+            printf '| Canonical validation | `%s` — %s |\n' "$CANONICAL_COMMAND" "$CANONICAL_OUTCOME"
+            printf '| Comparison | %s |\n' "$COMPARISON_OUTCOME"
+            printf '| Repository state | %s |\n' "$REPOSITORY_STATE_OUTCOME"
+            printf '| Drift detected | `%s` |\n' "$drift"
+            printf '| Checked-in SHA-256 | `%s` |\n' "$checked_in_sha256"
+            printf '| Regenerated SHA-256 | `%s` |\n' "$generated_sha256"
+            printf '\nThe retained evidence artifact contains the full regenerated policy, validation output, command logs, identities, and full diff.\n'
+            if [[ "$result" == "Drift detected" ]]; then
+              printf '\n## Bounded diff excerpt\n\n```diff\n'
+              sed -n '1,120p' "$EVIDENCE_DIR/region-policy.diff"
+              printf '```\n'
+            fi
+          } | tee "$EVIDENCE_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+          printf '%s\n' "$result" > "$EVIDENCE_DIR/classification.txt"
+          printf 'result=%s\n' "$result" >> "$GITHUB_OUTPUT"
+
+      - name: Upload hosted evidence
+        id: upload
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: region-policy-drift-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/region-policy-drift-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Finalize evidence retention outcome
+        if: always() && !cancelled()
+        shell: bash
+        env:
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$UPLOAD_OUTCOME" == "success" ]]; then
+            {
+              printf '\n## Evidence retention\n\n'
+              printf 'The complete evidence artifact is retained for 14 days: '
+              printf '[region-policy-drift-evidence](%s).\n\n' "$ARTIFACT_URL"
+              printf 'Artifact digest: `%s`\n' "$ARTIFACT_DIGEST"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Failed\n' > "$EVIDENCE_DIR/classification.txt"
+            {
+              printf '\n## Evidence retention\n\n'
+              printf '**Failed:** the hosted evidence artifact could not be uploaded. '
+              printf 'The Actions job conclusion is authoritative.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce review conclusion
+        if: always() && !cancelled()
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$(cat "$EVIDENCE_DIR/classification.txt" 2>/dev/null || printf 'Failed')"
+          if [[ "$result" != "Clean" ]]; then
+            printf 'Region policy drift review result: %s\n' "$result" >&2
+            exit 1
+          fi
+          printf 'Region policy drift review result: Clean\n'
