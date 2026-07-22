@@ -299,6 +299,39 @@ Operator-owned `groups.*` remains preserved unless `--replace-groups` is used.
 Generation and validation do not require `LINODE_TOKEN`, read no
 account-specific data, and perform no provider mutations.
 
+### Hosted Region Policy Drift Review
+
+The repository-owned [region policy drift review workflow](.github/workflows/region-policy-drift-review.yml)
+runs every Monday at `17:20 UTC` and supports manual dispatch. The fixed UTC
+schedule corresponds to 09:20 Pacific Standard Time or 10:20 Pacific Daylight
+Time; it deliberately does not preserve a single Pacific wall-clock time across
+daylight-saving changes. The 20-minute offset avoids starting at the same minute
+as the weekly hosted chaos workflow.
+
+The workflow checks out and verifies the exact requested commit, uses Python
+3.12, installs the repository with `python -m pip install -e .`, regenerates a
+temporary policy with `linode-image-lab region-policy generate`, validates it
+with `linode-image-lab region-policy validate`, and runs canonical `make check`.
+It uses only the public Linode regions endpoint and receives only `contents:
+read` permission. Checkout credentials are not persisted, no provider or
+repository secret is configured, and the workflow performs no provider or
+hosted repository mutation.
+
+Generation writes outside the repository workspace, so any tracked, staged, or
+untracked repository change is unexpected and fails the run. The state check
+allows only ignored editable-install and test caches under
+`src/linode_image_lab.egg-info/`, `src/linode_image_lab/__pycache__/`, and
+`tests/unit/__pycache__/`; it records their presence and rejects every other
+ignored path. A matching policy is **Clean**. A validated difference is **Drift
+detected** and deliberately fails the workflow as an actionable repository
+signal without repairing the policy. Setup, command, validation, comparison,
+evidence-upload, or repository state errors are **Failed**. Unreliable public
+metadata retrieval is **Unable to verify**. The job summary includes a bounded
+diff excerpt for drift; a 14-day artifact retains the full regenerated policy,
+full diff, validation output, command logs, tested commit, and file identities.
+Cancellation remains the authoritative Actions conclusion; post-run
+classification and upload steps do not claim a result after cancellation.
+
 Validate the artifact against current provider metadata:
 
 ```sh
