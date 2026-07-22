@@ -54,7 +54,7 @@ jobs:
             printf 'generation_command=%s\n' "$GENERATION_COMMAND"
             printf 'validation_command=%s\n' "$VALIDATION_COMMAND"
             printf 'canonical_command=%s\n' "$CANONICAL_COMMAND"
-          } > "$EVIDENCE_DIR/run-metadata.txt"
+          } > "$evidence_dir/run-metadata.txt"
 
       - name: Check out exact requested commit
         id: checkout
