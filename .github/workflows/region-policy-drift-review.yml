@@ -16,8 +16,6 @@ concurrency:
 
 env:
   POLICY_PATH: policy/region-policy.toml
-  EVIDENCE_DIR: ${{ runner.temp }}/region-policy-drift-evidence
-  GENERATED_POLICY_PATH: ${{ runner.temp }}/region-policy-drift-evidence/regenerated-region-policy.toml
   PUBLIC_METADATA_SOURCE: https://api.linode.com/v4/regions
   GENERATION_COMMAND: linode-image-lab region-policy generate --output [runner-temp]/regenerated-region-policy.toml
   VALIDATION_COMMAND: linode-image-lab region-policy validate --path [runner-temp]/regenerated-region-policy.toml
@@ -39,7 +37,13 @@ jobs:
           HOSTED_RUNNER_ARCH: ${{ runner.arch }}
         run: |
           set -euo pipefail
-          mkdir -p "$EVIDENCE_DIR"
+          evidence_dir="$RUNNER_TEMP/region-policy-drift-evidence"
+          generated_policy_path="$evidence_dir/regenerated-region-policy.toml"
+
+          printf 'EVIDENCE_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
+          printf 'GENERATED_POLICY_PATH=%s\n' "$generated_policy_path" >> "$GITHUB_ENV"
+
+          mkdir -p "$evidence_dir"
           {
             printf 'repository=%s\n' "$GITHUB_REPOSITORY"
             printf 'workflow_run=https://github.com/%s/actions/runs/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
