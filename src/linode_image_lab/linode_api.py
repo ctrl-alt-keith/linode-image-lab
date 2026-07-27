@@ -479,7 +479,7 @@ class LinodeClient:
 
             try:
                 with urlopen(request, timeout=self.timeout_seconds) as response:
-                    text = response.read().decode("utf-8")
+                    response_body = response.read()
                 break
             except HTTPError as exc:
                 if exc.code == 401:
@@ -520,9 +520,12 @@ class LinodeClient:
                     continue
                 raise LinodeApiError(self._failure_message("Linode API request failed", attempt)) from exc
 
-        if not text:
+        if not response_body:
             return {} if allow_empty else {}
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(response_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LinodeApiError("Linode API returned a malformed response") from exc
         if isinstance(parsed, dict):
             return parsed
         raise LinodeApiError("Linode API returned an unexpected response")
