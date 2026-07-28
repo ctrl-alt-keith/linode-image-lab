@@ -371,6 +371,19 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "ttl_parse_failed")
 
+    def test_non_utc_ttl_tags_are_preserved(self) -> None:
+        for ttl in ("2026-01-01T00:00:00", "2026-01-01T00:00:00-08:00"):
+            with self.subTest(ttl=ttl):
+                client = FakeCleanupClient([linode_resource(ttl=ttl)])
+
+                manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+                self.assertEqual(client.deleted, [])
+                self.assertEqual(
+                    manifest["cleanup"]["preserved"][0]["reason"],
+                    "ttl_parse_failed",
+                )
+
     def test_malformed_image_ttl_is_preserved(self) -> None:
         client = FakeCleanupClient([], images=[image_resource(ttl="not-a-timestamp")])
 
