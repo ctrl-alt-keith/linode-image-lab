@@ -214,6 +214,34 @@ class LinodeClientTests(unittest.TestCase):
         self.assertNotIn("private/789", str(raised.exception))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
+    def test_malformed_json_response_raises_stable_public_safe_error(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        private_response_fragment = b'{"id":"private/789"'
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse(private_response_fragment),
+        ):
+            with self.assertRaises(LinodeApiError) as raised:
+                client.get_instance(123)
+
+        self.assertEqual(str(raised.exception), "Linode API returned a malformed response")
+        self.assertNotIn("private/789", str(raised.exception))
+        self.assertNotIsInstance(raised.exception.__cause__, LinodeApiError)
+
+    def test_non_utf8_response_raises_stable_public_safe_error(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse(b"\xffprivate/789"),
+        ):
+            with self.assertRaises(LinodeApiError) as raised:
+                client.get_instance(123)
+
+        self.assertEqual(str(raised.exception), "Linode API returned a malformed response")
+        self.assertNotIn("private/789", str(raised.exception))
+
     def test_provider_preflight_image_requires_available_status(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
 
