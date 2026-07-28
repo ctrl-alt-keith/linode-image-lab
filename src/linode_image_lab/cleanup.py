@@ -34,8 +34,8 @@ def parse_ttl(value: str) -> datetime | None:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+        return None
     return parsed.astimezone(UTC)
 
 
