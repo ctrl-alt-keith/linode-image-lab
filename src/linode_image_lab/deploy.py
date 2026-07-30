@@ -340,17 +340,6 @@ def cleanup_started(manifest: dict[str, Any]) -> bool:
     return any(step.get("name") == "cleanup_deploy_instance" for step in manifest.get("steps", []))
 
 
-def validate_deploy_instance(
-    resource: dict[str, Any],
-    *,
-    required_tags: list[str],
-    region: str,
-) -> None:
-    validate_instance_region(resource, region)
-    validate_instance_running(resource)
-    validate_required_tags(resource, required_tags=required_tags)
-
-
 def validate_instance_region(resource: dict[str, Any], region: str) -> None:
     if resource.get("region") != region:
         raise DeployError("created deploy instance is not in the requested region")

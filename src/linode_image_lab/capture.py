@@ -371,25 +371,6 @@ def cleanup_started(manifest: dict[str, Any]) -> bool:
     return any(step.get("name") == "cleanup_capture_source" for step in manifest.get("steps", []))
 
 
-def validate_created_resource(
-    resource: dict[str, Any],
-    *,
-    required_tags: list[str],
-    region: str | None = None,
-) -> None:
-    if region is not None:
-        validate_resource_region(
-            resource,
-            region=region,
-            message="created capture source is not in the requested region",
-        )
-    validate_required_tags(
-        resource,
-        required_tags=required_tags,
-        message="created resource is missing required capture tags",
-    )
-
-
 def validate_resource_region(resource: dict[str, Any], *, region: str, message: str) -> None:
     if resource.get("region") != region:
         raise CaptureError(message)
