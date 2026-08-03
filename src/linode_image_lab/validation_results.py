@@ -36,8 +36,8 @@ def mark_validation_check_succeeded(validation: dict[str, Any], name: str) -> No
 
 
 def mark_validation_check_failed(validation: dict[str, Any], name: str, failure_reason: str) -> None:
-    validation["status"] = "failed"
     check = _validation_check(validation, name)
+    validation["status"] = "failed"
     check["status"] = "failed"
     check["failure_reason"] = failure_reason
 
