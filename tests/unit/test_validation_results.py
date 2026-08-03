@@ -5,6 +5,9 @@ import unittest
 from linode_image_lab.redaction import REDACTION
 from linode_image_lab.validation_results import (
     combined_validation,
+    finish_validation,
+    mark_validation_check_failed,
+    mark_validation_check_succeeded,
     record_validation_check,
     start_validation,
 )
@@ -47,6 +50,38 @@ class ValidationResultsTests(unittest.TestCase):
         self.assertEqual(validation["status"], "failed")
         self.assertEqual(validation["checks"][0]["target"], "capture.capture_source")
         self.assertEqual(validation["checks"][1]["target"], "deploy.deploy_instance")
+
+    def test_unknown_check_name_fails_closed(self) -> None:
+        validation = start_validation((("api_check", "provider_resource"),))
+
+        with self.assertRaisesRegex(ValueError, "must exist exactly once: typo"):
+            mark_validation_check_succeeded(validation, "typo")
+
+        self.assertEqual(validation["checks"][0]["status"], "pending")
+
+    def test_failing_unknown_check_does_not_mutate_validation(self) -> None:
+        validation = start_validation(
+            (("api_check", "provider_resource"), ("disk_check", "source_disk"))
+        )
+        expected_checks = [dict(check) for check in validation["checks"]]
+
+        with self.assertRaisesRegex(ValueError, "must exist exactly once: typo"):
+            mark_validation_check_failed(validation, "typo", "provider failure")
+
+        self.assertEqual(validation["status"], "running")
+        self.assertEqual(validation["checks"], expected_checks)
+
+    def test_duplicate_check_names_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "names must be unique"):
+            start_validation((("api_check", "first"), ("api_check", "second")))
+
+    def test_incomplete_validation_cannot_finish_successfully(self) -> None:
+        validation = start_validation((("api_check", "provider_resource"),))
+
+        with self.assertRaisesRegex(ValueError, "did not succeed: api_check"):
+            finish_validation(validation)
+
+        self.assertEqual(validation["status"], "failed")
 
 
 def raise_value_error(message: str) -> None:

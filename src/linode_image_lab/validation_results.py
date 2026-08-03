@@ -11,7 +11,11 @@ CheckSpec = tuple[str, str]
 
 
 def start_validation(checks: Iterable[CheckSpec]) -> dict[str, Any]:
-    return {"status": "running", "checks": [check_result(name, target, "pending") for name, target in checks]}
+    results = [check_result(name, target, "pending") for name, target in checks]
+    names = [result["name"] for result in results]
+    if len(names) != len(set(names)):
+        raise ValueError("validation check names must be unique")
+    return {"status": "running", "checks": results}
 
 
 def check_result(name: str, target: str, status: str) -> dict[str, str]:
@@ -28,25 +32,35 @@ def record_validation_check(validation: dict[str, Any], name: str, check: Callab
 
 
 def mark_validation_check_succeeded(validation: dict[str, Any], name: str) -> None:
-    for check in validation.get("checks", []):
-        if check.get("name") == name:
-            check["status"] = "succeeded"
-            return
+    _validation_check(validation, name)["status"] = "succeeded"
 
 
 def mark_validation_check_failed(validation: dict[str, Any], name: str, failure_reason: str) -> None:
+    check = _validation_check(validation, name)
     validation["status"] = "failed"
-    for check in validation.get("checks", []):
-        if check.get("name") == name:
-            check["status"] = "failed"
-            check["failure_reason"] = failure_reason
-            return
+    check["status"] = "failed"
+    check["failure_reason"] = failure_reason
 
 
 def finish_validation(validation: dict[str, Any]) -> None:
     if validation.get("status") == "failed":
         return
+    incomplete = [
+        str(check.get("name", "<unnamed>"))
+        for check in validation.get("checks", [])
+        if check.get("status") != "succeeded"
+    ]
+    if incomplete:
+        validation["status"] = "failed"
+        raise ValueError(f"validation checks did not succeed: {', '.join(incomplete)}")
     validation["status"] = "succeeded"
+
+
+def _validation_check(validation: dict[str, Any], name: str) -> dict[str, Any]:
+    matches = [check for check in validation.get("checks", []) if check.get("name") == name]
+    if len(matches) != 1:
+        raise ValueError(f"validation check must exist exactly once: {name}")
+    return matches[0]
 
 
 def combined_validation(
