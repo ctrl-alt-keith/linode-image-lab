@@ -91,7 +91,7 @@ def iter_local_files(root: Path) -> list[Path]:
     for path in root.rglob("*"):
         if should_skip_local_path(path):
             continue
-        if path.is_file():
+        if path.is_file() or path.is_symlink():
             files.append(path)
     return files
 
@@ -118,13 +118,13 @@ def iter_scanned_files(root: Path) -> list[Path]:
         if not name:
             continue
         path = root / Path(name)
-        if path.is_file() and not should_skip_local_path(path.relative_to(root)):
+        if (path.is_file() or path.is_symlink()) and not should_skip_local_path(path.relative_to(root)):
             files.append(path)
     return files
 
 
 def iter_scanned_text_files(root: Path) -> list[Path]:
-    return [path for path in iter_scanned_files(root) if is_text_path(path)]
+    return [path for path in iter_scanned_files(root) if is_text_path(path) and not path.is_symlink()]
 
 
 def is_under(path: Path, parent: Path) -> bool:
@@ -145,6 +145,11 @@ def scan_fixture_placement(root: Path) -> list[str]:
 
 def scan_public_safety(root: Path) -> list[str]:
     findings = scan_fixture_placement(root)
+    findings.extend(
+        f"{path.relative_to(root)}: symbolic links are not allowed on the public-safety scan surface"
+        for path in iter_scanned_files(root)
+        if path.is_symlink()
+    )
     for path in iter_scanned_text_files(root):
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root)
