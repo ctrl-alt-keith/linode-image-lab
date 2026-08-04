@@ -208,6 +208,22 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(findings, [])
 
+    def test_reports_text_symlink_without_reading_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as external_tmp:
+            root = Path(tmp)
+            external = Path(external_tmp) / "private.md"
+            email_like = "person" + "@" + "example.com"
+            external.write_text(f"contact {email_like}\n", encoding="utf-8")
+            (root / "linked.md").symlink_to(external)
+
+            findings = scan_public_safety(root)
+
+        self.assertEqual(
+            findings,
+            ["linked.md: symbolic links are not allowed on the public-safety scan surface"],
+        )
+        self.assertNotIn(email_like, "\n".join(findings))
+
 
 if __name__ == "__main__":
     unittest.main()
