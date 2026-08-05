@@ -77,6 +77,7 @@ update the target firewall rules document.
 `make security-check` scans tracked text files and untracked non-ignored text
 files for:
 
+- tracked or non-ignored symbolic links anywhere on the scan surface,
 - sensitive value assignments,
 - email-like values,
 - private network URLs,
