@@ -35,6 +35,18 @@ class ValidationResultsTests(unittest.TestCase):
             },
         )
 
+    def test_failed_check_redacts_provider_image_id_from_failure_reason(self) -> None:
+        validation = start_validation((("image_available", "replication_source"),))
+
+        with self.assertRaises(ValueError):
+            record_validation_check(
+                validation,
+                "image_available",
+                lambda: raise_value_error("requested image private/789 is not available"),
+            )
+
+        self.assertEqual(validation["checks"][0]["failure_reason"], f"requested image {REDACTION} is not available")
+
     def test_combined_validation_prefixes_symbolic_targets(self) -> None:
         capture_validation = {
             "status": "succeeded",
