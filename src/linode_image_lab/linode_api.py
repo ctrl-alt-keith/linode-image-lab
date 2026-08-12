@@ -170,25 +170,14 @@ class LinodeClient:
 
     def list_regions(self) -> list[dict[str, Any]]:
         regions: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            query = urlencode({"page": page, "page_size": 100})
-            response = self._request("GET", f"/regions?{query}", retry=True, operation="list_regions")
-            data = response.get("data", []) if isinstance(response, dict) else []
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                region = self._region_resource(item)
-                country = item.get("country")
-                if isinstance(country, str) and country.strip():
-                    region["country"] = country.strip().lower()
-                if isinstance(region.get("region"), str) and region["region"].strip():
-                    regions.append(region)
-
-            pages = response.get("pages", page) if isinstance(response, dict) else page
-            if not isinstance(pages, int) or page >= pages:
-                return regions
-            page += 1
+        for item in self._paginated_data("/regions", operation="list_regions"):
+            region = self._region_resource(item)
+            country = item.get("country")
+            if isinstance(country, str) and country.strip():
+                region["country"] = country.strip().lower()
+            if isinstance(region.get("region"), str) and region["region"].strip():
+                regions.append(region)
+        return regions
 
     def preflight_region(self, region: str) -> None:
         escaped = quote(region, safe="")
@@ -366,42 +355,43 @@ class LinodeClient:
 
     def list_managed_linodes(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            query = urlencode({"page": page, "page_size": 100})
-            response = self._request("GET", f"/linode/instances?{query}", retry=True, operation="list_managed_linodes")
-            data = response.get("data", []) if isinstance(response, dict) else []
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                resource = self._instance_resource(item)
-                tags = tags_to_dict(resource.get("tags", []))
-                if tags.get("project") == PROJECT:
-                    resources.append(resource)
-
-            pages = response.get("pages", page) if isinstance(response, dict) else page
-            if not isinstance(pages, int) or page >= pages:
-                return resources
-            page += 1
+        for item in self._paginated_data(
+            "/linode/instances",
+            operation="list_managed_linodes",
+        ):
+            resource = self._instance_resource(item)
+            tags = tags_to_dict(resource.get("tags", []))
+            if tags.get("project") == PROJECT:
+                resources.append(resource)
+        return resources
 
     def list_managed_images(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
+        for item in self._paginated_data("/images", operation="list_managed_images"):
+            resource = self._image_resource(item)
+            tags = tags_to_dict(resource.get("tags", []))
+            if tags.get("project") == PROJECT:
+                resources.append(resource)
+        return resources
+
+    def _paginated_data(self, path: str, *, operation: str) -> Iterable[dict[str, Any]]:
         page = 1
         while True:
             query = urlencode({"page": page, "page_size": 100})
-            response = self._request("GET", f"/images?{query}", retry=True, operation="list_managed_images")
-            data = response.get("data", []) if isinstance(response, dict) else []
+            response = self._request(
+                "GET",
+                f"{path}?{query}",
+                retry=True,
+                operation=operation,
+            )
+            data = response.get("data", [])
             for item in data:
-                if not isinstance(item, dict):
-                    continue
-                resource = self._image_resource(item)
-                tags = tags_to_dict(resource.get("tags", []))
-                if tags.get("project") == PROJECT:
-                    resources.append(resource)
+                if isinstance(item, dict):
+                    yield item
 
-            pages = response.get("pages", page) if isinstance(response, dict) else page
+            pages = response.get("pages", page)
             if not isinstance(pages, int) or page >= pages:
-                return resources
+                return
             page += 1
 
     def get_instance(self, linode_id: int) -> dict[str, Any]:
