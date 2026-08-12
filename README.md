@@ -536,8 +536,8 @@ for rollback notes, stale-registry behavior, and log-safety cautions.
 - Normal stdout is redacted for public-safe review.
 - `--manifest-file PATH` writes an atomic copy of the same redacted manifest
   emitted on stdout for `capture`, `deploy`, `capture-deploy`,
-  `capture-replicate-deploy`, `replicate`, and `cleanup`; `--manifest-file -`
-  keeps stdout-only behavior.
+  `capture-replicate-deploy`, `replicate`, `cleanup`, and `firewall-sync`;
+  `--manifest-file -` keeps stdout-only behavior.
 
 ## What This Does
 
