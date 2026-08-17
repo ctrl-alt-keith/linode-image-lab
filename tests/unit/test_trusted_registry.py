@@ -131,6 +131,26 @@ class TrustedRegistryTests(unittest.TestCase):
 
         fetch.assert_not_called()
 
+    def test_endpoint_with_unsupported_url_components_is_rejected_before_fetch(self) -> None:
+        credential_bearing_endpoint = (
+            "https://" + ":".join(("access", "secret")) + "@us-east-1.linodeobjects.com"
+        )
+        for endpoint_url in (
+            credential_bearing_endpoint,
+            "https://us-east-1.linodeobjects.com?version=1",
+            "https://us-east-1.linodeobjects.com#registry",
+        ):
+            with self.subTest(endpoint_url=endpoint_url), patch("linode_image_lab.trusted_registry.urlopen") as fetch:
+                with self.assertRaisesRegex(RegistryFetchError, "endpoint URL is invalid"):
+                    fetch_registry_from_object_storage(
+                        endpoint_url=endpoint_url,
+                        bucket="example-bucket",
+                        object_key="registry.json",
+                        environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+                    )
+
+                fetch.assert_not_called()
+
     def test_registry_fetch_failure_fails_closed(self) -> None:
         error = HTTPError("https://example.invalid", 403, "forbidden", {}, None)
         self.addCleanup(error.close)
