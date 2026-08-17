@@ -161,7 +161,15 @@ def _parse_endpoint(endpoint_url: str) -> ParseResult:
     parsed = urlparse(endpoint_url)
     if parsed.scheme != "https":
         raise RegistryFetchError("registry Object Storage endpoint URL must use https")
-    if not parsed.netloc or parsed.path not in {"", "/"}:
+    if (
+        not parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise RegistryFetchError("registry Object Storage endpoint URL is invalid")
     return parsed
 
