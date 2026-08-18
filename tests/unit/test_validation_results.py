@@ -47,6 +47,18 @@ class ValidationResultsTests(unittest.TestCase):
 
         self.assertEqual(validation["checks"][0]["failure_reason"], f"requested image {REDACTION} is not available")
 
+    def test_failed_check_does_not_expose_non_value_error_message(self) -> None:
+        validation = start_validation((("api_check", "provider_resource"),))
+
+        with self.assertRaises(RuntimeError):
+            record_validation_check(
+                validation,
+                "api_check",
+                lambda: raise_runtime_error("token=abcdefgh123456"),
+            )
+
+        self.assertEqual(validation["checks"][0]["failure_reason"], "RuntimeError")
+
     def test_combined_validation_prefixes_symbolic_targets(self) -> None:
         capture_validation = {
             "status": "succeeded",
@@ -98,6 +110,10 @@ class ValidationResultsTests(unittest.TestCase):
 
 def raise_value_error(message: str) -> None:
     raise ValueError(message)
+
+
+def raise_runtime_error(message: str) -> None:
+    raise RuntimeError(message)
 
 
 if __name__ == "__main__":
