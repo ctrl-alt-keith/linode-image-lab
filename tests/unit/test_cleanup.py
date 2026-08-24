@@ -408,6 +408,16 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(client.deleted, [])
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "missing_required_tags")
 
+    def test_boolean_linode_id_is_preserved_without_provider_call(self) -> None:
+        resource = linode_resource(linode_id=True)
+        client = FakeCleanupClient([resource])
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(client.get_count, 0)
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "missing_provider_id")
+
     def test_image_missing_required_tags_is_preserved(self) -> None:
         client = FakeCleanupClient(
             [],

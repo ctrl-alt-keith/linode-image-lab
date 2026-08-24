@@ -323,7 +323,9 @@ def resource_provider_id(resource: dict[str, Any]) -> object:
 def valid_provider_id(resource_type_name: str, provider_id: object) -> bool:
     if resource_type_name == "image":
         return isinstance(provider_id, str) and bool(provider_id)
-    return isinstance(provider_id, int)
+    # ``bool`` is an ``int`` subclass in Python; do not let malformed
+    # discovery data turn ``True`` into provider id 1.
+    return isinstance(provider_id, int) and not isinstance(provider_id, bool) and provider_id > 0
 
 
 def refetch_resource(client: LinodeClientProtocol, resource_type_name: str, provider_id: object) -> dict[str, Any]:
