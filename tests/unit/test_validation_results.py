@@ -99,6 +99,10 @@ class ValidationResultsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "names must be unique"):
             start_validation((("api_check", "first"), ("api_check", "second")))
 
+    def test_empty_validation_check_set_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must include at least one check"):
+            start_validation(())
+
     def test_incomplete_validation_cannot_finish_successfully(self) -> None:
         validation = start_validation((("api_check", "provider_resource"),))
 
