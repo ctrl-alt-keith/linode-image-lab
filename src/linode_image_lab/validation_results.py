@@ -12,6 +12,8 @@ CheckSpec = tuple[str, str]
 
 def start_validation(checks: Iterable[CheckSpec]) -> dict[str, Any]:
     results = [check_result(name, target, "pending") for name, target in checks]
+    if not results:
+        raise ValueError("validation must include at least one check")
     names = [result["name"] for result in results]
     if len(names) != len(set(names)):
         raise ValueError("validation check names must be unique")
