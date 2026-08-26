@@ -567,7 +567,11 @@ linode-image-lab capture --region us-east
 linode-image-lab deploy --region us-east
 linode-image-lab capture-deploy --region us-east
 linode-image-lab capture-replicate-deploy --config examples/config/capture-replicate-deploy.example.toml
+linode-image-lab config validate --config examples/config/capture-deploy-smoke.toml --command capture-deploy
+linode-image-lab replicate --region us-east --image-id \"$CUSTOM_IMAGE_ID\"
 linode-image-lab cleanup
+linode-image-lab firewall-sync --config examples/config/firewall-sync.example.toml
+linode-image-lab region-policy validate --path policy/region-policy.toml
 ```
 
 Execute capture:
