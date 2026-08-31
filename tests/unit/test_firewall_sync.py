@@ -312,6 +312,41 @@ class FirewallSyncTests(unittest.TestCase):
         self.assertFalse(manifest["applied"])
         self.assertEqual(client.updates, [])
 
+    def test_execute_fails_closed_when_firewall_changes_after_planning(self) -> None:
+        initial = firewall_rules(inbound=[managed_rule(ipv4=["198.51.100.1/32"])])
+        changed = firewall_rules(
+            inbound=[
+                {
+                    "label": "operator-ssh",
+                    "description": "operator-owned",
+                    "action": "ACCEPT",
+                    "protocol": "TCP",
+                    "ports": "2222",
+                    "addresses": {"ipv4": ["203.0.113.0/24"], "ipv6": []},
+                },
+                managed_rule(ipv4=["198.51.100.1/32"]),
+            ]
+        )
+        client = FakeFirewallClient(initial)
+        reads = [initial, changed]
+        client.get_firewall_rules = lambda firewall_id: reads.pop(0)  # type: ignore[method-assign]
+
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            with self.assertRaisesRegex(FirewallSyncError, "firewall rules changed after planning") as raised:
+                firewall_sync_plan(
+                    firewall_id=12345,
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket",
+                    registry_object_key="registry.json",
+                    ports="22",
+                    execute=True,
+                    client=client,
+                    environ={},
+                )
+
+        self.assertIsNotNone(raised.exception.manifest)
+        self.assertEqual(client.updates, [])
+
     def test_cli_execute_update_failure_emits_safe_unapplied_plan(self) -> None:
         client = FakeFirewallClient(firewall_rules(), update_failure=True)
         output = StringIO()
