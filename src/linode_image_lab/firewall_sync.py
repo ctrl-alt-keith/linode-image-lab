@@ -110,6 +110,20 @@ def firewall_sync_plan(
     plan["dry_run"] = False
     plan["safety"]["mutates"] = True
     try:
+        pre_write_rules = sync_client.get_firewall_rules(options.firewall_id)
+        if normalize_firewall_rules(pre_write_rules) != normalize_firewall_rules(current_rules):
+            raise FirewallSyncError(
+                "firewall rules changed after planning; rerun firewall-sync before executing",
+                plan,
+            )
+    except FirewallSyncError as exc:
+        if exc.manifest is not None:
+            raise
+        raise FirewallSyncError(str(exc), plan) from exc
+    except ValueError as exc:
+        raise FirewallSyncError("firewall-sync pre-write verification failed", plan) from exc
+
+    try:
         sync_client.update_firewall_rules(options.firewall_id, plan["provider_payload"])
     except ValueError as exc:
         raise FirewallSyncError("firewall-sync --execute failed", plan) from exc
