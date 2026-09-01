@@ -116,8 +116,10 @@ def firewall_sync_plan(
                 "firewall rules changed after planning; rerun firewall-sync before executing",
                 plan,
             )
-    except FirewallSyncError:
-        raise
+    except FirewallSyncError as exc:
+        if exc.manifest is not None:
+            raise
+        raise FirewallSyncError(str(exc), plan) from exc
     except ValueError as exc:
         raise FirewallSyncError("firewall-sync pre-write verification failed", plan) from exc
 

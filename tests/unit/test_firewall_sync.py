@@ -347,6 +347,78 @@ class FirewallSyncTests(unittest.TestCase):
         self.assertIsNotNone(raised.exception.manifest)
         self.assertEqual(client.updates, [])
 
+    def test_execute_preserves_plan_when_pre_write_rules_are_malformed(self) -> None:
+        initial = firewall_rules(inbound=[managed_rule(ipv4=["198.51.100.1/32"])])
+        malformed = {
+            "outbound": [],
+            "inbound_policy": "ACCEPT",
+            "outbound_policy": "ACCEPT",
+        }
+        client = FakeFirewallClient(initial)
+        reads = [initial, malformed]
+        client.get_firewall_rules = lambda firewall_id: reads.pop(0)  # type: ignore[method-assign]
+
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            with self.assertRaisesRegex(FirewallSyncError, "inbound rules response is invalid") as raised:
+                firewall_sync_plan(
+                    firewall_id=12345,
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket",
+                    registry_object_key="registry.json",
+                    ports="22",
+                    execute=True,
+                    client=client,
+                    environ={},
+                )
+
+        self.assertIsNotNone(raised.exception.manifest)
+        self.assertEqual(raised.exception.manifest["status"], "planned")
+        self.assertEqual(client.updates, [])
+
+    def test_cli_pre_write_rule_failure_emits_safe_unapplied_plan(self) -> None:
+        initial = firewall_rules(inbound=[managed_rule(ipv4=["198.51.100.1/32"])])
+        malformed = {
+            "outbound": [],
+            "inbound_policy": "ACCEPT",
+            "outbound_policy": "ACCEPT",
+        }
+        client = FakeFirewallClient(initial)
+        reads = [initial, malformed]
+        client.get_firewall_rules = lambda firewall_id: reads.pop(0)  # type: ignore[method-assign]
+        output = StringIO()
+        error = StringIO()
+
+        with (
+            patch("linode_image_lab.firewall_sync.LinodeClient.from_env", return_value=client),
+            patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()),
+            redirect_stdout(output),
+            patch("sys.stderr", error),
+        ):
+            code = main(
+                [
+                    "firewall-sync",
+                    "--firewall-id",
+                    "12345",
+                    "--registry-endpoint-url",
+                    "https://us-east-1.linodeobjects.com",
+                    "--registry-bucket",
+                    "example-bucket",
+                    "--registry-object-key",
+                    "registry.json",
+                    "--ports",
+                    "22",
+                    "--execute",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "planned")
+        self.assertNotIn("applied", payload)
+        self.assertEqual(client.updates, [])
+        self.assertIn("inbound rules response is invalid", error.getvalue())
+        self.assertNotIn("usage:", error.getvalue())
+
     def test_cli_execute_update_failure_emits_safe_unapplied_plan(self) -> None:
         client = FakeFirewallClient(firewall_rules(), update_failure=True)
         output = StringIO()
