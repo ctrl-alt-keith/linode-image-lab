@@ -163,6 +163,26 @@ class TrustedRegistryTests(unittest.TestCase):
                     environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
                 )
 
+    def test_malformed_registry_response_fails_closed(self) -> None:
+        cases = (
+            (b"\xff", "trusted registry JSON could not be parsed"),
+            (b"not JSON", "trusted registry JSON could not be parsed"),
+            (b"[]", "trusted registry JSON must be an object"),
+        )
+
+        for body, expected_error in cases:
+            with self.subTest(body=body), patch(
+                "linode_image_lab.trusted_registry.urlopen",
+                return_value=FakeHTTPResponse(body),
+            ):
+                with self.assertRaisesRegex(RegistryValidationError, expected_error):
+                    fetch_registry_from_object_storage(
+                        endpoint_url="https://us-east-1.linodeobjects.com",
+                        bucket="example-bucket",
+                        object_key="registry.json",
+                        environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+                    )
+
     def test_stale_registry_is_rejected(self) -> None:
         with self.assertRaisesRegex(RegistryValidationError, "valid_until is stale"):
             validate_registry(
