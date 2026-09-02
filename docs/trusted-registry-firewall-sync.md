@@ -97,6 +97,12 @@ the update, then emits the final JSON manifest on stdout.
 Only the exact managed rule is replaced or added. Unrelated inbound and
 outbound rules are preserved in the submitted rule payload.
 
+Immediately before an execute-mode update, the command re-reads the firewall
+rules and compares them with the rules used for planning. If the rules changed
+while the plan was being reviewed, or the pre-write response is malformed, the
+command fails closed without updating the firewall and emits the planned
+manifest. Rerun the dry-run and review the new plan before retrying execute.
+
 ## Registry Validation
 
 The command fails closed when the registry cannot be fetched or validated. It
