@@ -79,7 +79,7 @@ TABLE_FIELDS = {
         "authorized_keys_file",
     },
     "replicate": {"region", "regions", "image_id", "ttl"},
-    "cleanup": {"ttl"},
+    "cleanup": set(),
     "firewall-sync": {
         "firewall_id",
         "registry_endpoint_url",
@@ -97,7 +97,6 @@ COMMAND_TABLES = {
     "capture-deploy",
     "capture-replicate-deploy",
     "replicate",
-    "cleanup",
     "firewall-sync",
 }
 COMMAND_DEFAULT_FIELDS = {
@@ -130,7 +129,7 @@ COMMAND_DEFAULT_FIELDS = {
         "authorized_keys",
         "user_data",
     ),
-    "cleanup": ("ttl",),
+    "cleanup": (),
     "firewall-sync": (
         "firewall_id",
         "registry_endpoint_url",

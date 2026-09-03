@@ -157,6 +157,7 @@ class CleanupSelectionTests(unittest.TestCase):
 
         self.assertTrue(manifest["dry_run"])
         self.assertEqual(manifest["execution_mode"], "dry-run")
+        self.assertNotIn("ttl", manifest)
         self.assertEqual(manifest["cleanup"]["status"], "not_started")
         self.assertEqual(manifest["cleanup_candidates"], [])
         self.assertEqual(client.deleted, [])

@@ -127,7 +127,7 @@ sanitized serialization, which redacts provider identifiers before printing.
 Config is opt-in through `--config PATH`, either before or after the command,
 and uses TOML `schema_version = 1`. The config file can provide execution
 defaults in `[defaults]`, `[capture]`, `[deploy]`, `[capture-deploy]`,
-`[capture-replicate-deploy]`, `[replicate]`, and `[cleanup]` tables. Most
+`[capture-replicate-deploy]`, `[replicate]`, and `[firewall-sync]` tables. Most
 scalar defaults use override precedence: CLI flags,
 then command-specific config, then `[defaults]`, then existing generated
 defaults. Deploy metadata fields have narrower rules described below.
@@ -169,7 +169,8 @@ has no CLI override.
 as `"4 hours"`, `"1 day"`, `"30m"`, `"24h"`, `"7d"`, or `"2w"`. Relative TTLs
 are resolved during manifest generation against the current command execution
 time; serialized manifests and lifecycle/artifact tags continue to carry
-absolute UTC TTL timestamps.
+absolute UTC TTL timestamps. TTL defaults apply only to commands that create or
+replicate managed resources; standalone cleanup has no TTL override.
 `--execute`, preservation flags, run id fields, image labels, tokens,
 passwords, private SSH keys, root passwords, inline metadata, and inline
 cloud-init or user-data values are not configurable. Unknown keys and
@@ -517,6 +518,9 @@ resources carrying all required managed tags:
 
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
+Standalone cleanup does not accept `--ttl` or `[cleanup].ttl`; candidate
+selection and deletion revalidation derive expiration only from each
+resource's managed `ttl=...` tag.
 
 Cleanup discovery entries expose machine-readable expiration metadata derived
 from valid `ttl` tags. Expired entries include `expired_at`, the parsed UTC TTL
