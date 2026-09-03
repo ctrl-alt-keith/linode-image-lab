@@ -346,6 +346,9 @@ required tags are present:
 
 `ttl` is a project-internal cleanup tag used by this tool. Linode does not
 enforce it as a provider-side expiration policy.
+Standalone cleanup does not accept a TTL override. Both discovery and
+deletion revalidation derive expiration from each resource's managed `ttl=...`
+tag.
 
 Execute-mode cleanup inside capture, deploy, capture-deploy, and
 capture-replicate-deploy is narrower than standalone cleanup. Capture only

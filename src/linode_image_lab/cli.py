@@ -329,7 +329,6 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_mode.add_argument("--execute", action="store_true", help="Opt into Linode API deletion of expired resources.")
     add_manifest_file_arg(cleanup)
     cleanup.add_argument("--run-id", type=run_id_value, help="Optional run id filter for cleanup selection.")
-    cleanup.add_argument("--ttl", help="Optional ISO-8601 TTL timestamp.")
 
     firewall_sync = subparsers.add_parser(
         "firewall-sync",
@@ -694,7 +693,6 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "cleanup":
         return cleanup_plan(
             run_id=args.run_id,
-            ttl=args.ttl,
             discover=args.discover,
             execute=args.execute,
         )

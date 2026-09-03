@@ -76,6 +76,22 @@ class CliTests(unittest.TestCase):
 
         self.assertIn("--version", help_output)
 
+    def test_cleanup_help_does_not_advertise_ttl_override(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            main(["cleanup", "--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertNotIn("--ttl", output.getvalue())
+
+    def test_cleanup_rejects_ttl_override(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["cleanup", "--ttl", "2030-01-01T00:00:00Z"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unrecognized arguments: --ttl", error.getvalue())
+
     def test_plan_emits_sanitized_dry_run_preview(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
@@ -186,8 +202,6 @@ class CliTests(unittest.TestCase):
                 "cleanup",
                 "--run-id",
                 "run-test",
-                "--ttl",
-                "2030-01-01T00:00:00Z",
             ],
         ]
 
@@ -1679,6 +1693,7 @@ regions = ["us-ghost"]
             ("cleanup", ["--authorized-key", PUBLIC_KEY_ONE], "--authorized-key"),
             ("cleanup", ["--authorized-keys-file", keys_path], "--authorized-keys-file"),
             ("cleanup", ["--user-data-file", user_data_path], "--user-data-file"),
+            ("cleanup", ["--ttl", "2030-01-01T00:00:00Z"], "--ttl"),
             ("capture", ["--registry-endpoint-url", "https://us-east-1.linodeobjects.com"], "--registry-endpoint-url"),
             ("capture", ["--registry-bucket", "example-bucket"], "--registry-bucket"),
             ("capture", ["--registry-object-key", "registry.json"], "--registry-object-key"),
@@ -1700,9 +1715,6 @@ regions = ["us-ghost"]
         config_path = self.write_config(
             """
             schema_version = 1
-
-            [cleanup]
-            ttl = "2030-01-01T00:00:00Z"
             """
         )
 
@@ -1900,7 +1912,7 @@ regions = ["us-ghost"]
         self.assertEqual(raised.exception.code, 2)
         self.assertIn(f"file is too large; limit is {AUTHORIZED_KEYS_FILE_MAX_BYTES} bytes", error.getvalue())
 
-    def test_config_validate_preserves_ttl_without_semantic_parsing(self) -> None:
+    def test_cleanup_config_rejects_ttl(self) -> None:
         config_path = self.write_config(
             """
             schema_version = 1
@@ -1910,13 +1922,31 @@ regions = ["us-ghost"]
             """
         )
 
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["config", "validate", "--config", config_path, "--command", "cleanup"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unknown config key in [cleanup]: ttl", error.getvalue())
+
+    def test_config_validate_does_not_report_default_ttl_for_cleanup(self) -> None:
+        config_path = self.write_config(
+            """
+            schema_version = 1
+
+            [defaults]
+            ttl = "2030-01-01T00:00:00Z"
+            """
+        )
+
         output = StringIO()
         with redirect_stdout(output):
             code = main(["config", "validate", "--config", config_path, "--command", "cleanup"])
 
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(payload["effective_defaults"]["ttl"], "not-a-timestamp")
+        self.assertNotIn("ttl", payload["effective_defaults"])
+        self.assertNotIn("ttl", {item["field"] for item in payload["sources"]})
 
     def test_unknown_config_key_fails_clearly(self) -> None:
         config_path = self.write_config(

@@ -217,7 +217,7 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, `[capture-replicate-deploy]`, `[replicate]`,
-`[cleanup]`, and `[firewall-sync]` tables.
+and `[firewall-sync]` tables.
 Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
@@ -235,7 +235,8 @@ captured image outside standalone cleanup ownership and discovery.
 `ttl` may be an absolute ISO-8601 timestamp or a relative duration such as
 `"4 hours"`, `"1 day"`, `"30m"`, `"24h"`, `"7d"`, or `"2w"`. Relative TTLs
 are resolved at command runtime and manifests still emit absolute UTC `ttl`
-values and `ttl=...` tags.
+values and `ttl=...` tags. This default applies only to commands that create or
+replicate managed resources; standalone cleanup has no TTL override.
 
 ## Region Policy Artifacts
 
@@ -632,7 +633,9 @@ resource discovery, and reports expired eligible Linodes and lab-owned custom
 images in `cleanup_candidates` without deleting them. `cleanup --execute`
 requires `LINODE_TOKEN`, lists managed resources, and deletes only expired
 resources carrying the complete required tag set. Use `--run-id` to restrict
-discovery or deletion to one run.
+discovery or deletion to one run. Standalone cleanup does not accept `--ttl` or
+`[cleanup].ttl`; eligibility is determined only from each resource's managed
+`ttl=...` tag.
 
 ## Required Tags
 

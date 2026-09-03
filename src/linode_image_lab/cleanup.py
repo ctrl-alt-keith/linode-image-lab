@@ -23,7 +23,6 @@ class CleanupError(ValueError):
 @dataclass(frozen=True)
 class CleanupOptions:
     run_id: str | None = None
-    ttl: str | None = None
     discover: bool = False
     execute: bool = False
 
@@ -77,7 +76,6 @@ def select_cleanup_candidates(
 def cleanup_plan(
     *,
     run_id: str | None = None,
-    ttl: str | None = None,
     discover: bool = False,
     execute: bool = False,
     client: LinodeClientProtocol | None = None,
@@ -85,7 +83,7 @@ def cleanup_plan(
 ) -> dict[str, Any]:
     if run_id is not None:
         validate_run_id(run_id)
-    options = CleanupOptions(run_id=run_id, ttl=ttl, discover=discover, execute=execute)
+    options = CleanupOptions(run_id=run_id, discover=discover, execute=execute)
     manifest = base_cleanup_manifest(options)
     if not discover and not execute:
         manifest["message"] = (
@@ -193,7 +191,6 @@ def base_cleanup_manifest(options: CleanupOptions) -> dict[str, Any]:
         "mode": "cleanup",
         "run_id": options.run_id,
         "regions": [],
-        "ttl": options.ttl,
         "dry_run": not options.execute,
         "execution_mode": cleanup_execution_mode(options),
         "status": "running" if options.execute or options.discover else "planned",
