@@ -61,7 +61,7 @@ def add_config_arg(parser: argparse.ArgumentParser, *, dest: str) -> None:
     )
 
 
-def add_region_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
+def add_region_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--region",
         action="append",
@@ -226,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
     add_config_arg(plan, dest="command_config")
-    add_region_args(plan, required=True)
+    add_region_args(plan)
     plan.add_argument(
         "--mode",
         choices=("capture", "deploy", "capture-deploy", "capture-replicate-deploy"),
@@ -237,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture = subparsers.add_parser("capture", help="Plan or execute a single-region capture.")
     add_version_arg(capture, version_text)
     add_config_arg(capture, dest="command_config")
-    add_region_args(capture, required=True)
+    add_region_args(capture)
     capture.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
     add_manifest_file_arg(capture)
     capture.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
@@ -252,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = subparsers.add_parser("deploy", help="Plan or execute a single-region deploy.")
     add_version_arg(deploy, version_text)
     add_config_arg(deploy, dest="command_config")
-    add_region_args(deploy, required=True)
+    add_region_args(deploy)
     deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
     add_manifest_file_arg(deploy)
     deploy.add_argument("--image-id", help="Custom image id for the temporary deploy Linode.")
@@ -269,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_deploy = subparsers.add_parser("capture-deploy", help="Plan or execute capture plus deploy validation.")
     add_version_arg(capture_deploy, version_text)
     add_config_arg(capture_deploy, dest="command_config")
-    add_region_args(capture_deploy, required=True)
+    add_region_args(capture_deploy)
     capture_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
     add_manifest_file_arg(capture_deploy)
     capture_deploy.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
@@ -294,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_replicate_deploy.set_defaults(replication_enabled=True)
     add_version_arg(capture_replicate_deploy, version_text)
     add_config_arg(capture_replicate_deploy, dest="command_config")
-    add_region_args(capture_replicate_deploy, required=True)
+    add_region_args(capture_replicate_deploy)
     capture_replicate_deploy.add_argument("--execute", action="store_true", help="Opt into Linode API mutations.")
     add_manifest_file_arg(capture_replicate_deploy)
     capture_replicate_deploy.add_argument("--source-image", help="Source image id for the temporary capture Linode.")
@@ -316,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     replicate = subparsers.add_parser("replicate", help="Plan or execute explicit custom image replication.")
     add_version_arg(replicate, version_text)
     add_config_arg(replicate, dest="command_config")
-    add_region_args(replicate, required=True)
+    add_region_args(replicate)
     replicate.add_argument("--execute", action="store_true", help="Opt into Linode image replication mutation.")
     add_manifest_file_arg(replicate)
     replicate.add_argument("--image-id", help="Custom image id to replicate.")
