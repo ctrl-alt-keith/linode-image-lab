@@ -31,26 +31,41 @@ def _indented_blocks(lines: list[str], marker: str) -> list[list[str]]:
 
 
 def _step_blocks(lines: list[str]) -> list[list[str]]:
-    starts = [
-        index
-        for index, line in enumerate(lines)
-        if re.match(r"^\s{6}-\s+[A-Za-z0-9_-]+:", line)
-    ]
-    return [
-        lines[start : starts[index + 1] if index + 1 < len(starts) else len(lines)]
-        for index, start in enumerate(starts)
-    ]
+    blocks: list[list[str]] = []
+    for sequence in _indented_blocks(lines, "steps:"):
+        candidates = [
+            (index, len(line) - len(line.lstrip()))
+            for index, line in enumerate(sequence[1:], start=1)
+            if re.match(r"^\s*-\s+[A-Za-z0-9_-]+:", line)
+        ]
+        if not candidates:
+            continue
+        item_indent = min(indent for _, indent in candidates)
+        starts = [index for index, indent in candidates if indent == item_indent]
+        blocks.extend(
+            sequence[start : starts[index + 1] if index + 1 < len(starts) else len(sequence)]
+            for index, start in enumerate(starts)
+        )
+    return blocks
 
 
 def _mapping(block: list[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     base_indent = len(block[0]) - len(block[0].lstrip())
+    entry_indents = [
+        len(line) - len(line.lstrip())
+        for line in block[1:]
+        if line.strip() and not line.lstrip().startswith("#") and ":" in line
+    ]
+    if not entry_indents:
+        return values
+    entry_indent = min(indent for indent in entry_indents if indent > base_indent)
     for line in block[1:]:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-        if indent != base_indent + 2 or ":" not in stripped:
+        if indent != entry_indent or ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
         values[key] = value.strip()
