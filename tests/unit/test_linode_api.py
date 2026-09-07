@@ -173,6 +173,26 @@ class LinodeClientTests(unittest.TestCase):
         self.assertEqual([request.full_url for request in requests], [f"{API_BASE_URL}/regions?page=1&page_size=100"])
         self.assertIsNone(requests[0].get_header("Authorization"))
 
+    def test_paginated_list_rejects_non_list_data(self) -> None:
+        client = LinodeClient(api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse({"data": {}, "pages": 1}),
+        ):
+            with self.assertRaisesRegex(LinodeApiError, "invalid pagination data for list_regions"):
+                client.list_regions()
+
+    def test_paginated_list_rejects_invalid_page_count(self) -> None:
+        client = LinodeClient(api_base_url=API_BASE_URL)
+
+        with patch(
+            "linode_image_lab.linode_api.urlopen",
+            return_value=FakeHTTPResponse({"data": [], "pages": "1"}),
+        ):
+            with self.assertRaisesRegex(LinodeApiError, "invalid pagination metadata for list_regions"):
+                client.list_regions()
+
     def test_preflight_region_capability_requires_provider_capability(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         responses = [

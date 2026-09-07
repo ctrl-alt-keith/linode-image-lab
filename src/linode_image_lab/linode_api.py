@@ -384,13 +384,17 @@ class LinodeClient:
                 retry=True,
                 operation=operation,
             )
-            data = response.get("data", [])
+            data = response.get("data")
+            if not isinstance(data, list):
+                raise LinodeApiError(f"Linode API returned invalid pagination data for {operation}")
             for item in data:
                 if isinstance(item, dict):
                     yield item
 
-            pages = response.get("pages", page)
-            if not isinstance(pages, int) or page >= pages:
+            pages = response.get("pages")
+            if isinstance(pages, bool) or not isinstance(pages, int) or pages < 1:
+                raise LinodeApiError(f"Linode API returned invalid pagination metadata for {operation}")
+            if page >= pages:
                 return
             page += 1
 
