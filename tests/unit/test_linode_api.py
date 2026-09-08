@@ -193,6 +193,27 @@ class LinodeClientTests(unittest.TestCase):
             with self.assertRaisesRegex(LinodeApiError, "invalid pagination metadata for list_regions"):
                 client.list_regions()
 
+    def test_paginated_list_rejects_malformed_metadata_after_first_page(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        responses = [
+            FakeHTTPResponse(
+                {
+                    "data": [{"id": 123, "tags": ["project=linode-image-lab"]}],
+                    "pages": 2,
+                }
+            ),
+            FakeHTTPResponse(
+                {
+                    "data": [{"id": 456, "tags": ["project=linode-image-lab"]}],
+                    "pages": True,
+                }
+            ),
+        ]
+
+        with patch("linode_image_lab.linode_api.urlopen", side_effect=responses):
+            with self.assertRaisesRegex(LinodeApiError, "invalid pagination metadata for list_managed_linodes"):
+                client.list_managed_linodes()
+
     def test_preflight_region_capability_requires_provider_capability(self) -> None:
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         responses = [
