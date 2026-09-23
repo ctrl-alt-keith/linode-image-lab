@@ -146,6 +146,15 @@ def cleanup_plan(
                 item["resource"]["reason"] = "refetch_failed"
                 manifest["cleanup"]["preserved"].append(item["resource"])
                 continue
+            refreshed_id = resource_provider_id(current_resource)
+            if (
+                resource_type(current_resource) != item["resource"]["resource_type"]
+                or not valid_provider_id(item["resource"]["resource_type"], refreshed_id)
+                or refreshed_id != provider_id
+            ):
+                item["resource"]["reason"] = "refetch_identity_mismatch"
+                manifest["cleanup"]["preserved"].append(item["resource"])
+                continue
             current_assessment = assess_resource(current_resource, run_id=run_id, now=comparison_time)
             if current_assessment["action"] != "delete":
                 manifest["cleanup"]["preserved"].append(current_assessment["resource"])

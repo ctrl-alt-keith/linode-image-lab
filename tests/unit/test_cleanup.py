@@ -356,6 +356,30 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_failed")
         self.assertNotIn("provider response", json.dumps(manifest["cleanup"]["preserved"]))
 
+    def test_execute_preserves_candidate_when_refetch_identity_differs(self) -> None:
+        initial = linode_resource(linode_id=456)
+        client = FakeCleanupClient(
+            [initial], refreshed_resources={456: linode_resource(linode_id=789)}
+        )
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_identity_mismatch")
+
+    def test_execute_preserves_image_when_refetch_identity_differs(self) -> None:
+        initial = image_resource(image_id="private/456")
+        client = FakeCleanupClient(
+            [], images=[initial], refreshed_images={"private/456": image_resource(image_id="private/789")}
+        )
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.deleted_images, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_identity_mismatch")
+
     def test_unexpired_linode_is_preserved(self) -> None:
         client = FakeCleanupClient([linode_resource(ttl="2030-01-01T00:00:00Z")])
 
