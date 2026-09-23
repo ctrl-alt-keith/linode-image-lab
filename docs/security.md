@@ -49,8 +49,8 @@ selected command table, then `[defaults]`.
 
 `capture --execute`, `deploy --execute`, `capture-deploy --execute`,
 `capture-replicate-deploy --execute`, `replicate --execute`,
-`cleanup --discover`, `cleanup --execute`, and `firewall-sync` need a personal
-access token or equivalent OAuth access that can:
+`cleanup --discover`, and `cleanup --execute` need a personal access token or
+equivalent OAuth access that can:
 
 - read the current profile for preflight,
 - read regions, Linode types, images, and configured firewalls for input
@@ -67,10 +67,11 @@ and standalone cleanup does not create custom images. Standalone cleanup can
 delete only discovered lab-owned images with the default project tag and a
 complete expired cleanup tag set. If tags cannot be applied or later verified,
 execution fails safely because cleanup depends on rediscoverable tags.
-`firewall-sync` dry-runs read one existing Cloud Firewall and require Object
-Storage registry credentials from `LINODE_OBJ_ACCESS_KEY` and
-`LINODE_OBJ_SECRET_KEY`; `firewall-sync --execute` also needs permission to
-update the target firewall rules document.
+`firewall-sync` instead needs a `LINODE_TOKEN` that can read the target Cloud
+Firewall for dry-run planning; `firewall-sync --execute` also needs permission
+to update that firewall's rules document. Both modes require Object Storage
+registry credentials from `LINODE_OBJ_ACCESS_KEY` and
+`LINODE_OBJ_SECRET_KEY`.
 
 ## Public-Safety Scan
 
