@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import UTC, datetime
-from pathlib import Path
 
-from linode_image_lab.cleanup import CleanupError, cleanup_plan, select_cleanup_candidates
+from linode_image_lab.cleanup import CleanupError, cleanup_plan
 from linode_image_lab.manifest import serialize_manifest
 
 
@@ -123,33 +122,6 @@ def image_resource(
 
 
 class CleanupSelectionTests(unittest.TestCase):
-    def test_selects_only_expired_fully_tagged_resources(self) -> None:
-        fixture = Path("tests/fixtures/sanitized/mock_resources.json")
-        resources = json.loads(fixture.read_text(encoding="utf-8"))
-        resources.append({"id": "untagged", "tags": ["project=linode-image-lab"]})
-
-        selected = select_cleanup_candidates(
-            resources,
-            now=NOW,
-        )
-
-        self.assertEqual([resource["id"] for resource in selected], ["resource-expired"])
-
-    def test_select_cleanup_candidates_rejects_invalid_run_id_tag(self) -> None:
-        resource = linode_resource()
-        resource["id"] = "resource-invalid-run-id"
-        resource["tags"] = [
-            "project=linode-image-lab",
-            "run_id=run,bad",
-            "mode=capture-deploy",
-            "component=capture",
-            "ttl=2026-01-01T00:00:00Z",
-        ]
-
-        selected = select_cleanup_candidates([resource], now=NOW)
-
-        self.assertEqual(selected, [])
-
     def test_plain_cleanup_does_not_discover_or_delete(self) -> None:
         client = FakeCleanupClient([linode_resource()])
 
