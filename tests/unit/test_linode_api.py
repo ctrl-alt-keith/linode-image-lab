@@ -183,6 +183,16 @@ class LinodeClientTests(unittest.TestCase):
             with self.assertRaisesRegex(LinodeApiError, "invalid pagination data for list_regions"):
                 client.list_regions()
 
+    def test_managed_inventory_rejects_non_object_item(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        response = FakeHTTPResponse(
+            {"data": [{"id": 123, "tags": ["project=linode-image-lab"]}, None], "pages": 1}
+        )
+
+        with patch("linode_image_lab.linode_api.urlopen", return_value=response):
+            with self.assertRaisesRegex(LinodeApiError, "invalid pagination data for list_managed_linodes"):
+                client.list_managed_linodes()
+
     def test_paginated_list_rejects_invalid_page_count(self) -> None:
         client = LinodeClient(api_base_url=API_BASE_URL)
 
