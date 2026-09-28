@@ -388,8 +388,9 @@ class LinodeClient:
             if not isinstance(data, list):
                 raise LinodeApiError(f"Linode API returned invalid pagination data for {operation}")
             for item in data:
-                if isinstance(item, dict):
-                    yield item
+                if not isinstance(item, dict):
+                    raise LinodeApiError(f"Linode API returned invalid pagination data for {operation}")
+                yield item
 
             pages = response.get("pages")
             if isinstance(pages, bool) or not isinstance(pages, int) or pages < 1:
