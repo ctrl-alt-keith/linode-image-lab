@@ -340,6 +340,19 @@ class CleanupSelectionTests(unittest.TestCase):
         self.assertEqual(manifest["cleanup"]["deleted"], [])
         self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_identity_mismatch")
 
+    def test_execute_preserves_candidate_when_refetch_id_is_boolean(self) -> None:
+        initial = linode_resource(linode_id=1)
+        client = FakeCleanupClient(
+            [initial], refreshed_resources={1: linode_resource(linode_id=True)}
+        )
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(client.get_count, 1)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(manifest["cleanup"]["deleted"], [])
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "refetch_identity_mismatch")
+
     def test_execute_preserves_image_when_refetch_identity_differs(self) -> None:
         initial = image_resource(image_id="private/456")
         client = FakeCleanupClient(
