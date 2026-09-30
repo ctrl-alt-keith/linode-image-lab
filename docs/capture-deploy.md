@@ -374,14 +374,15 @@ Cleanup manifests use the same fields across commands: `status`, `deleted`,
 custom images removed after required tags matched. `preserved` lists resources
 kept by request or kept because required tags did not match, with a `reason`
 such as `requested`, `tag_mismatch`, or `deliverable`. Standalone cleanup
-re-fetches each discovered candidate before one DELETE attempt; if that attempt
-fails, the resource is reported in `failed` with
-`reason=delete_status_unknown` because the provider-side state cannot be
-confirmed safely. Only discovered lab-owned images can appear as deleted,
-preserved, or failed standalone cleanup entries. In capture-deploy, top-level
-cleanup is the
-combined summary; `capture.cleanup` and `deploy.cleanup` are the phase-specific
-results.
+re-fetches each discovered candidate before deletion. It preserves a candidate
+if the refreshed resource type or provider ID does not match the original, or
+if its tags or TTL no longer make it eligible. It makes one DELETE attempt for
+each candidate that still qualifies; if that attempt fails, the resource is
+reported in `failed` with `reason=delete_status_unknown` because the
+provider-side state cannot be confirmed safely. Only discovered lab-owned
+images can appear as deleted, preserved, or failed standalone cleanup entries.
+In capture-deploy, top-level cleanup is the combined summary;
+`capture.cleanup` and `deploy.cleanup` are the phase-specific results.
 
 ## Manifest Structure
 
