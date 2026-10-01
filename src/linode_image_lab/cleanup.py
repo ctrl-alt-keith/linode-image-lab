@@ -38,10 +38,6 @@ def parse_ttl(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def resource_tags(resource: dict[str, Any]) -> dict[str, str]:
-    return tags_to_dict(resource.get("tags", []))
-
-
 def cleanup_plan(
     *,
     run_id: str | None = None,
@@ -199,7 +195,7 @@ def assess_cleanup(
 
 def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: datetime) -> dict[str, Any]:
     summary = resource_summary(resource)
-    tags = resource_tags(resource)
+    tags = tags_to_dict(resource.get("tags", []))
     provider_id = resource_provider_id(resource)
 
     if any(key not in tags for key in REQUIRED_TAG_KEYS):
