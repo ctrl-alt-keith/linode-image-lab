@@ -26,67 +26,40 @@ class FakeRegionClient:
 
 
 class RegionPolicyTests(unittest.TestCase):
-    def test_checked_in_policy_contains_operator_geo_groups(self) -> None:
+    def test_checked_in_replication_groups_use_eligible_regions(self) -> None:
         policy_path = Path(__file__).resolve().parents[2] / "policy" / "region-policy.toml"
         policy = load_policy(policy_path)
+        provider_regions = policy["provider_regions"]
+        excluded_regions = set(policy["provider_overrides"]["image_replication_excluded_regions"]["regions"])
 
-        groups = policy["groups"]
+        # These exclusions record observed provider rejection, even when an entry
+        # currently lacks Object Storage and is redundant with the capability check.
         self.assertEqual(
-            policy["provider_overrides"]["image_replication_excluded_regions"]["regions"],
-            ["au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"],
+            excluded_regions,
+            {"au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"},
         )
-        self.assertEqual(
-            groups["geo_americas"]["regions"],
-            [
-                "br-gru",
-                "ca-central",
-                "us-central",
-                "us-east",
-                "us-iad",
-                "us-iad-2",
-                "us-lax",
-                "us-mia",
-                "us-ord",
-                "us-sea",
-                "us-southeast",
-                "us-west",
-            ],
+
+        operator_groups = policy["groups"]
+        self.assertIn("geo_americas", operator_groups)
+        self.assertIn("geo_americas_image_replication", operator_groups)
+        self.assertTrue(
+            set(operator_groups["geo_americas_image_replication"]["regions"]).issubset(
+                operator_groups["geo_americas"]["regions"]
+            )
         )
-        self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par"])
-        self.assertEqual(groups["geo_apac_north"]["regions"], ["ap-northeast", "jp-osa", "jp-tyo-3"])
-        self.assertEqual(groups["geo_apac_southeast_image_replication"]["regions"], ["id-cgk"])
-        self.assertEqual(groups["geo_india_image_replication"]["regions"], ["in-maa"])
-        self.assertEqual(
-            policy["provider_regions"]["jp-tyo-3"]["capabilities"],
-            [
-                "ACLP Logs Datacenter LKE-E",
-                "Backups",
-                "Block Storage",
-                "Block Storage Encryption",
-                "Cloud Firewall",
-                "Disk Encryption",
-                "GPU Linodes",
-                "Kubernetes",
-                "Linode Interfaces",
-                "Linodes",
-                "Maintenance Policy",
-                "Managed Databases",
-                "Metadata",
-                "NodeBalancers",
-                "Object Storage",
-                "Placement Group",
-                "Premium Plans",
-                "StackScripts",
-                "VPCs",
-                "Vlans",
-            ],
-        )
-        self.assertEqual(policy["generated_groups"]["country_jp_object_storage"]["regions"], ["jp-tyo-3"])
-        self.assertNotIn("country_jp_image_replication", policy["generated_groups"])
-        self.assertNotIn("country_gb_image_replication", policy["generated_groups"])
-        self.assertNotIn("country_sg_image_replication", policy["generated_groups"])
-        self.assertNotIn("geo_apac_north_image_replication", groups)
-        self.assertNotIn("geo_oceania_image_replication", groups)
+
+        for section in ("generated_groups", "groups"):
+            replication_groups = {
+                name: group for name, group in policy[section].items() if name.endswith("_image_replication")
+            }
+            self.assertTrue(replication_groups, section)
+            for name, group in replication_groups.items():
+                with self.subTest(section=section, group=name):
+                    self.assertTrue(group["regions"])
+                    for region in group["regions"]:
+                        self.assertIn(region, provider_regions)
+                        self.assertIn("Object Storage", provider_regions[region]["capabilities"])
+                        self.assertNotIn(region, excluded_regions)
 
     def test_generation_is_deterministic_and_normalizes_capabilities(self) -> None:
         client = FakeRegionClient(

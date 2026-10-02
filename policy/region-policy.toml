@@ -20,16 +20,16 @@ capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block S
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.br-gru]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.ca-central]
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_regions.de-fra-2]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.es-mad]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.eu-central]
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
@@ -38,74 +38,74 @@ capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block S
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_regions.fr-par]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.fr-par-2]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.gb-lon]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.id-cgk]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.in-bom-2]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.in-maa]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.it-mil]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.jp-osa]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.jp-tyo-3]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.nl-ams]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.se-sto]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.sg-sin-2]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-central]
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_regions.us-east]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "StackScripts", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_regions.us-iad]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-iad-2]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-lax]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-mia]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-ord]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NETINT Quadra T1U", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-sea]
-capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
+capabilities = ["ACLP Logs Datacenter LKE-E", "Backups", "Block Storage", "Block Storage Encryption", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "Premium NodeBalancers", "Premium Plans", "StackScripts", "VPCs", "Vlans"]
 
 [provider_regions.us-southeast]
-capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Object Storage", "Placement Group", "StackScripts", "Vlans"]
+capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "GPU Linodes", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_regions.us-west]
 capabilities = ["Backups", "Block Storage", "Block Storage Encryption", "Block Storage Migrations", "Cloud Firewall", "Disk Encryption", "Kubernetes", "Linode Interfaces", "Linodes", "Maintenance Policy", "Managed Databases", "Metadata", "NodeBalancers", "Placement Group", "StackScripts", "Vlans"]
 
 [provider_overrides.image_replication_excluded_regions]
 regions = ["au-mel", "de-fra-2", "fr-par-2", "gb-lon", "jp-tyo-3", "sg-sin-2", "us-iad-2"]
-reason = "Provider currently advertises Object Storage, but image replication POST rejects these regions."
+reason = "Historical image replication POST rejections; retain exclusions until successful provider verification, even where Object Storage is no longer advertised."
 
 [generated_groups.capability_aclp_logs_datacenter_lke_e]
 regions = ["de-fra-2", "fr-par-2", "gb-lon", "in-bom-2", "jp-tyo-3", "sg-sin-2", "us-iad", "us-lax", "us-ord", "us-sea"]
@@ -129,7 +129,7 @@ regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-
 regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-central", "de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.capability_gpu_linodes]
-regions = ["ap-south", "ca-central", "de-fra-2", "eu-central", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-east", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["ap-south", "ca-central", "de-fra-2", "eu-central", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-east", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
 
 [generated_groups.capability_kubernetes]
 regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-central", "de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
@@ -150,16 +150,19 @@ regions = ["ap-northeast", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-ce
 regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-central", "de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.capability_netint_quadra_t1u]
-regions = ["de-fra-2", "gb-lon", "in-maa", "us-lax", "us-mia"]
+regions = ["de-fra-2", "gb-lon", "in-maa", "us-lax", "us-mia", "us-ord"]
 
 [generated_groups.capability_nodebalancers]
 regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-central", "de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.capability_object_storage]
-regions = ["br-gru", "de-fra-2", "fr-par", "gb-lon", "id-cgk", "in-maa", "jp-tyo-3", "sg-sin-2", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["br-gru", "de-fra-2", "fr-par", "gb-lon", "id-cgk", "in-maa", "jp-tyo-3", "sg-sin-2", "us-iad-2", "us-lax", "us-ord", "us-sea"]
 
 [generated_groups.capability_placement_group]
 regions = ["ap-northeast", "ap-south", "ap-southeast", "ap-west", "au-mel", "br-gru", "ca-central", "de-fra-2", "es-mad", "eu-central", "eu-west", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
+
+[generated_groups.capability_premium_nodebalancers]
+regions = ["br-gru", "de-fra-2", "es-mad", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
 
 [generated_groups.capability_premium_plans]
 regions = ["au-mel", "br-gru", "de-fra-2", "es-mad", "fr-par", "fr-par-2", "gb-lon", "id-cgk", "in-bom-2", "in-maa", "it-mil", "jp-osa", "jp-tyo-3", "nl-ams", "se-sto", "sg-sin-2", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
@@ -276,6 +279,9 @@ regions = ["br-gru"]
 regions = ["br-gru"]
 
 [generated_groups.country_br_placement_group]
+regions = ["br-gru"]
+
+[generated_groups.country_br_premium_nodebalancers]
 regions = ["br-gru"]
 
 [generated_groups.country_br_premium_plans]
@@ -401,6 +407,9 @@ regions = ["de-fra-2"]
 [generated_groups.country_de_placement_group]
 regions = ["de-fra-2", "eu-central"]
 
+[generated_groups.country_de_premium_nodebalancers]
+regions = ["de-fra-2"]
+
 [generated_groups.country_de_premium_plans]
 regions = ["de-fra-2"]
 
@@ -453,6 +462,9 @@ regions = ["es-mad"]
 regions = ["es-mad"]
 
 [generated_groups.country_es_placement_group]
+regions = ["es-mad"]
+
+[generated_groups.country_es_premium_nodebalancers]
 regions = ["es-mad"]
 
 [generated_groups.country_es_premium_plans]
@@ -519,6 +531,9 @@ regions = ["fr-par", "fr-par-2"]
 regions = ["fr-par"]
 
 [generated_groups.country_fr_placement_group]
+regions = ["fr-par", "fr-par-2"]
+
+[generated_groups.country_fr_premium_nodebalancers]
 regions = ["fr-par", "fr-par-2"]
 
 [generated_groups.country_fr_premium_plans]
@@ -590,6 +605,9 @@ regions = ["gb-lon"]
 [generated_groups.country_gb_placement_group]
 regions = ["eu-west", "gb-lon"]
 
+[generated_groups.country_gb_premium_nodebalancers]
+regions = ["gb-lon"]
+
 [generated_groups.country_gb_premium_plans]
 regions = ["gb-lon"]
 
@@ -651,6 +669,9 @@ regions = ["id-cgk"]
 regions = ["id-cgk"]
 
 [generated_groups.country_id_placement_group]
+regions = ["id-cgk"]
+
+[generated_groups.country_id_premium_nodebalancers]
 regions = ["id-cgk"]
 
 [generated_groups.country_id_premium_plans]
@@ -725,6 +746,9 @@ regions = ["in-maa"]
 [generated_groups.country_in_placement_group]
 regions = ["ap-west", "in-bom-2", "in-maa"]
 
+[generated_groups.country_in_premium_nodebalancers]
+regions = ["in-bom-2", "in-maa"]
+
 [generated_groups.country_in_premium_plans]
 regions = ["in-bom-2", "in-maa"]
 
@@ -777,6 +801,9 @@ regions = ["it-mil"]
 regions = ["it-mil"]
 
 [generated_groups.country_it_placement_group]
+regions = ["it-mil"]
+
+[generated_groups.country_it_premium_nodebalancers]
 regions = ["it-mil"]
 
 [generated_groups.country_it_premium_plans]
@@ -845,6 +872,9 @@ regions = ["jp-tyo-3"]
 [generated_groups.country_jp_placement_group]
 regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
 
+[generated_groups.country_jp_premium_nodebalancers]
+regions = ["jp-osa", "jp-tyo-3"]
+
 [generated_groups.country_jp_premium_plans]
 regions = ["jp-osa", "jp-tyo-3"]
 
@@ -902,6 +932,9 @@ regions = ["nl-ams"]
 [generated_groups.country_nl_placement_group]
 regions = ["nl-ams"]
 
+[generated_groups.country_nl_premium_nodebalancers]
+regions = ["nl-ams"]
+
 [generated_groups.country_nl_premium_plans]
 regions = ["nl-ams"]
 
@@ -957,6 +990,9 @@ regions = ["se-sto"]
 regions = ["se-sto"]
 
 [generated_groups.country_se_placement_group]
+regions = ["se-sto"]
+
+[generated_groups.country_se_premium_nodebalancers]
 regions = ["se-sto"]
 
 [generated_groups.country_se_premium_plans]
@@ -1025,6 +1061,9 @@ regions = ["sg-sin-2"]
 [generated_groups.country_sg_placement_group]
 regions = ["ap-south", "sg-sin-2"]
 
+[generated_groups.country_sg_premium_nodebalancers]
+regions = ["sg-sin-2"]
+
 [generated_groups.country_sg_premium_plans]
 regions = ["sg-sin-2"]
 
@@ -1062,10 +1101,10 @@ regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "u
 regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.country_us_gpu_linodes]
-regions = ["us-east", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["us-east", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
 
 [generated_groups.country_us_image_replication]
-regions = ["us-east", "us-iad", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["us-lax", "us-ord", "us-sea"]
 
 [generated_groups.country_us_kubernetes]
 regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
@@ -1086,16 +1125,19 @@ regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "u
 regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.country_us_netint_quadra_t1u]
-regions = ["us-lax", "us-mia"]
+regions = ["us-lax", "us-mia", "us-ord"]
 
 [generated_groups.country_us_nodebalancers]
 regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [generated_groups.country_us_object_storage]
-regions = ["us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["us-iad-2", "us-lax", "us-ord", "us-sea"]
 
 [generated_groups.country_us_placement_group]
 regions = ["us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
+
+[generated_groups.country_us_premium_nodebalancers]
+regions = ["us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
 
 [generated_groups.country_us_premium_plans]
 regions = ["us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
@@ -1113,7 +1155,7 @@ regions = ["us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea"]
 regions = ["br-gru", "ca-central", "us-central", "us-east", "us-iad", "us-iad-2", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast", "us-west"]
 
 [groups.geo_americas_image_replication]
-regions = ["br-gru", "us-east", "us-iad", "us-lax", "us-mia", "us-ord", "us-sea", "us-southeast"]
+regions = ["br-gru", "us-lax", "us-ord", "us-sea"]
 
 [groups.geo_apac_north]
 regions = ["ap-northeast", "jp-osa", "jp-tyo-3"]
