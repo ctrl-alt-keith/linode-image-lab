@@ -52,6 +52,7 @@ class RegionPolicyTests(unittest.TestCase):
                 "us-west",
             ],
         )
+        self.assertEqual(groups["geo_americas_image_replication"]["regions"], ["br-gru", "us-lax", "us-ord", "us-sea"])
         self.assertEqual(groups["geo_europe_image_replication"]["regions"], ["fr-par"])
         self.assertEqual(groups["geo_apac_north"]["regions"], ["ap-northeast", "jp-osa", "jp-tyo-3"])
         self.assertEqual(groups["geo_apac_southeast_image_replication"]["regions"], ["id-cgk"])
@@ -75,6 +76,7 @@ class RegionPolicyTests(unittest.TestCase):
                 "NodeBalancers",
                 "Object Storage",
                 "Placement Group",
+                "Premium NodeBalancers",
                 "Premium Plans",
                 "StackScripts",
                 "VPCs",
