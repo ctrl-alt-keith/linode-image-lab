@@ -276,8 +276,10 @@ class LinodeClient:
 
     def list_disks(self, linode_id: int) -> list[dict[str, Any]]:
         response = self._request("GET", f"/linode/instances/{linode_id}/disks", retry=True, operation="list_disks")
-        disks = response.get("data", []) if isinstance(response, dict) else []
-        return [disk for disk in disks if isinstance(disk, dict)]
+        disks = response.get("data")
+        if not isinstance(disks, list) or any(not isinstance(disk, dict) for disk in disks):
+            raise LinodeApiError("Linode API returned invalid disk inventory")
+        return disks
 
     def shutdown_instance(self, linode_id: int) -> dict[str, Any]:
         self._request("POST", f"/linode/instances/{linode_id}/shutdown", {})

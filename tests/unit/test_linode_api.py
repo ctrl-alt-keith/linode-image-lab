@@ -408,6 +408,14 @@ class LinodeClientTests(unittest.TestCase):
             ],
         )
 
+    def test_list_disks_rejects_incomplete_inventory(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        for response in ({}, {"data": None}, {"data": {}}, {"data": [{"id": 456}, None]}):
+            with self.subTest(response=response):
+                with patch("linode_image_lab.linode_api.urlopen", return_value=FakeHTTPResponse(response)):
+                    with self.assertRaisesRegex(LinodeApiError, "invalid disk inventory"):
+                        client.list_disks(123)
+
     def test_rate_limit_retry_honors_retry_after_header(self) -> None:
         client = LinodeClient(
             token=TOKEN_VALUE,
