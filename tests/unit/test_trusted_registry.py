@@ -245,6 +245,13 @@ class TrustedRegistryTests(unittest.TestCase):
                 now=dt.datetime(2026, 5, 17, 0, 30, tzinfo=dt.timezone.utc),
             )
 
+    def test_rejects_boolean_registry_schema_version(self) -> None:
+        payload = registry_payload()
+        payload["schema_version"] = True
+
+        with self.assertRaisesRegex(RegistryValidationError, "schema_version is not supported"):
+            validate_registry(payload)
+
 
 if __name__ == "__main__":
     unittest.main()
