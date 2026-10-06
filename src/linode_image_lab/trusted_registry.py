@@ -101,7 +101,8 @@ def validate_registry(payload: dict[str, Any], *, now: dt.datetime | None = None
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=dt.timezone.utc)
 
-    if payload.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version != SUPPORTED_SCHEMA_VERSION:
         raise RegistryValidationError("trusted registry schema_version is not supported")
 
     registry = _required_dict(payload, "registry")
