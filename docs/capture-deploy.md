@@ -36,6 +36,9 @@ Execution steps:
 The custom image is preserved by default because it is the capture deliverable.
 Capture validation stops at provider/API data; it does not perform SSH,
 cloud-init, service, or application readiness checks.
+If the disk inventory response is missing or malformed, capture fails before
+image creation instead of treating an incomplete inventory as an empty or
+partial disk list.
 
 ## Deploy
 
