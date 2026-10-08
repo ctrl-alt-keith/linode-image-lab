@@ -83,6 +83,16 @@ The manifest includes planned additions, removals, and kept CIDRs. CIDRs appear
 because this command is specifically for allowlist review; keep logs in an
 operator-appropriate location.
 
+For routine scheduled runs, add `--output-format summary`. This emits one JSON
+object with outcome version, status, execution mode, registry timestamps, and
+CIDR/change counts. It excludes CIDRs, the provider request payload, firewall
+ID, bucket, and object key. A failed run exits nonzero and emits `status: failed`;
+when failure occurs before planning, registry timestamps and counts are absent.
+Do not use the summary as an operator approval view. The default `manifest`
+format remains the full protected dry-run evidence. `--manifest-file` writes the
+selected format, so a scheduled Job should omit it unless an approved evidence
+destination is mounted.
+
 ## Execute Workflow
 
 After reviewing dry-run output, add `--execute`:
@@ -146,3 +156,36 @@ the ownership marker above.
 If registry publication is stale or unavailable, `firewall-sync` stops before
 firewall update. Fix the publisher or Object Storage access first; do not use
 local fallback CIDRs.
+
+## Container Build And Job Interface
+
+The root `Dockerfile` packages this repository's Python source with no package
+download or install step. Its official Python 3.12.15 slim Bookworm base is
+pinned to a verified Linux amd64 manifest digest. The build context includes
+only source, package version metadata, and public region policy; it excludes
+configuration, credentials, fixtures, and local working files. The image runs
+as UID/GID 65532 and starts the `linode-image-lab` console entrypoint. It
+performs one command and exits; it owns no schedule.
+
+Build from an exact reviewed source commit, targeting Linux amd64, and record
+that commit, the base digest, and the resulting pushed image digest in the
+deployment review. Deployment must reference the resulting image by digest;
+this repository does not claim one before publication. No image publication is
+part of this contract.
+
+```sh
+docker build --platform linux/amd64 --tag linode-image-lab:local .
+```
+
+The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
+three environment variables named above. An example command is:
+
+```sh
+linode-image-lab --config /config/firewall-sync.toml firewall-sync --output-format summary
+```
+
+The Job may append `--execute` only after separate standing update authority
+is approved. Keep the config, credentials, private registry, full dry-run
+manifest, and Job logs under their respective protected owners. A failed cycle
+does not add a fallback CIDR and does not intentionally remove the last applied
+firewall rule.
