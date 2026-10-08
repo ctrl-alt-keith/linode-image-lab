@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Check out approved source commit
         if: inputs.mode == 'publish'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
@@ -55,6 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
           docker build --platform linux/amd64 \
             --label "org.opencontainers.image.revision=$SOURCE_SHA" \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \

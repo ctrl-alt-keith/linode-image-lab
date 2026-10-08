@@ -200,6 +200,10 @@ inaccessible package must not be used by deployment.
 GitHub permits manual dispatch only after the workflow file exists on the
 repository's default branch. Landing that workflow and starting its first run
 are separate controlled actions; this draft branch cannot publish the image.
+The pinned source commit must also remain fetchable at run time. The current PR
+branch contains it; any later source-ref removal or squash merge requires a
+reviewed retention or promotion decision before dispatch. A failed checkout
+stops before image publication.
 
 The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
 three environment variables named above. Its argv must include
