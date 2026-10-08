@@ -180,30 +180,69 @@ not claim one before publication.
 docker build --platform linux/amd64 --tag linode-image-lab:local .
 ```
 
-The manual `Publish firewall consumer image` workflow is source-owned and
-checks out the exact approved source commit, not the workflow's own commit.
-Its tag is `sha-<source-commit>` in
-`ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer`. It runs `make
-check`, builds and smoke-tests Linux amd64, refuses to overwrite an existing
-tag or publish when tag absence cannot be proven, and uses only the repository
-GitHub token with package write permission. It records the distinct source and
-workflow commits, builder, run, and pushed manifest digest in the workflow run
-summary. The publish run also attempts a pull without registry credentials.
-GitHub creates a new container package as private by default, so its first
-publish run may push successfully but fail the anonymous-pull check. In that
-case, make the package public in GitHub package settings, then dispatch the
-same workflow in `verify-public` mode with the exact pushed digest from the
-publish run. That mode performs no build or push and succeeds only if an
-anonymous pull resolves the tag to that digest. A private or otherwise
-inaccessible package must not be used by deployment.
+The source-owned `Publish firewall consumer image` workflow checks out exact
+approved source commit `f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e`, not
+the workflow's own commit. It tags
+`ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer:sha-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e`.
+It runs `make check`, builds and smoke-tests Linux amd64, and records the
+distinct source and workflow commits, builder, run, and pushed manifest digest.
+Only the publish job receives the repository GitHub token with package write
+permission; the separate public-verification job has no package permission.
+
+The one-time first-package route is a push of the exact annotated tag
+`cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e` at
+the reviewed workflow commit. The tag message must name the exact package and
+Keith's owner-observed organization Packages inventory at 2026-10-08 20:10
+UTC (source-thread reference `Sentinel_32bf136f93ac8191aa738a7c5cb96f4e`).
+Keith saw only `lke-image-lab/cak-canary`; the consumer package was absent at
+that time. This is attributable first-bootstrap evidence, not an independent
+API verification or a claim about all later times. The workflow checks the
+annotated tag, its target, the source commit's ancestry, and these exact
+evidence fields. It refuses a repeat attempt. No tag has been created.
+If another actor creates this package path, the organization inventory changes
+in a way that affects the absence decision, or a registry check becomes
+inconsistent with that decision, stop and refresh the owner evidence. Minutes
+spent completing this review do not alone change the observed inventory.
+If the first run fails before push, do not force-move the publication tag or
+rerun that attempt; a corrected workflow needs a separately reviewed unique
+trigger. If push succeeded, proceed only with visibility and verification.
+
+Required annotated tag message lines:
+
+```text
+CAK-364-Package: ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer
+CAK-364-Absence-Observed-By: Keith
+CAK-364-Absence-Observed-At: 2026-10-08T20:10:00Z
+CAK-364-Absence-Evidence: Sentinel_32bf136f93ac8191aa738a7c5cb96f4e
+```
+
+During bootstrap, package API `404` supports the owner evidence but is not
+alone proof of absence. An existing package (`200`), authentication or
+transport failure, or a positive registry manifest stops publication. The
+registry may return `denied` for a new path; that response is accepted only
+with the owner evidence and API `404`, never as an absence claim by itself.
+After the package exists, manual publication from `main` requires a successful
+package API read and refuses the target tag if it appears among any package
+versions. It also refuses a positive registry manifest. The tag is checked
+after the build and immediately before push. These checks cannot prevent an
+unrelated writer racing a new tag into GHCR between check and push; keep this
+one-time path under the reviewed publication decision.
+
+GitHub creates a new container package as private by default. After the first
+push, a package administrator must make it public. Then push a distinct
+`cak-364-consumer-verify-sha256-<pushed-digest-hex>` tag at the same reviewed
+workflow commit. Its separate fresh runner uses an empty Docker auth config,
+checks the published digest and pulls the exact source tag anonymously,
+requiring the tag digest and Linux amd64 platform to match. It never builds or
+pushes. Do not deploy a private package or a digest before this verification.
 
 GitHub permits manual dispatch only after the workflow file exists on the
-repository's default branch. Landing that workflow and starting its first run
-are separate controlled actions; this draft branch cannot publish the image.
-The pinned source commit must also remain fetchable at run time. The current PR
-branch contains it; any later source-ref removal or squash merge requires a
-reviewed retention or promotion decision before dispatch. A failed checkout
-stops before image publication.
+default branch; the exact-tag push route allows a reviewed workflow to run
+before merge. The source SHA is an ancestor of the current workflow branch;
+retaining a tag at its reviewed descendant keeps that source reachable even
+if the PR is later squash-merged and its branch removed. A failed checkout
+stops before publication. Neither merge nor tag push is part of this source
+contract.
 
 The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
 three environment variables named above. Its argv must include

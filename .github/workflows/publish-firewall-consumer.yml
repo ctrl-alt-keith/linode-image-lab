@@ -1,6 +1,10 @@
 name: Publish firewall consumer image
 
 on:
+  push:
+    tags:
+      - cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e
+      - 'cak-364-consumer-verify-sha256-*'
   workflow_dispatch:
     inputs:
       mode:
@@ -16,9 +20,7 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
 
 concurrency:
   group: publish-firewall-consumer
@@ -31,27 +33,55 @@ env:
 
 jobs:
   publish:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/tags/cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'publish')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
 
     steps:
+      - name: Verify exact bootstrap tag and owner evidence
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(uname -m)" = x86_64
+          tag_ref="refs/tags/$GITHUB_REF_NAME"
+          tag_dir="$(mktemp -d "$RUNNER_TEMP/cak364-consumer-tag.XXXXXX")"
+          git -C "$tag_dir" init --quiet
+          git -C "$tag_dir" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git -C "$tag_dir" fetch --quiet origin "$tag_ref:$tag_ref"
+          test "$(git -C "$tag_dir" cat-file -t "$tag_ref")" = tag
+          test "$(git -C "$tag_dir" rev-parse "$tag_ref^{commit}")" = "$GITHUB_SHA"
+          git -C "$tag_dir" merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+          message="$(git -C "$tag_dir" cat-file -p "$tag_ref" | sed -n '/^$/,$p')"
+          grep -Fxq "CAK-364-Package: $IMAGE" <<< "$message"
+          grep -Fxq 'CAK-364-Absence-Observed-By: Keith' <<< "$message"
+          grep -Fxq 'CAK-364-Absence-Observed-At: 2026-10-08T20:10:00Z' <<< "$message"
+          grep -Fxq 'CAK-364-Absence-Evidence: Sentinel_32bf136f93ac8191aa738a7c5cb96f4e' <<< "$message"
+
       - name: Check out approved source commit
-        if: inputs.mode == 'publish'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
 
       - name: Verify source and run canonical checks
-        if: inputs.mode == 'publish'
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(uname -m)" = x86_64
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           make check
 
       - name: Build and smoke-test Linux amd64 image
-        if: inputs.mode == 'publish'
         shell: bash
         run: |
           set -euo pipefail
@@ -64,7 +94,6 @@ jobs:
           docker run --rm --platform linux/amd64 "$IMAGE:$TAG" firewall-sync --help >/dev/null
 
       - name: Log in with repository-scoped GitHub token
-        if: inputs.mode == 'publish'
         shell: bash
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,23 +101,60 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      - name: Refuse an existing or unverifiable tag
-        if: inputs.mode == 'publish'
+      - name: Refuse existing package or tag before push
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          package_api='https://api.github.com/orgs/ctrl-alt-keith/packages/container/linode-image-lab%2Ffirewall-consumer'
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$package_api")"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            # Keith observed this exact package absent in the organization inventory
+            # at 2026-10-08 20:10 UTC. HTTP 404 supports, but does not prove, that fact.
+            case "$status" in
+              404) ;;
+              200) echo 'Refusing bootstrap: the package now exists.' >&2; exit 1 ;;
+              *) echo "Refusing bootstrap: package API HTTP $status" >&2; exit 1 ;;
+            esac
+          else
+            if [[ "$status" != 200 ]]; then
+              echo "Cannot verify existing package and tag inventory (HTTP $status)" >&2
+              exit 1
+            fi
+            tags="$(gh api --paginate \
+              'orgs/ctrl-alt-keith/packages/container/linode-image-lab%2Ffirewall-consumer/versions?per_page=100' \
+              --jq '.[] | .metadata.container.tags[]?')"
+            if grep -Fxq "$TAG" <<< "$tags"; then
+              echo "Refusing to overwrite existing $IMAGE:$TAG" >&2
+              exit 1
+            fi
+          fi
           if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>tag-inspect-error; then
-            echo "Refusing to overwrite existing $IMAGE:$TAG" >&2
+            echo "Refusing to overwrite existing manifest $IMAGE:$TAG" >&2
             exit 1
           fi
-          if ! grep -Eiq 'manifest unknown|name unknown' tag-inspect-error; then
-            echo 'Could not prove that the GHCR tag is absent; refusing to publish.' >&2
+          lookup_error="$(cat tag-inspect-error)"
+          allowed=false
+          if [[ "$lookup_error" == 'manifest unknown' || "$lookup_error" == 'name unknown' ]]; then
+            allowed=true
+          elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            denied_url="https://ghcr.io/v2/ctrl-alt-keith/linode-image-lab/firewall-consumer/manifests/$TAG"
+            if [[ "$lookup_error" == "Get \"$denied_url\": denied" ]]; then
+              allowed=true # Owner evidence and package API 404 qualify this first-package case.
+            fi
+          fi
+          if [[ "$allowed" != true ]]; then
+            echo 'Registry lookup had an unexpected authentication or transport failure.' >&2
             cat tag-inspect-error >&2
             exit 1
           fi
 
       - name: Push and record immutable source and workflow identities
-        if: inputs.mode == 'publish'
         shell: bash
         run: |
           set -euo pipefail
@@ -104,29 +170,46 @@ jobs:
             echo "- Builder: \`$RUNNER_OS/$RUNNER_ARCH\`, Docker \`$(docker version --format '{{.Server.Version}}')\`"
             echo "- Run: \`$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT\`"
             echo "- Pushed reference: \`$IMAGE@$digest\`"
-            echo '- If this first publication is private, set the package public in GitHub package settings, then run verify-public with this digest.'
+            echo '- New GHCR packages start private. After package visibility is public, push a reviewed digest-specific verification tag; do not rerun publication.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify anonymous pull resolves the pushed digest
+  verify-public:
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/cak-364-consumer-verify-sha256-')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'verify-public')
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Pull the exact published tag anonymously on a fresh runner
         shell: bash
         env:
-          REQUESTED_MODE: ${{ inputs.mode }}
+          IMAGE: ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer
+          TAG: sha-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e
           REQUESTED_DIGEST: ${{ inputs.expected_digest }}
         run: |
           set -euo pipefail
-          if [[ "$REQUESTED_MODE" == publish ]]; then
-            expected_digest="$PUSHED_DIGEST"
-            docker logout ghcr.io
-            docker image rm "$IMAGE:$TAG"
+          test "$(uname -m)" = x86_64
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            digest_hex="${GITHUB_REF_NAME#cak-364-consumer-verify-sha256-}"
+            [[ "$digest_hex" =~ ^[0-9a-f]{64}$ ]]
+            expected_digest="sha256:$digest_hex"
           else
             expected_digest="$REQUESTED_DIGEST"
+            [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           fi
-          if [[ ! "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-            echo 'An exact pushed sha256 manifest digest is required.' >&2
+          anonymous_config="$(mktemp -d "$RUNNER_TEMP/ghcr-consumer-anonymous.XXXXXX")"
+          if DOCKER_CONFIG="$anonymous_config" docker image inspect "$IMAGE@$expected_digest" >/dev/null 2>&1; then
+            echo 'Refusing verification with a locally cached image.' >&2
             exit 1
           fi
-          docker pull --platform linux/amd64 "$IMAGE:$TAG" | tee pull.log
-          pulled_digest="$(sed -nE 's/^Digest: (sha256:[[:xdigit:]]{64})$/\1/p' pull.log | tail -n 1)"
-          test -n "$pulled_digest"
+          DOCKER_CONFIG="$anonymous_config" docker manifest inspect "$IMAGE@$expected_digest" >/dev/null
+          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$IMAGE:$TAG" | tee pull.log
+          pulled_digest="$(sed -nE 's/^Digest: (sha256:[0-9a-f]{64})$/\1/p' pull.log | tail -n 1)"
           test "$pulled_digest" = "$expected_digest"
-          echo "- Anonymous tag pull: verified \`$IMAGE@$pulled_digest\`" >> "$GITHUB_STEP_SUMMARY"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE:$TAG")" = linux/amd64
+          {
+            echo "Anonymous tag: $IMAGE:$TAG"
+            echo "Verified digest: $IMAGE@$expected_digest"
+            echo "Workflow commit: $GITHUB_SHA"
+            echo "Verification run: $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_STEP_SUMMARY"
