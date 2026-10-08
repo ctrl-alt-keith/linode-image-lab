@@ -86,8 +86,10 @@ operator-appropriate location.
 For routine scheduled runs, add `--output-format summary`. This emits one JSON
 object with outcome version, status, execution mode, registry timestamps, and
 CIDR/change counts. It excludes CIDRs, the provider request payload, firewall
-ID, bucket, and object key. A failed run exits nonzero and emits `status: failed`;
-when failure occurs before planning, registry timestamps and counts are absent.
+ID, bucket, and object key. Runtime failures after argument parsing exit
+nonzero and emit `status: failed`; when failure occurs before planning,
+registry timestamps and counts are absent. Argument-parser errors exit 2 and
+do not emit JSON.
 Do not use the summary as an operator approval view. The default `manifest`
 format remains the full protected dry-run evidence. `--manifest-file` writes the
 selected format, so a scheduled Job should omit it unless an approved evidence
@@ -178,7 +180,8 @@ docker build --platform linux/amd64 --tag linode-image-lab:local .
 ```
 
 The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
-three environment variables named above. An example command is:
+three environment variables named above. Its argv must include
+`--output-format summary` to keep routine Job logs CIDR-free:
 
 ```sh
 linode-image-lab --config /config/firewall-sync.toml firewall-sync --output-format summary

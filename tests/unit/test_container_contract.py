@@ -40,7 +40,11 @@ class ContainerContractTests(unittest.TestCase):
         self.assertEqual(ignore[0], "**")
         self.assertEqual(
             set(ignore[1:]),
-            {"!src/", "!src/linode_image_lab/", "!src/linode_image_lab/*.py", "!pyproject.toml", "!policy/", "!policy/region-policy.toml"},
+            {
+                "!src/", "src/*", "!src/linode_image_lab/",
+                "src/linode_image_lab/*", "!src/linode_image_lab/*.py",
+                "!pyproject.toml", "!policy/", "policy/*", "!policy/region-policy.toml",
+            },
         )
 
 
