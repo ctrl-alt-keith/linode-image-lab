@@ -115,7 +115,7 @@ jobs:
             "$package_api")"
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             # Keith observed this exact package absent in the organization inventory
-            # at 2026-10-08 20:10 UTC. HTTP 404 supports, but does not prove, that fact.
+            # at 2026-10-08 20:10 UTC. HTTP 404 is consistent with, not proof of, absence.
             case "$status" in
               404) ;;
               200) echo 'Refusing bootstrap: the package now exists.' >&2; exit 1 ;;
@@ -153,6 +153,7 @@ jobs:
             cat tag-inspect-error >&2
             exit 1
           fi
+          echo "Package API HTTP $status; registry lookup: $lookup_error"
 
       - name: Push and record immutable source and workflow identities
         shell: bash
@@ -188,6 +189,7 @@ jobs:
           REQUESTED_DIGEST: ${{ inputs.expected_digest }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
           test "$(uname -m)" = x86_64
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             digest_hex="${GITHUB_REF_NAME#cak-364-consumer-verify-sha256-}"
@@ -207,6 +209,7 @@ jobs:
           pulled_digest="$(sed -nE 's/^Digest: (sha256:[0-9a-f]{64})$/\1/p' pull.log | tail -n 1)"
           test "$pulled_digest" = "$expected_digest"
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE:$TAG")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE:$TAG")" = "$SOURCE_SHA"
           {
             echo "Anonymous tag: $IMAGE:$TAG"
             echo "Verified digest: $IMAGE@$expected_digest"

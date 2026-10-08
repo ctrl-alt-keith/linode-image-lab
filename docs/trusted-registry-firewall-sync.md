@@ -198,7 +198,10 @@ Keith saw only `lke-image-lab/cak-canary`; the consumer package was absent at
 that time. This is attributable first-bootstrap evidence, not an independent
 API verification or a claim about all later times. The workflow checks the
 annotated tag, its target, the source commit's ancestry, and these exact
-evidence fields. It refuses a repeat attempt. No tag has been created.
+evidence fields. It refuses a rerun of the same workflow attempt and refuses
+publication once the package exists. It cannot detect a tag deleted and
+repushed after a pre-push failure; the no-repush rule below is procedural.
+No tag has been created.
 If another actor creates this package path, the organization inventory changes
 in a way that affects the absence decision, or a registry check becomes
 inconsistent with that decision, stop and refresh the owner evidence. Minutes
@@ -216,8 +219,11 @@ CAK-364-Absence-Observed-At: 2026-10-08T20:10:00Z
 CAK-364-Absence-Evidence: Sentinel_32bf136f93ac8191aa738a7c5cb96f4e
 ```
 
-During bootstrap, package API `404` supports the owner evidence but is not
-alone proof of absence. An existing package (`200`), authentication or
+During bootstrap, package API `404` is consistent with the owner observation
+but does not corroborate absence independently: access masking can also
+produce `404`. The bootstrap decision rests on Keith's attributed inventory
+and GHCR's refusal to write a package this repository cannot access. An
+existing package (`200`), authentication or
 transport failure, or a positive registry manifest stops publication. The
 registry may return `denied` for a new path; that response is accepted only
 with the owner evidence and API `404`, never as an absence claim by itself.
@@ -231,9 +237,11 @@ one-time path under the reviewed publication decision.
 GitHub creates a new container package as private by default. After the first
 push, a package administrator must make it public. Then push a distinct
 `cak-364-consumer-verify-sha256-<pushed-digest-hex>` tag at the same reviewed
-workflow commit. Its separate fresh runner uses an empty Docker auth config,
+workflow commit, copying the digest from the publish run summary. Its separate
+fresh runner uses an empty Docker auth config,
 checks the published digest and pulls the exact source tag anonymously,
-requiring the tag digest and Linux amd64 platform to match. It never builds or
+requiring the tag digest, source-revision label, and Linux amd64 platform to match.
+It never builds or
 pushes. Do not deploy a private package or a digest before this verification.
 
 GitHub permits manual dispatch only after the workflow file exists on the
