@@ -8,9 +8,24 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SOURCE_ONLY_IGNORE_RULES = [
+    "**",
+    "!src/",
+    "src/*",
+    "!src/linode_image_lab/",
+    "src/linode_image_lab/*",
+    "!src/linode_image_lab/*.py",
+    "!pyproject.toml",
+    "!policy/",
+    "policy/*",
+    "!policy/region-policy.toml",
+]
 
 
 class ContainerContractTests(unittest.TestCase):
+    def assert_source_only_ignore_rules(self, rules: list[str]) -> None:
+        self.assertEqual(rules, SOURCE_ONLY_IGNORE_RULES)
+
     def test_container_entrypoint_resolves_current_source_cli(self) -> None:
         env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
         result = subprocess.run(
@@ -37,15 +52,14 @@ class ContainerContractTests(unittest.TestCase):
 
     def test_build_context_excludes_private_or_local_material(self) -> None:
         ignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(ignore[0], "**")
-        self.assertEqual(
-            set(ignore[1:]),
-            {
-                "!src/", "src/*", "!src/linode_image_lab/",
-                "src/linode_image_lab/*", "!src/linode_image_lab/*.py",
-                "!pyproject.toml", "!policy/", "policy/*", "!policy/region-policy.toml",
-            },
-        )
+        self.assert_source_only_ignore_rules(ignore)
+
+    def test_build_context_guard_rejects_reordered_source_reinclude(self) -> None:
+        unsafe = SOURCE_ONLY_IGNORE_RULES.copy()
+        unsafe.remove("src/*")
+        unsafe.insert(1, "src/*")
+        with self.assertRaises(AssertionError):
+            self.assert_source_only_ignore_rules(unsafe)
 
 
 if __name__ == "__main__":

@@ -163,17 +163,18 @@ local fallback CIDRs.
 
 The root `Dockerfile` packages this repository's Python source with no package
 download or install step. Its official Python 3.12.15 slim Bookworm base is
-pinned to a verified Linux amd64 manifest digest. The build context includes
-only source, package version metadata, and public region policy; it excludes
-configuration, credentials, fixtures, and local working files. The image runs
-as UID/GID 65532 and starts the `linode-image-lab` console entrypoint. It
-performs one command and exits; it owns no schedule.
+pinned to a verified Linux amd64 manifest digest. From a clean checkout, the
+build context includes only source, package version metadata, and public region
+policy; it excludes configuration, credentials, and fixtures. The image runs as
+UID/GID 65532 and starts the `linode-image-lab` console entrypoint. It performs
+one command and exits; it owns no schedule.
 
-Build from an exact reviewed source commit, targeting Linux amd64, and record
-that commit, the base digest, and the resulting pushed image digest in the
-deployment review. Deployment must reference the resulting image by digest;
-this repository does not claim one before publication. No image publication is
-part of this contract.
+Build from a clean checkout of the exact reviewed source commit, with no
+modified or untracked package Python files: the ignore rules allow any `*.py`
+under `src/linode_image_lab/`. Target Linux amd64 and record the source commit,
+base digest, and resulting pushed image digest in the deployment review.
+Deployment must reference the resulting image by digest; this repository does
+not claim one before publication. No image publication is part of this contract.
 
 ```sh
 docker build --platform linux/amd64 --tag linode-image-lab:local .
