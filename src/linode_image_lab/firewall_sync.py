@@ -343,3 +343,34 @@ def execute_plan_summary(plan: dict[str, Any]) -> str:
         f"  remove ipv4: {len(diff['removals']['ipv4'])}, ipv6: {len(diff['removals']['ipv6'])}\n"
         f"  keep ipv4: {len(diff['kept']['ipv4'])}, ipv6: {len(diff['kept']['ipv6'])}\n"
     )
+
+
+def routine_outcome(
+    manifest: dict[str, Any] | None,
+    *,
+    execute: bool,
+    failed: bool = False,
+) -> dict[str, Any]:
+    """Return a machine-readable result without CIDRs or provider identifiers."""
+
+    outcome: dict[str, Any] = {
+        "outcome_version": 1,
+        "command": "firewall-sync",
+        "status": "failed" if failed or manifest is None else manifest["status"],
+        "execution_mode": "execute" if execute else "dry-run",
+    }
+    if manifest is not None:
+        outcome["planned_action"] = manifest["planned_action"]
+        outcome["registry_generated_at"] = manifest["registry"]["generated_at"]
+        outcome["registry_valid_until"] = manifest["registry"]["valid_until"]
+        outcome["cidr_count"] = manifest["registry"]["cidr_count"]
+        outcome["change_counts"] = {
+            action: {
+                family: len(manifest["diff"][action][family])
+                for family in ("ipv4", "ipv6")
+            }
+            for action in ("additions", "removals", "kept")
+        }
+        if not failed:
+            outcome["applied"] = manifest.get("applied", False)
+    return outcome
