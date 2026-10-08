@@ -174,11 +174,32 @@ modified or untracked package Python files: the ignore rules allow any `*.py`
 under `src/linode_image_lab/`. Target Linux amd64 and record the source commit,
 base digest, and resulting pushed image digest in the deployment review.
 Deployment must reference the resulting image by digest; this repository does
-not claim one before publication. No image publication is part of this contract.
+not claim one before publication.
 
 ```sh
 docker build --platform linux/amd64 --tag linode-image-lab:local .
 ```
+
+The manual `Publish firewall consumer image` workflow is source-owned and
+checks out the exact approved source commit, not the workflow's own commit.
+Its tag is `sha-<source-commit>` in
+`ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer`. It runs `make
+check`, builds and smoke-tests Linux amd64, refuses to overwrite an existing
+tag or publish when tag absence cannot be proven, and uses only the repository
+GitHub token with package write permission. It records the distinct source and
+workflow commits, builder, run, and pushed manifest digest in the workflow run
+summary. The publish run also attempts a pull without registry credentials.
+GitHub creates a new container package as private by default, so its first
+publish run may push successfully but fail the anonymous-pull check. In that
+case, make the package public in GitHub package settings, then dispatch the
+same workflow in `verify-public` mode with the exact pushed digest from the
+publish run. That mode performs no build or push and succeeds only if an
+anonymous pull resolves the tag to that digest. A private or otherwise
+inaccessible package must not be used by deployment.
+
+GitHub permits manual dispatch only after the workflow file exists on the
+repository's default branch. Landing that workflow and starting its first run
+are separate controlled actions; this draft branch cannot publish the image.
 
 The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
 three environment variables named above. Its argv must include
