@@ -521,5 +521,115 @@ ports = "22"
         self.assertEqual(client.updates, [])
 
 
+class RoutineOutcomeTests(unittest.TestCase):
+    ARGS = [
+        "firewall-sync", "--firewall-id", "12345",
+        "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+        "--registry-bucket", "example-bucket",
+        "--registry-object-key", "registry.json",
+        "--ports", "22", "--output-format", "summary",
+    ]
+
+    def run_summary(
+        self,
+        client: FakeFirewallClient,
+        registry: dict[str, object],
+        *,
+        execute: bool = False,
+    ) -> tuple[int, dict[str, object], str]:
+        output = StringIO()
+        error = StringIO()
+        with (
+            patch("linode_image_lab.firewall_sync.LinodeClient.from_env", return_value=client),
+            patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry),
+            redirect_stdout(output),
+            patch("sys.stderr", error),
+        ):
+            code = main([*self.ARGS, *(["--execute"] if execute else [])])
+        text = output.getvalue()
+        for private_value in ("198.51.100.0/24", "2001:db8:100::/64", "12345", "example-bucket", "registry.json"):
+            self.assertNotIn(private_value, text)
+        return code, json.loads(text), error.getvalue()
+
+    def test_dry_run_summary_is_machine_readable_and_does_not_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        code, outcome, _ = self.run_summary(client, registry_payload())
+        self.assertEqual(code, 0)
+        self.assertEqual(outcome["status"], "planned")
+        self.assertEqual(outcome["planned_action"], "add_managed_rule")
+        self.assertEqual(outcome["change_counts"]["additions"], {"ipv4": 1, "ipv6": 1})
+        self.assertFalse(outcome["applied"])
+        self.assertEqual(client.updates, [])
+
+    def test_execute_no_change_summary_does_not_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules(inbound=[managed_rule(
+            ipv4=["198.51.100.0/24"], ipv6=["2001:db8:100::/64"]
+        )]))
+        code, outcome, _ = self.run_summary(client, registry_payload(), execute=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(outcome["status"], "unchanged")
+        self.assertFalse(outcome["applied"])
+        self.assertEqual(client.updates, [])
+
+    def test_execute_applied_summary_reports_success_without_manifest(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        code, outcome, _ = self.run_summary(client, registry_payload(), execute=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(outcome["status"], "applied")
+        self.assertTrue(outcome["applied"])
+        self.assertEqual(len(client.updates), 1)
+
+    def test_execute_failure_summary_does_not_claim_application(self) -> None:
+        client = FakeFirewallClient(firewall_rules(), update_failure=True)
+        code, outcome, error = self.run_summary(client, registry_payload(), execute=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertNotIn("applied", outcome)
+        self.assertIn("firewall-sync --execute failed", error)
+        self.assertEqual(client.update_attempts, 1)
+
+    def test_stale_registry_summary_fails_without_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        registry = registry_payload()
+        registry["registry"]["valid_until"] = "2000-01-01T00:00:00Z"
+        code, outcome, error = self.run_summary(client, registry)
+        self.assertEqual(code, 1)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertNotIn("change_counts", outcome)
+        self.assertEqual(error, "firewall-sync failed\n")
+        self.assertEqual(client.updates, [])
+
+    def test_unsupported_registry_summary_fails_without_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        registry = registry_payload()
+        registry["schema_version"] = 2
+        code, outcome, _ = self.run_summary(client, registry)
+        self.assertEqual(code, 1)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertEqual(client.updates, [])
+
+    def test_missing_required_config_summary_is_machine_readable(self) -> None:
+        output = StringIO()
+        error = StringIO()
+        with redirect_stdout(output), patch("sys.stderr", error):
+            code = main(["firewall-sync", "--output-format", "summary"])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["status"], "failed")
+        self.assertEqual(error.getvalue(), "firewall-sync failed\n")
+
+    def test_pre_write_conflict_summary_fails_without_update(self) -> None:
+        initial = firewall_rules()
+        client = FakeFirewallClient(initial)
+        reads = [initial, firewall_rules(inbound=[{"label": "operator-rule"}])]
+        client.get_firewall_rules = lambda firewall_id: reads.pop(0)  # type: ignore[method-assign]
+        code, outcome, error = self.run_summary(client, registry_payload(), execute=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertEqual(outcome["planned_action"], "add_managed_rule")
+        self.assertNotIn("applied", outcome)
+        self.assertIn("changed after planning", error)
+        self.assertEqual(client.updates, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,7 +28,7 @@ from .config import (
     parse_string_values,
 )
 from .deploy import DeployError, deploy_plan
-from .firewall_sync import FirewallSyncError, firewall_sync_plan
+from .firewall_sync import FirewallSyncError, firewall_sync_plan, routine_outcome
 from .manifest import PROJECT, create_manifest, serialize_manifest, validate_run_id
 from .region_policy import (
     DEFAULT_REGION_POLICY_PATH,
@@ -146,7 +146,7 @@ def add_registry_args(parser: argparse.ArgumentParser) -> None:
 def add_manifest_file_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--manifest-file",
-        help="Optional path for an atomic copy of the redacted JSON manifest. Use '-' for stdout only.",
+        help="Optional path for an atomic copy of the selected JSON output. Use '-' for stdout only.",
     )
 
 
@@ -337,6 +337,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_version_arg(firewall_sync, version_text)
     add_config_arg(firewall_sync, dest="command_config")
     firewall_sync.add_argument("--execute", action="store_true", help="Opt into Linode firewall rule mutation.")
+    firewall_sync.add_argument(
+        "--output-format",
+        choices=("manifest", "summary"),
+        default="manifest",
+        help="Use summary for CIDR-free routine Job output; manifest is the default operator view.",
+    )
     add_manifest_file_arg(firewall_sync)
     add_registry_firewall_sync_args(firewall_sync)
 
@@ -787,6 +793,8 @@ def write_manifest_file(args: argparse.Namespace, serialized: str) -> None:
 
 
 def emit_manifest(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
+    if args.command == "firewall-sync" and args.output_format == "summary":
+        manifest = routine_outcome(manifest, execute=args.execute)
     serialized = serialize_manifest(manifest)
     write_manifest_file(args, serialized)
     sys.stdout.write(serialized)
@@ -865,11 +873,28 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     except FirewallSyncError as exc:
         if exc.manifest is not None:
-            emit_manifest(args, exc.manifest)
+            if args.output_format == "summary":
+                serialized = serialize_manifest(routine_outcome(exc.manifest, execute=args.execute, failed=True))
+                write_manifest_file(args, serialized)
+                sys.stdout.write(serialized)
+            else:
+                emit_manifest(args, exc.manifest)
             sys.stderr.write(f"{exc}\n")
+            return 1
+        if args.output_format == "summary":
+            serialized = serialize_manifest(routine_outcome(None, execute=args.execute, failed=True))
+            write_manifest_file(args, serialized)
+            sys.stdout.write(serialized)
+            sys.stderr.write("firewall-sync failed\n")
             return 1
         parser.error(str(exc))
     except (ConfigError, RegionPolicyError, ValueError) as exc:
+        if args.command == "firewall-sync" and args.output_format == "summary":
+            serialized = serialize_manifest(routine_outcome(None, execute=args.execute, failed=True))
+            write_manifest_file(args, serialized)
+            sys.stdout.write(serialized)
+            sys.stderr.write("firewall-sync failed\n")
+            return 1
         parser.error(str(exc))
     emit_manifest(args, manifest)
     return 0
