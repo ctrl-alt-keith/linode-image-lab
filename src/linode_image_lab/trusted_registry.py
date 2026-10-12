@@ -110,7 +110,10 @@ def validate_registry(payload: dict[str, Any], *, now: dt.datetime | None = None
     generated_at = _required_string(registry, "generated_at", "registry.generated_at")
     valid_until = _required_string(registry, "valid_until", "registry.valid_until")
     publisher_version = _required_string(registry, "publisher_version", "registry.publisher_version")
+    generated_at_time = _parse_datetime(generated_at, "registry.generated_at")
     valid_until_time = _parse_datetime(valid_until, "registry.valid_until")
+    if generated_at_time >= valid_until_time:
+        raise RegistryValidationError("trusted registry validity window is invalid")
     if valid_until_time <= current_time:
         raise RegistryValidationError("trusted registry valid_until is stale")
 

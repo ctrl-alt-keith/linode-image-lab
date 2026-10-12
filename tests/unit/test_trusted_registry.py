@@ -186,9 +186,22 @@ class TrustedRegistryTests(unittest.TestCase):
     def test_stale_registry_is_rejected(self) -> None:
         with self.assertRaisesRegex(RegistryValidationError, "valid_until is stale"):
             validate_registry(
-                registry_payload(valid_until="2029-12-31T00:00:00Z"),
+                registry_payload(valid_until="2029-12-31T23:30:00Z"),
                 now=dt.datetime(2030, 1, 1, tzinfo=dt.timezone.utc),
             )
+
+    def test_invalid_registry_validity_window_is_rejected(self) -> None:
+        cases = (
+            ("not-a-timestamp", "registry.generated_at must be an RFC3339 timestamp"),
+            ("2030-01-01T00:00:00Z", "validity window is invalid"),
+            ("2030-01-02T00:00:00Z", "validity window is invalid"),
+        )
+        for generated_at, expected_error in cases:
+            with self.subTest(generated_at=generated_at):
+                payload = registry_payload()
+                payload["registry"]["generated_at"] = generated_at
+                with self.assertRaisesRegex(RegistryValidationError, expected_error):
+                    validate_registry(payload, now=dt.datetime(2029, 12, 31, tzinfo=dt.timezone.utc))
 
     def test_invalid_cidr_is_rejected(self) -> None:
         with self.assertRaisesRegex(RegistryValidationError, "invalid CIDR"):

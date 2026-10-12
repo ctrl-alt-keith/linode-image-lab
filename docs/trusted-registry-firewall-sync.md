@@ -124,6 +124,7 @@ Validation requires:
 
 - JSON object payload
 - supported `schema_version`
+- parseable `registry.generated_at` before `registry.valid_until`
 - non-stale `registry.valid_until`
 - active entries only
 - canonical IPv4 and IPv6 CIDRs
