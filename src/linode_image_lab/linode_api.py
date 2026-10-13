@@ -11,8 +11,9 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
+from .http_transport import open_without_redirect as urlopen
 from .manifest import PROJECT, tags_to_dict
 from .redaction import redact
 
