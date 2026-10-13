@@ -599,6 +599,22 @@ class RoutineOutcomeTests(unittest.TestCase):
         self.assertEqual(error, "firewall-sync failed\n")
         self.assertEqual(client.updates, [])
 
+    def test_execute_rejects_invalid_registry_window_without_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        registry = registry_payload()
+        registry["registry"]["generated_at"] = "2030-01-02T00:00:00Z"
+
+        code, outcome, error = self.run_summary(client, registry, execute=True)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(outcome["status"], "failed")
+        self.assertNotIn("planned_action", outcome)
+        self.assertNotIn("change_counts", outcome)
+        self.assertNotIn("applied", outcome)
+        self.assertEqual(error, "firewall-sync failed\n")
+        self.assertEqual(client.update_attempts, 0)
+        self.assertEqual(client.updates, [])
+
     def test_unsupported_registry_summary_fails_without_update(self) -> None:
         client = FakeFirewallClient(firewall_rules())
         registry = registry_payload()
