@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http.client import HTTPMessage
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -17,10 +18,17 @@ class RedirectResponse:
     def __init__(self, code: int, destination: str) -> None:
         self.code = code
         self.msg = "redirect"
-        self.headers = {"Location": destination}
+        self.headers = HTTPMessage()
+        self.headers["Location"] = destination
 
-    def info(self) -> dict[str, str]:
+    def info(self) -> HTTPMessage:
         return self.headers
+
+    def __enter__(self) -> "RedirectResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     def read(self) -> bytes:
         return b""
@@ -62,6 +70,7 @@ class RedirectTests(unittest.TestCase):
                         http_transport.open_without_redirect(request, timeout=3)
 
                 self.assertEqual(raised.exception.code, code)
+                self.assertEqual(raised.exception.msg, "redirect refused")
                 self.assertEqual([item.full_url for item in opened], [original])
                 self.assertEqual(opened[0].get_header("Authorization"), credential)
                 self.assertNotIn(credential, str(raised.exception))
@@ -99,6 +108,23 @@ class RedirectTests(unittest.TestCase):
                         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
                         self.assertEqual(opened[0].get_header("Authorization"), f"Bearer {TOKEN_VALUE}")
                 self.assertEqual(len(opened), 1)
+
+    def test_stock_handler_would_forward_the_same_request(self) -> None:
+        original = "https://api.example.test/v4/networking/firewalls/123/rules"
+        destination = "https://other.example.test/collect"
+        opened: list[Request] = []
+
+        class FakeHTTPSHandler(HTTPSHandler):
+            def https_open(self, request: Request) -> RedirectResponse:
+                opened.append(request)
+                return RedirectResponse(302 if len(opened) == 1 else 200, destination)
+
+        request = Request(original, method="GET", headers={"Authorization": f"Bearer {TOKEN_VALUE}"})
+        with build_opener(FakeHTTPSHandler()).open(request, timeout=3):
+            pass
+
+        self.assertEqual([item.full_url for item in opened], [original, destination])
+        self.assertEqual(opened[1].get_header("Authorization"), f"Bearer {TOKEN_VALUE}")
 
 
 if __name__ == "__main__":
