@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError
 from urllib.parse import ParseResult, quote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from .http_transport import open_without_redirect as urlopen
 
 ACCESS_KEY_ENV = "LINODE_OBJ_ACCESS_KEY"
 SECRET_KEY_ENV = "LINODE_OBJ_SECRET_KEY"
