@@ -12,6 +12,8 @@ opt-in.
   `capture-deploy --execute`, `capture-replicate-deploy --execute`,
   `replicate --execute`, `cleanup --discover`, `cleanup --execute`,
   `firewall-sync` dry-runs, and `firewall-sync --execute`.
+- Credentialed requests to the Linode API and Linode Object Storage fail on
+  HTTP redirects; the CLI does not forward credentials to a redirect target.
 - Plain `cleanup` does not read token values or call Linode.
 - Config files cannot provide `LINODE_TOKEN` or any token value. They only fill
   non-secret execution defaults after explicit `--config PATH`.
