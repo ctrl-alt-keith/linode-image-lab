@@ -367,12 +367,9 @@ def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any
                 normalize_authorized_key(item, f"config [{key}].authorized_keys[{index}]")
                 for index, item in enumerate(table["authorized_keys"])
             ]
-        if "authorized_keys_file" in table:
-            table["authorized_keys_file"] = str(resolve_config_path(table["authorized_keys_file"], base_dir=base_dir))
-        if "user_data_file" in table:
-            table["user_data_file"] = str(resolve_config_path(table["user_data_file"], base_dir=base_dir))
-        if "region_policy_file" in table:
-            table["region_policy_file"] = str(resolve_config_path(table["region_policy_file"], base_dir=base_dir))
+        for path_key in ("authorized_keys_file", "user_data_file", "region_policy_file"):
+            if path_key in table:
+                table[path_key] = str(resolve_config_path(table[path_key], base_dir=base_dir))
         if "image_project_tag" in table:
             table["image_project_tag"] = normalize_image_project_tag(
                 table["image_project_tag"], f"config [{key}].image_project_tag"
