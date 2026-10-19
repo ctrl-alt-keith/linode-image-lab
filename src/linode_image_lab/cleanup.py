@@ -195,8 +195,14 @@ def assess_cleanup(
 
 def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: datetime) -> dict[str, Any]:
     summary = resource_summary(resource)
-    tags = tags_to_dict(resource.get("tags", []))
+    raw_tags = resource.get("tags", [])
     provider_id = resource_provider_id(resource)
+
+    if has_duplicate_lifecycle_tags(raw_tags):
+        summary["reason"] = "duplicate_lifecycle_tags"
+        return {"action": "preserve", "resource": summary, "provider_id": provider_id}
+
+    tags = tags_to_dict(raw_tags)
 
     if any(key not in tags for key in REQUIRED_TAG_KEYS):
         summary["reason"] = "missing_required_tags"
@@ -230,6 +236,21 @@ def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: dateti
     summary["expired_for_seconds"] = seconds_between(ttl, now)
     summary["reason"] = "expired_ttl"
     return {"action": "delete", "resource": summary, "provider_id": provider_id}
+
+
+def has_duplicate_lifecycle_tags(tags: list[str] | dict[str, str]) -> bool:
+    if isinstance(tags, dict):
+        return False
+    seen: set[str] = set()
+    for tag in tags:
+        if "=" not in tag:
+            continue
+        key = tag.split("=", 1)[0]
+        if key in REQUIRED_TAG_KEYS:
+            if key in seen:
+                return True
+            seen.add(key)
+    return False
 
 
 def sorted_cleanup_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

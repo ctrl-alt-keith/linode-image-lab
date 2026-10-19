@@ -722,11 +722,12 @@ complete.
 Standalone `cleanup --execute` does not delete untagged resources, images
 outside the default lab-owned project tag, or resources with missing,
 malformed, unexpired, or mismatched managed tags. It re-fetches each discovered
-candidate before a single DELETE attempt. Only discovered lab-owned images can
-appear as deleted, preserved, or failed cleanup entries. Preserved and failed
-entries include `resource_type` plus a sanitized `reason`, such as
-`ttl_not_expired`, `ttl_parse_failed`, `missing_required_tags`, or
-`delete_status_unknown`.
+candidate before a single DELETE attempt. Duplicate lifecycle tag keys are
+preserved because their ownership or expiry is ambiguous. Only discovered
+lab-owned images can appear as deleted, preserved, or failed cleanup entries.
+Preserved and failed entries include `resource_type` plus a sanitized `reason`,
+such as `ttl_not_expired`, `ttl_parse_failed`, `missing_required_tags`,
+`duplicate_lifecycle_tags`, or `delete_status_unknown`.
 
 ## Known Limitations
 

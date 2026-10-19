@@ -122,6 +122,33 @@ def image_resource(
 
 
 class CleanupSelectionTests(unittest.TestCase):
+    def test_duplicate_lifecycle_tags_are_preserved_during_discovery_and_execution(self) -> None:
+        resource = linode_resource()
+        resource["tags"].append("ttl=2027-01-01T00:00:00Z")
+        client = FakeCleanupClient([resource])
+
+        preview = cleanup_plan(discover=True, client=client, now=NOW)
+        executed = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(preview["cleanup_candidates"], [])
+        self.assertEqual(preview["cleanup"]["preserved"][0]["reason"], "duplicate_lifecycle_tags")
+        self.assertEqual(executed["cleanup"]["preserved"][0]["reason"], "duplicate_lifecycle_tags")
+        self.assertEqual(client.get_count, 0)
+        self.assertEqual(client.deleted, [])
+
+    def test_duplicate_lifecycle_tag_on_refetch_prevents_delete(self) -> None:
+        refreshed = linode_resource()
+        refreshed["tags"].append("project=other-project")
+        client = FakeCleanupClient(
+            [linode_resource()], refreshed_resources={123: refreshed}
+        )
+
+        manifest = cleanup_plan(execute=True, client=client, now=NOW)
+
+        self.assertEqual(manifest["cleanup"]["preserved"][0]["reason"], "duplicate_lifecycle_tags")
+        self.assertEqual(client.get_count, 1)
+        self.assertEqual(client.deleted, [])
+
     def test_plain_cleanup_does_not_discover_or_delete(self) -> None:
         client = FakeCleanupClient([linode_resource()])
 
