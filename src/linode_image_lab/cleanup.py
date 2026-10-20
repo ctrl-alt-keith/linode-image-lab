@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -190,7 +191,21 @@ def assess_cleanup(
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     comparison_time = (now or datetime.now(UTC)).astimezone(UTC)
-    return [assess_resource(resource, run_id=run_id, now=comparison_time) for resource in resources]
+    identities = [
+        (resource_type(resource), resource_provider_id(resource))
+        if valid_provider_id(resource_type(resource), resource_provider_id(resource)) else None
+        for resource in resources
+    ]
+    counts = Counter(identity for identity in identities if identity is not None)
+    assessments = [assess_resource(resource, run_id=run_id, now=comparison_time) for resource in resources]
+    for identity, assessment in zip(identities, assessments):
+        if identity is not None and counts[identity] > 1:
+            assessment["action"] = "preserve"
+            assessment["resource"].pop("expired_at", None)
+            assessment["resource"].pop("expired_for_seconds", None)
+            assessment["resource"].pop("expires_in_seconds", None)
+            assessment["resource"]["reason"] = "duplicate_provider_id"
+    return assessments
 
 
 def assess_resource(resource: dict[str, Any], *, run_id: str | None, now: datetime) -> dict[str, Any]:

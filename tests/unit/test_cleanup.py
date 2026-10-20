@@ -122,6 +122,26 @@ def image_resource(
 
 
 class CleanupSelectionTests(unittest.TestCase):
+    def test_duplicate_provider_ids_are_preserved_before_refetch_or_delete(self) -> None:
+        first = linode_resource(linode_id=123)
+        second = linode_resource(linode_id=123, ttl="2027-01-01T00:00:00Z")
+        image = image_resource(image_id="private/789")
+        client = FakeCleanupClient([first, second], images=[image, dict(image)])
+
+        preview = cleanup_plan(discover=True, client=client, now=NOW)
+        executed = cleanup_plan(execute=True, client=client, now=NOW)
+
+        for manifest in (preview, executed):
+            self.assertEqual(manifest["cleanup_candidates"], [])
+            self.assertEqual(
+                [item["reason"] for item in manifest["cleanup"]["preserved"]],
+                ["duplicate_provider_id"] * 4,
+            )
+        self.assertEqual(client.get_count, 0)
+        self.assertEqual(client.image_get_count, 0)
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(client.deleted_images, [])
+
     def test_duplicate_lifecycle_tags_are_preserved_during_discovery_and_execution(self) -> None:
         resource = linode_resource()
         resource["tags"].append("ttl=2027-01-01T00:00:00Z")
