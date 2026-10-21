@@ -371,6 +371,9 @@ expired eligible resources without deleting them. `cleanup --execute` requires
 images with the complete required tag set. It ignores images outside the
 default lab-owned project tag and does not delete untagged resources or
 resources with malformed or unexpired TTL values.
+Resources with duplicate lifecycle tag keys or duplicate provider identities in
+the discovery inventory are also preserved because cleanup cannot safely select
+a unique, unambiguous candidate.
 
 Cleanup manifests use the same fields across commands: `status`, `deleted`,
 `preserved`, and `failed`. `deleted` lists temporary Linodes and lab-owned

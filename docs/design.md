@@ -529,6 +529,9 @@ since expiration. Unexpired preserved entries include `expires_in_seconds`, the
 integer number of seconds remaining until expiration. Entries with
 `reason=ttl_parse_failed` omit all derived time fields. `cleanup_candidates` are
 ordered deterministically with the longest-expired candidate first.
+Entries preserved because the same resource type and provider ID appeared more
+than once in discovery also omit derived time fields and report
+`reason=duplicate_provider_id`.
 
 Explicit `--run-id` values must match
 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`: 1 to 64 characters, starting with a
@@ -542,6 +545,9 @@ or images outside the default lab-owned project tag. Those out-of-scope images
 are ignored by standalone cleanup discovery. Malformed TTL values, future TTL
 values, missing required tags, invalid tag values, and optional `--run-id`
 filter mismatches preserve discovered resources and report a sanitized reason.
+Duplicate lifecycle tag keys also preserve a resource with
+`reason=duplicate_lifecycle_tags`; duplicate provider identities in discovery
+preserve every entry for that identity.
 Only discovered lab-owned images can appear as deleted, preserved, or failed
 cleanup entries. Execute cleanup re-fetches each candidate before one DELETE
 attempt. A failed DELETE attempt is not retried blindly; it is reported as
