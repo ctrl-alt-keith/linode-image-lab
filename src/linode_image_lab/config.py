@@ -244,7 +244,7 @@ def load_config(path: str | None) -> dict[str, Any]:
 
 def validate_config(config: dict[str, Any]) -> None:
     schema_version = config.get("schema_version")
-    if schema_version != SCHEMA_VERSION:
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise ConfigError("config schema_version must be 1")
 
     for key, value in config.items():

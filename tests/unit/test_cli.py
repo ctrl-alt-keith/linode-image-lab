@@ -1665,6 +1665,16 @@ regions = ["us-ghost"]
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("must not contain secrets", error.getvalue())
 
+    def test_config_rejects_boolean_schema_version(self) -> None:
+        config_path = self.write_config("schema_version = true\n")
+
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main(["config", "validate", "--config", config_path, "--command", "capture"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("config schema_version must be 1", error.getvalue())
+
     def test_config_validate_rejects_unsupported_cli_overrides_by_command(self) -> None:
         config_path = self.write_config("schema_version = 1\n")
         user_data_path = self.write_file(USER_DATA, name="cloud-init.yaml")

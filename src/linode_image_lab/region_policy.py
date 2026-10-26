@@ -398,7 +398,7 @@ def generated_capability_slug(capability: str) -> str | None:
 def load_operator_groups(path: Path) -> dict[str, list[str]]:
     policy = load_policy(path)
     issues: list[ValidationIssue] = []
-    if policy.get("schema_version") != SCHEMA_VERSION:
+    if type(policy.get("schema_version")) is not int or policy["schema_version"] != SCHEMA_VERSION:
         issues.append(
             ValidationIssue(
                 "unsupported_schema_version",
@@ -498,7 +498,7 @@ def validate_policy_schema(policy: dict[str, Any]) -> list[ValidationIssue]:
                 )
             )
 
-    if policy.get("schema_version") != SCHEMA_VERSION:
+    if type(policy.get("schema_version")) is not int or policy["schema_version"] != SCHEMA_VERSION:
         issues.append(
             ValidationIssue(
                 "unsupported_schema_version",
