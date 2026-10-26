@@ -57,11 +57,48 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
         registry_object_key="registry.json",
         client=client,
         environ={},
+        allow_enable=execute,
         execute=execute,
     )
 
 
 class ACLSyncTests(unittest.TestCase):
+    def test_first_enable_requires_explicit_flag_and_separate_action(self) -> None:
+        client = FakeACLClient()
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            self.assertEqual(run_sync(client)["planned_action"], "enable_acl")
+            with self.assertRaisesRegex(ACLSyncError, "--allow-enable"):
+                acl_sync_plan(
+                    cluster_id=12345, cluster_label="example-lke",
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket", registry_object_key="registry.json",
+                    client=client, environ={}, execute=True,
+                )
+        self.assertEqual(client.writes, [])
+
+    def test_enabled_acl_with_same_addresses_is_unchanged(self) -> None:
+        client = FakeACLClient()
+        client.acl["acl"] = {
+            "enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []},
+            "revision-id": "synthetic-revision",
+        }
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            result = run_sync(client, execute=True)
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(client.writes, [])
+
+    def test_provider_addresses_are_validated_and_canonicalized(self) -> None:
+        client = FakeACLClient()
+        client.acl["acl"] = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []}}
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            self.assertEqual(run_sync(client)["planned_action"], "keep_acl")
+            client.acl["acl"]["addresses"]["ipv4"] = ["2001:db8::/64"]
+            with self.assertRaisesRegex(ACLSyncError, "address family"):
+                run_sync(client)
+            client.acl["acl"]["addresses"]["ipv4"] = ["invalid"]
+            with self.assertRaisesRegex(ACLSyncError, "addresses response"):
+                run_sync(client)
+
     def test_provider_client_uses_dedicated_acl_endpoint_and_minimal_payload(self) -> None:
         client = LinodeClient(token="x")
         with patch.object(LinodeClient, "_request", return_value={}) as request:
@@ -133,7 +170,7 @@ class ACLSyncTests(unittest.TestCase):
         client = FakeACLClient()
         with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", side_effect=[
             registry_payload(), registry_payload(cidrs=("203.0.113.0/24",))
-        ]), self.assertRaisesRegex(ACLSyncError, "pre-write verification failed"):
+        ]), self.assertRaisesRegex(ACLSyncError, "trusted registry changed after planning"):
             run_sync(client, execute=True)
         self.assertEqual(client.writes, [])
 

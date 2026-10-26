@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_network
 from typing import Any, Callable, Mapping, Protocol
 
 from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
@@ -40,7 +41,13 @@ def normalize_acl(response: dict[str, Any]) -> dict[str, Any]:
         cidrs = addresses.get(family)
         if not isinstance(cidrs, list) or not all(isinstance(item, str) for item in cidrs):
             raise ACLSyncError("LKE control-plane ACL addresses response is invalid")
-        normalized["addresses"][family] = sorted(cidrs)
+        try:
+            networks = [ip_network(item, strict=True) for item in cidrs]
+        except ValueError as exc:
+            raise ACLSyncError("LKE control-plane ACL addresses response is invalid") from exc
+        if any(network.version != (4 if family == "ipv4" else 6) for network in networks):
+            raise ACLSyncError("LKE control-plane ACL address family is invalid")
+        normalized["addresses"][family] = sorted(str(network) for network in networks)
     revision = acl.get("revision-id")
     if revision is not None and not isinstance(revision, str):
         raise ACLSyncError("LKE control-plane ACL revision response is invalid")
@@ -84,6 +91,7 @@ def build_acl_sync_manifest(
         }.items()
     }
     unchanged = current_acl["enabled"] and not any(diff[action][family] for action in diff for family in ("ipv4", "ipv6"))
+    planned_action = "keep_acl" if unchanged else ("enable_acl" if not current_acl["enabled"] else "replace_acl")
     return {
         "schema_version": 1,
         "project": PROJECT,
@@ -101,7 +109,7 @@ def build_acl_sync_manifest(
             "ipv4_count": len(registry.ipv4_cidrs),
             "ipv6_count": len(registry.ipv6_cidrs),
         },
-        "planned_action": "keep_acl" if unchanged else "enable_or_replace_acl",
+        "planned_action": planned_action,
         "diff": diff,
         "provider_payload": intended,
         "safety": {
@@ -121,6 +129,7 @@ def acl_sync_plan(
     registry_bucket: str,
     registry_object_key: str,
     registry_region: str | None = None,
+    allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
     environ: Mapping[str, str] | None = None,
@@ -144,6 +153,9 @@ def acl_sync_plan(
     if not execute:
         return plan
 
+    if plan["planned_action"] == "enable_acl" and not allow_enable:
+        raise ACLSyncError("first ACL enablement requires explicit --allow-enable", plan)
+
     if plan_reporter is not None:
         plan_reporter(execute_plan_summary(plan))
     plan["execution_mode"] = "execute"
@@ -164,6 +176,8 @@ def acl_sync_plan(
         expected_cluster(sync_client, cluster_id, cluster_label)
         if normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id)) != original_acl:
             raise ACLSyncError("LKE control-plane ACL changed after planning; rerun acl-sync")
+    except ACLSyncError as exc:
+        raise ACLSyncError(str(exc), plan) from exc
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError("acl-sync pre-write verification failed", plan) from exc
 
@@ -183,6 +197,7 @@ def execute_plan_summary(plan: dict[str, Any]) -> str:
     return (
         "acl-sync planned change before execute:\n"
         f"  action: {plan['planned_action']}\n"
+        f"  current ACL enabled: {plan['planned_action'] != 'enable_acl'}\n"
         f"  add ipv4: {len(diff['additions']['ipv4'])}, ipv6: {len(diff['additions']['ipv6'])}\n"
         f"  remove ipv4: {len(diff['removals']['ipv4'])}, ipv6: {len(diff['removals']['ipv6'])}\n"
     )

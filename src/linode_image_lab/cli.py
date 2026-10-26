@@ -364,6 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_version_arg(acl_sync, version_text)
     add_config_arg(acl_sync, dest="command_config")
     acl_sync.add_argument("--execute", action="store_true", help="Opt into LKE ACL mutation.")
+    acl_sync.add_argument("--allow-enable", action="store_true", help="Explicitly permit first enablement of a disabled ACL.")
     acl_sync.add_argument(
         "--output-format", choices=("manifest", "summary"), default="manifest",
         help="Use summary for CIDR-free routine Job output.",
@@ -779,6 +780,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,
             registry_region=args.registry_region,
+            allow_enable=args.allow_enable,
             execute=args.execute,
             plan_reporter=sys.stderr.write,
         )
