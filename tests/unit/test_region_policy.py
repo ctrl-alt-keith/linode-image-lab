@@ -6,10 +6,12 @@ import unittest
 from pathlib import Path
 
 from linode_image_lab.region_policy import (
+    RegionPolicyError,
     RegionPolicyGroupResolutionError,
     generate_region_policy_artifact,
     generated_country_capability_group_name,
     generated_region_groups,
+    load_operator_groups,
     load_policy,
     resolve_region_policy_groups,
     serialize_validation_report,
@@ -26,6 +28,25 @@ class FakeRegionClient:
 
 
 class RegionPolicyTests(unittest.TestCase):
+    def test_boolean_schema_version_is_rejected_for_validation_and_group_loading(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        policy_path = Path(directory.name) / "region-policy.toml"
+        policy_path.write_text(
+            'schema_version = true\n[provider_regions.us-east]\ncapabilities = ["Linodes"]\n'
+            '[groups.us]\nregions = ["us-east"]\n',
+            encoding="utf-8",
+        )
+        report = validate_region_policy_artifact(
+            path=policy_path,
+            client=FakeRegionClient([{"region": "us-east", "capabilities": ["Linodes"]}]),
+        )
+        self.assertFalse(report["valid"])
+        self.assertIn("unsupported_schema_version", [issue["code"] for issue in report["errors"]])
+
+        with self.assertRaisesRegex(RegionPolicyError, "schema_version must be 1"):
+            load_operator_groups(policy_path)
+
     def test_checked_in_replication_groups_use_eligible_regions(self) -> None:
         policy_path = Path(__file__).resolve().parents[2] / "policy" / "region-policy.toml"
         policy = load_policy(policy_path)
