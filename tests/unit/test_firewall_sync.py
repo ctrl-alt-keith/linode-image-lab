@@ -24,12 +24,16 @@ PRODUCER_REGISTRY_FIXTURE = ROOT / "tests/fixtures/sanitized/trusted-network-reg
 class FakeFirewallClient:
     def __init__(self, rules: dict[str, object], *, update_failure: bool = False) -> None:
         self.rules = rules
+        self.firewall: dict[str, object] = {"id": 12345, "label": "lke-lab-trusted-ingress", "status": "enabled"}
         self.update_failure = update_failure
         self.update_attempts = 0
         self.updates: list[dict[str, object]] = []
 
     def get_firewall_rules(self, firewall_id: int) -> dict[str, object]:
         return self.rules
+
+    def get_firewall(self, firewall_id: int) -> dict[str, object]:
+        return self.firewall
 
     def update_firewall_rules(self, firewall_id: int, rules: dict[str, object]) -> dict[str, object]:
         self.update_attempts += 1
@@ -109,6 +113,61 @@ def managed_rule(*, ipv4: list[str] | None = None, ipv6: list[str] | None = None
 
 
 class FirewallSyncTests(unittest.TestCase):
+    def test_expected_firewall_identity_and_policies_guard_ingress_target(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        kwargs = dict(
+            firewall_id=12345,
+            registry_endpoint_url="https://us-east-1.linodeobjects.com",
+            registry_bucket="example-bucket",
+            registry_object_key="registry.json",
+            ports="443",
+            expected_firewall_label="lke-lab-trusted-ingress",
+            client=client,
+            environ={},
+        )
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            manifest = firewall_sync_plan(**kwargs)
+            self.assertEqual(manifest["planned_action"], "add_managed_rule")
+            for field, wrong in (("id", 999), ("label", "worker-firewall"), ("status", "disabled")):
+                with self.subTest(field=field):
+                    client.firewall = {"id": 12345, "label": "lke-lab-trusted-ingress", "status": "enabled"}
+                    client.firewall[field] = wrong
+                    with self.assertRaisesRegex(FirewallSyncError, "firewall identity"):
+                        firewall_sync_plan(**kwargs)
+            client.firewall = {"id": 12345, "label": "lke-lab-trusted-ingress", "status": "enabled"}
+            client.rules = {**firewall_rules(), "inbound_policy": "ACCEPT"}
+            with self.assertRaisesRegex(FirewallSyncError, "target firewall policies"):
+                firewall_sync_plan(**kwargs)
+            with self.assertRaisesRegex(FirewallSyncError, "--expected-firewall-label"):
+                firewall_sync_plan(**{**kwargs, "expected_firewall_label": " "})
+        self.assertEqual(client.updates, [])
+
+    def test_expected_firewall_identity_rechecked_before_update(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        calls = 0
+
+        def changed_firewall(_firewall_id: int) -> dict[str, object]:
+            nonlocal calls
+            calls += 1
+            return {"id": 12345, "label": "lke-lab-trusted-ingress" if calls == 1 else "worker-firewall", "status": "enabled"}
+
+        client.get_firewall = changed_firewall  # type: ignore[method-assign]
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            with self.assertRaisesRegex(FirewallSyncError, "firewall identity") as raised:
+                firewall_sync_plan(
+                    firewall_id=12345,
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket",
+                    registry_object_key="registry.json",
+                    ports="443",
+                    expected_firewall_label="lke-lab-trusted-ingress",
+                    execute=True,
+                    client=client,
+                    environ={},
+                )
+        self.assertIsNotNone(raised.exception.manifest)
+        self.assertEqual(client.updates, [])
+
     def test_protocol_and_ports_validation_fails_closed_before_provider_calls(self) -> None:
         client = FakeFirewallClient(firewall_rules())
 

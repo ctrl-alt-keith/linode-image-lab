@@ -28,6 +28,7 @@ ROOT_KEYS = {
     "replicate",
     "cleanup",
     "firewall-sync",
+    "acl-sync",
 }
 TABLE_FIELDS = {
     "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
@@ -89,6 +90,15 @@ TABLE_FIELDS = {
         "protocol",
         "ports",
         "managed_label",
+        "expected_firewall_label",
+    },
+    "acl-sync": {
+        "cluster_id",
+        "cluster_label",
+        "registry_endpoint_url",
+        "registry_bucket",
+        "registry_object_key",
+        "registry_region",
     },
 }
 COMMAND_TABLES = {
@@ -98,6 +108,7 @@ COMMAND_TABLES = {
     "capture-replicate-deploy",
     "replicate",
     "firewall-sync",
+    "acl-sync",
 }
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
@@ -139,6 +150,15 @@ COMMAND_DEFAULT_FIELDS = {
         "protocol",
         "ports",
         "managed_label",
+        "expected_firewall_label",
+    ),
+    "acl-sync": (
+        "cluster_id",
+        "cluster_label",
+        "registry_endpoint_url",
+        "registry_bucket",
+        "registry_object_key",
+        "registry_region",
     ),
 }
 CLI_SOURCE_LABELS = {
@@ -162,6 +182,9 @@ CLI_SOURCE_LABELS = {
     "protocol": "cli --protocol",
     "ports": "cli --ports",
     "managed_label": "cli --managed-label",
+    "expected_firewall_label": "cli --expected-firewall-label",
+    "cluster_id": "cli --cluster-id",
+    "cluster_label": "cli --cluster-label",
 }
 PROHIBITED_KEYS = {
     "discover",
@@ -330,6 +353,10 @@ def validate_value(table: str, key: str, value: Any) -> None:
 
     if key == "firewall_id":
         normalize_firewall_id(value, f"config [{table}].firewall_id")
+        return
+
+    if key == "cluster_id":
+        normalize_firewall_id(value, f"config [{table}].cluster_id")
         return
 
     if key == "authorized_keys":
@@ -702,8 +729,8 @@ def normalize_default_value(field: str, value: Any) -> Any:
         if not isinstance(value, bool):
             raise ConfigError("config validate requires replication_enabled to be a boolean")
         return value
-    if field == "firewall_id":
-        return normalize_firewall_id(value, "firewall_id")
+    if field in {"firewall_id", "cluster_id"}:
+        return normalize_firewall_id(value, field)
     if field == "image_project_tag":
         return normalize_image_project_tag(value)
     return value

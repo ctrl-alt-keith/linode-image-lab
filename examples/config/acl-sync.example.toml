@@ -1,0 +1,8 @@
+schema_version = 1
+
+[acl-sync]
+cluster_id = 12345
+cluster_label = "example-lke"
+registry_endpoint_url = "https://us-east-1.linodeobjects.com"
+registry_bucket = "example-bucket"
+registry_object_key = "registry.json"
