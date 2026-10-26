@@ -166,6 +166,7 @@ class FirewallSyncTests(unittest.TestCase):
                     environ={},
                 )
         self.assertIsNotNone(raised.exception.manifest)
+        self.assertFalse(raised.exception.manifest["safety"]["mutates"])
         self.assertEqual(client.updates, [])
 
     def test_protocol_and_ports_validation_fails_closed_before_provider_calls(self) -> None:

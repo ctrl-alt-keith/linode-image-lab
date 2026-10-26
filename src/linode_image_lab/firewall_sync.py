@@ -115,7 +115,6 @@ def firewall_sync_plan(
         return plan
     plan["execution_mode"] = "execute"
     plan["dry_run"] = False
-    plan["safety"]["mutates"] = True
     try:
         if options.expected_firewall_label is not None:
             verify_firewall_identity(sync_client, options)
@@ -140,6 +139,7 @@ def firewall_sync_plan(
     plan["status"] = "applied"
     plan["message"] = "trusted registry firewall sync applied managed rule changes"
     plan["applied"] = True
+    plan["safety"]["mutates"] = True
     return plan
 
 
