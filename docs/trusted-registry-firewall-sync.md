@@ -174,100 +174,33 @@ Build from a clean checkout of the exact reviewed source commit, with no
 modified or untracked package Python files: the ignore rules allow any `*.py`
 under `src/linode_image_lab/`. Target Linux amd64 and record the source commit,
 base digest, and resulting pushed image digest in the deployment review.
-Deployment must reference the published image by digest. The approved source
-`f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e` was published as
-`ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer@sha256:0a96b2d2b6ec0724a5496bf0487cfc3f16e4bf581a5eca1b497ebfc7df8099cd`
-by [run 37839446559](https://github.com/ctrl-alt-keith/linode-image-lab/actions/runs/37839446559).
-Publication and digest pinning do not qualify the consumer application path
-on LKE or authorize deployment.
+Deployment must reference a reviewed published image by digest. Publication
+and digest pinning do not qualify the consumer application path on LKE or
+authorize deployment.
 
 ```sh
 docker build --platform linux/amd64 --tag linode-image-lab:local .
 ```
 
-The source-owned `Publish firewall consumer image` workflow checks out exact
-approved source commit `f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e`, not
-the workflow's own commit. It tags
-`ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer:sha-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e`.
-It runs `make check`, builds and smoke-tests Linux amd64, and records the
-distinct source and workflow commits, builder, run, and pushed manifest digest.
-Only the publish job receives the repository GitHub token with package write
-permission; the separate, optional public-verification job has no package
-permission.
+The source-owned `Publish firewall consumer image` workflow pins an exact
+source commit and source-derived tag. Manual dispatch from `main` offers
+`publish` and `verify-public` modes. The publish job checks out the pinned
+source, runs `make check`, builds Linux amd64, smoke-tests `firewall-sync` and
+`service-acl-sync`, and records source, workflow, builder, run, and digest.
+Only that job receives a repository token with package write permission.
 
-The completed one-time first-package route used a push of the exact annotated tag
-`cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e` at
-the reviewed workflow commit. The tag message named the exact package and
-Keith's owner-observed organization Packages inventory at 2026-10-08 20:10
-UTC (source-thread reference `Sentinel_32bf136f93ac8191aa738a7c5cb96f4e`).
-Keith saw only `lke-image-lab/cak-canary`; the consumer package was absent at
-that time. This is attributable first-bootstrap evidence, not an independent
-API verification or a claim about all later times. The workflow checks the
-annotated tag, its target, the source commit's ancestry, and these exact
-evidence fields. It refuses a rerun of the same workflow attempt and refuses
-publication once the package exists. It cannot detect a tag deleted and
-repushed after a pre-push failure; the no-repush rule below is procedural.
-The exact annotated publication tag was pushed once at workflow commit
-`9a0cde529093b6f2043ca8bcf1147fc3422d6a6c`; its source commit is an
-ancestor. The publication run succeeded, with no rerun or force push.
-At bootstrap, a conflicting package path or registry check would have required
-stopping and refreshing the owner evidence. The historical inventory remains
-evidence only for that first-package decision.
-If a future first-package attempt fails before push, do not force-move its
-publication tag or rerun that attempt; a corrected workflow needs a separately
-reviewed unique trigger. The completed consumer push does not authorize
-deployment or another publication.
+Before push, the workflow requires readable package metadata and tag inventory,
+refuses an existing tag or manifest, and accepts only a missing-manifest
+registry response. After push, it checks the digest manifest, pulls the tag
+back to confirm the same digest, and verifies that package visibility did not
+change. A new source requires a reviewed pin update. The optional
+`verify-public` job has no package permission; with an empty Docker auth config,
+it checks an anonymous pull against a supplied digest, source-revision label,
+and Linux amd64 platform. Neither mode changes package visibility.
 
-Required annotated tag message lines:
-
-```text
-CAK-364-Package: ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer
-CAK-364-Absence-Observed-By: Keith
-CAK-364-Absence-Observed-At: 2026-10-08T20:10:00Z
-CAK-364-Absence-Evidence: Sentinel_32bf136f93ac8191aa738a7c5cb96f4e
-```
-
-During bootstrap, package API `404` is consistent with the owner observation
-but does not corroborate absence independently: access masking can also
-produce `404`. The bootstrap decision rests on Keith's attributed inventory
-and GHCR's refusal to write a package this repository cannot access. An
-existing package (`200`), authentication or
-transport failure, or a positive registry manifest stops publication. The
-registry may return `denied` for a new path; that response is accepted only
-with the owner evidence and API `404`, never as an absence claim by itself.
-After the package exists, manual publication from `main` requires a successful
-package API read and refuses the target tag if it appears among any package
-versions. It also refuses a positive registry manifest. The tag is checked
-after the build and immediately before push. These checks cannot prevent an
-unrelated writer racing a new tag into GHCR between check and push; keep this
-one-time path under the reviewed publication decision.
-
-Keith selected a private-package LKE path. The existing canary GHCR credential
-with `read:packages` supplies authenticated pulls; package visibility stays
-private. The [LKE integration record](https://github.com/ctrl-alt-keith/lke-image-lab/blob/f8ae38004de38ce36a2df3b1d4dd420c7845e961/docs/trusted-network-operations.md)
-reports authenticated manifest and config SHA-256 checks for the exact consumer
-digest, Linux amd64 and source-revision labels, and a temporary LKE help-only
-Pod whose image ID matched that digest and exited zero. Its namespace-local
-pull Secret and temporary resources were then removed. This qualifies that
-historical private pull, not a consumer application invocation, runtime
-credentials, a dry-run, or a scheduled Job. Recheck authenticated digest access
-and the pull binding at the next approved LKE test.
-
-The workflow's distinct `cak-364-consumer-verify-sha256-<pushed-digest-hex>`
-tag and `verify-public` job remain available only for a separately selected
-public-package path. That job uses an empty Docker auth config to check an
-anonymous pull, digest, source-revision label, and Linux amd64 platform; it
-does not build or push. Public visibility and anonymous verification are not
-gates for the selected private-package path. No public-verification tag was
-pushed.
-
-GitHub permits manual dispatch only after the workflow file exists on the
-default branch; the exact-tag push route allows a reviewed workflow to run
-before merge. The source SHA is an ancestor of the current workflow branch;
-retaining a tag at its reviewed descendant keeps that source reachable even
-if the PR is later squash-merged and its branch removed. A failed checkout
-stops before publication. Neither merge nor tag push is part of this source
-contract.
+For a private package, the LKE workload needs a namespace-scoped pull Secret
+with package-read access. Keep the pull credential and runtime configuration
+under the LKE repository's protected owners.
 
 The LKE Job supplies an existing `[firewall-sync]` TOML config mount and the
 three environment variables named above. Its argv must include

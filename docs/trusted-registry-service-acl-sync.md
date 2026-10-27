@@ -24,6 +24,11 @@ Before a patch, the command requires a fresh validated registry with at least on
 
 The command re-fetches the registry just before patch and re-reads the exact UID and annotation afterward. Stale or invalid registry input, changed Service identity, denied access, conflicts, malformed responses, and uncertain writes fail without a permissive fallback. A successful result reports `annotation_verified` and `enforcement_verified: false`: readback confirms the Kubernetes value, not CCM convergence. A failure after a patch attempt reports an uncertain outcome and requires Service inspection before retry. Routine output and errors omit CIDRs, credentials, request bodies, and Service identifiers.
 
-The current `Dockerfile` includes the source package. Build a candidate Linux image from the reviewed source commit and verify `service-acl-sync --help` in that image. Publication of a new digest and deployment are separate owner-controlled steps; the existing `.github/workflows/publish-firewall-consumer.yml` is pinned to an earlier source commit and is not an adapter publication path.
+The current `Dockerfile` includes the source package. The image workflow
+checks out its pinned source commit, runs `make check`, builds Linux amd64,
+smoke-tests both consumer commands, and refuses to overwrite an existing tag.
+Manual publication and optional anonymous digest verification run from `main`;
+deployment remains a separate owner-controlled step. Pin deployed images by
+their verified digest.
 
 Provider references: [Kubernetes JSON Patch API](https://kubernetes.io/docs/reference/using-api/api-concepts/#patch-operations), [Kubernetes Service API](https://kubernetes.io/docs/reference/kubernetes-api/core/service-v1/), and [Linode CCM Service annotation reference](https://github.com/linode/linode-cloud-controller-manager/blob/main/docs/configuration/annotations.md).
