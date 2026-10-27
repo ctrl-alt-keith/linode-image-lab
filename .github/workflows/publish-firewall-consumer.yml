@@ -1,6 +1,9 @@
 name: Publish firewall consumer image
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     tags:
       - cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e
@@ -23,7 +26,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: publish-firewall-consumer
+  group: ${{ github.event_name == 'pull_request' && format('qualify-pr-{0}', github.event.pull_request.number) || 'publish-firewall-consumer' }}
   cancel-in-progress: false
 
 env:
@@ -32,6 +35,56 @@ env:
   TAG: sha-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e
 
 jobs:
+  qualify-service-acl-candidate:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 155 &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      SOURCE_SHA: f99549696d3c5043553270e983172bb2e623ae8b
+      TAG: qualify-f99549696d3c5043553270e983172bb2e623ae8b
+    steps:
+      - name: Check out exact service ACL source candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Verify source and run canonical checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
+          test "$(uname -m)" = x86_64
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          make check
+
+      - name: Build and smoke-test Linux amd64 candidate without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --tag "$IMAGE:$TAG" .
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE:$TAG")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE:$TAG")" = "$SOURCE_SHA"
+          docker run --rm --platform linux/amd64 "$IMAGE:$TAG" firewall-sync --help >/dev/null
+          docker run --rm --platform linux/amd64 "$IMAGE:$TAG" service-acl-sync --help >/dev/null
+          {
+            echo '### Service ACL candidate image qualification'
+            echo "- Source commit: \`$SOURCE_SHA\`"
+            echo "- Workflow commit: \`$GITHUB_WORKFLOW_SHA\`"
+            echo "- Builder: \`$RUNNER_OS/$RUNNER_ARCH\`, Docker \`$(docker version --format '{{.Server.Version}}')\`"
+            echo "- Run: \`$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT\`"
+            echo '- Build and both CLI smoke tests passed; no image was published.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/tags/cak-364-consumer-publish-f76100c298c96a3a6fa4eeb1fbbcceb06dfe234e') ||
