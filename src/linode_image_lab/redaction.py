@@ -27,6 +27,9 @@ PROVIDER_IDENTIFIER_KEYS = {
     "registry_endpoint_url",
     "registry_object_key",
     "resource_id",
+    "service_namespace",
+    "service_name",
+    "service_uid",
     "user_id",
 }
 

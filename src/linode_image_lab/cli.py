@@ -41,6 +41,7 @@ from .region_policy import (
 )
 from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
+from .service_acl_sync import ServiceACLSyncError, service_acl_sync
 
 PACKAGE_NAME = "linode-image-lab"
 
@@ -154,6 +155,12 @@ def add_cluster_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cluster-label", help="Expected existing LKE cluster label.")
 
 
+def add_service_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--service-namespace", help="Exact Service namespace.")
+    parser.add_argument("--service-name", help="Exact Service name.")
+    parser.add_argument("--service-uid", help="Expected immutable Service UID.")
+
+
 def add_manifest_file_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--manifest-file",
@@ -234,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_replication_policy_args(config_validate)
     add_registry_args(config_validate)
     add_cluster_args(config_validate)
+    add_service_args(config_validate)
 
     plan = subparsers.add_parser("plan", help="Emit a dry-run manifest preview.")
     add_version_arg(plan, version_text)
@@ -372,6 +380,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_manifest_file_arg(acl_sync)
     add_cluster_args(acl_sync)
     add_registry_source_args(acl_sync)
+
+    service_sync = subparsers.add_parser(
+        "service-acl-sync", help="Refresh one CCM-owned Service firewall ACL annotation.",
+    )
+    add_version_arg(service_sync, version_text)
+    add_config_arg(service_sync, dest="command_config")
+    service_sync.add_argument("--execute", action="store_true", help="Opt into the guarded Service annotation patch.")
+    add_service_args(service_sync)
+    add_registry_source_args(service_sync)
 
     region_policy = subparsers.add_parser(
         "region-policy",
@@ -513,6 +530,16 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
             raise ValueError(f"acl-sync requires {', '.join(missing)}")
         args.cluster_id = normalize_firewall_id(args.cluster_id, "--cluster-id")
 
+    if args.command == "service-acl-sync":
+        fields = ("service_namespace", "service_name", "service_uid", "registry_endpoint_url",
+                  "registry_bucket", "registry_object_key", "registry_region")
+        for field in fields:
+            if getattr(args, field) is None and field in defaults:
+                setattr(args, field, defaults[field])
+        if any(not isinstance(getattr(args, field), str) or not getattr(args, field).strip()
+               for field in fields[:-1]):
+            raise ValueError("service-acl-sync requires exact Service identity and registry source options")
+
 
 def config_validate_manifest(args: argparse.Namespace) -> dict[str, Any]:
     path = config_path(args)
@@ -569,6 +596,9 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "expected_firewall_label": getattr(args, "expected_firewall_label", None),
         "cluster_id": getattr(args, "cluster_id", None),
         "cluster_label": getattr(args, "cluster_label", None),
+        "service_namespace": getattr(args, "service_namespace", None),
+        "service_name": getattr(args, "service_name", None),
+        "service_uid": getattr(args, "service_uid", None),
     }
     option_names = {
         "deploy_regions": "--region",
@@ -593,6 +623,9 @@ def config_validation_cli_defaults(args: argparse.Namespace) -> dict[str, Any]:
         "expected_firewall_label": "--expected-firewall-label",
         "cluster_id": "--cluster-id",
         "cluster_label": "--cluster-label",
+        "service_namespace": "--service-namespace",
+        "service_name": "--service-name",
+        "service_uid": "--service-uid",
     }
 
     for field, value in candidate_values.items():
@@ -785,6 +818,14 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             plan_reporter=sys.stderr.write,
         )
 
+    if args.command == "service-acl-sync":
+        return service_acl_sync(
+            namespace=args.service_namespace, name=args.service_name, uid=args.service_uid,
+            registry_endpoint_url=args.registry_endpoint_url, registry_bucket=args.registry_bucket,
+            registry_object_key=args.registry_object_key, registry_region=args.registry_region,
+            execute=args.execute,
+        )
+
     raise ValueError(f"unsupported command: {args.command}")
 
 
@@ -969,6 +1010,9 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"{exc}\n")
             return 1
         parser.error(str(exc))
+    except ServiceACLSyncError:
+        sys.stderr.write("service-acl-sync failed; inspect the Service before retry if a patch was attempted\n")
+        return 1
     except (ConfigError, RegionPolicyError, ValueError) as exc:
         if args.command in {"firewall-sync", "acl-sync"} and args.output_format == "summary":
             summary = routine_outcome if args.command == "firewall-sync" else acl_routine_outcome

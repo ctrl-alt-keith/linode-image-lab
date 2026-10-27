@@ -29,6 +29,7 @@ ROOT_KEYS = {
     "cleanup",
     "firewall-sync",
     "acl-sync",
+    "service-acl-sync",
 }
 TABLE_FIELDS = {
     "defaults": {"region", "regions", "ttl", "image_id", "type", "instance_type", "firewall_id"},
@@ -100,6 +101,10 @@ TABLE_FIELDS = {
         "registry_object_key",
         "registry_region",
     },
+    "service-acl-sync": {
+        "service_namespace", "service_name", "service_uid",
+        "registry_endpoint_url", "registry_bucket", "registry_object_key", "registry_region",
+    },
 }
 COMMAND_TABLES = {
     "capture",
@@ -109,6 +114,7 @@ COMMAND_TABLES = {
     "replicate",
     "firewall-sync",
     "acl-sync",
+    "service-acl-sync",
 }
 COMMAND_DEFAULT_FIELDS = {
     "plan": ("regions", "ttl"),
@@ -160,6 +166,10 @@ COMMAND_DEFAULT_FIELDS = {
         "registry_object_key",
         "registry_region",
     ),
+    "service-acl-sync": (
+        "service_namespace", "service_name", "service_uid",
+        "registry_endpoint_url", "registry_bucket", "registry_object_key", "registry_region",
+    ),
 }
 CLI_SOURCE_LABELS = {
     "deploy_regions": "cli --region",
@@ -185,6 +195,9 @@ CLI_SOURCE_LABELS = {
     "expected_firewall_label": "cli --expected-firewall-label",
     "cluster_id": "cli --cluster-id",
     "cluster_label": "cli --cluster-label",
+    "service_namespace": "cli --service-namespace",
+    "service_name": "cli --service-name",
+    "service_uid": "cli --service-uid",
 }
 PROHIBITED_KEYS = {
     "discover",
