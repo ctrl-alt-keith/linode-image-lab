@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import ssl
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,33 @@ CA_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
 class ServiceACLSyncError(ValueError):
     """A safe, CIDR-free failure for the single-Service refresh."""
+
+    SAFE_REASONS = frozenset({
+        "Kubernetes API connection is not configured",
+        "Kubernetes ServiceAccount credentials are unavailable",
+        "Kubernetes Service access denied",
+        "Kubernetes Service was not found",
+        "Kubernetes Service changed concurrently",
+        "Kubernetes Service patch precondition failed",
+        "Kubernetes API request failed",
+        "Kubernetes API response is invalid",
+        "current Service ACL annotation is invalid",
+        "Kubernetes Service response is invalid",
+        "Kubernetes Service identity changed",
+        "external firewall-id annotation is present",
+        "Kubernetes Service must expose only TCP 443",
+        "current CCM ACL annotation is required",
+        "exact namespace, name, and UID are required",
+        "trusted registry is unavailable or invalid",
+        "trusted registry contains no active CIDRs",
+        "trusted registry changed before patch",
+        "Service ACL readback differs from submitted annotation",
+        "Kubernetes Service refresh failed",
+    })
+
+    def __init__(self, reason: str, *, uncertain: bool = False) -> None:
+        super().__init__(reason if reason in self.SAFE_REASONS else "Kubernetes Service refresh failed")
+        self.uncertain = uncertain
 
 
 class ServiceClient(Protocol):
@@ -76,7 +104,7 @@ class KubernetesServiceClient:
             else:
                 reason = "Kubernetes API request failed"
             raise ServiceACLSyncError(reason) from exc
-        except (OSError, URLError) as exc:
+        except (OSError, URLError, HTTPException) as exc:
             raise ServiceACLSyncError("Kubernetes API request failed") from exc
         except (UnicodeError, json.JSONDecodeError) as exc:
             raise ServiceACLSyncError("Kubernetes API response is invalid") from exc
@@ -94,8 +122,10 @@ class KubernetesServiceClient:
 def _acl_sources(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     try:
         payload = json.loads(value)
+        if not isinstance(payload, dict) or set(payload) != {"allowList"}:
+            raise ValueError
         sources = payload["allowList"]
-        if not isinstance(payload, dict) or not isinstance(sources, dict) or set(sources) != {"ipv4", "ipv6"}:
+        if not isinstance(sources, dict) or set(sources) != {"ipv4", "ipv6"}:
             raise ValueError
         result = []
         for family, version in (("ipv4", 4), ("ipv6", 6)):
@@ -161,12 +191,14 @@ def service_acl_sync(
     if registry.cidr_count == 0:
         raise ServiceACLSyncError("trusted registry contains no active CIDRs")
     service_client = client or KubernetesServiceClient(environ=environ)
+    patch_attempted = False
     try:
         rv, current = _service_state(service_client.get_service(namespace, name), namespace, name, uid)
         desired_sources = (registry.ipv4_cidrs, registry.ipv6_cidrs)
         unchanged = _acl_sources(current) == desired_sources
         result = {"schema_version": 1, "command": "service-acl-sync", "status": "unchanged" if unchanged else "planned",
-                  "dry_run": not execute, "applied": False, "cidr_count": registry.cidr_count}
+                  "dry_run": not execute, "applied": False, "cidr_count": registry.cidr_count,
+                  "enforcement_verified": False}
         if unchanged or not execute:
             return result
         # A fresh registry check precedes the write; JSON Patch tests guard intervening Service changes.
@@ -184,15 +216,18 @@ def service_acl_sync(
             {"op": "test", "path": ACL_PATH, "value": current},
             {"op": "replace", "path": ACL_PATH, "value": desired},
         ]
+        patch_attempted = True
         service_client.patch_service(namespace, name, patch)
         _, observed = _service_state(service_client.get_service(namespace, name), namespace, name, uid)
         if observed != desired:
             raise ServiceACLSyncError("Service ACL readback differs from submitted annotation")
-        result.update(status="verified", dry_run=False, applied=True)
+        result.update(status="annotation_verified", dry_run=False, applied=True)
         return result
     except TrustedRegistryError as exc:
         raise ServiceACLSyncError("trusted registry is unavailable or invalid") from exc
-    except ServiceACLSyncError:
+    except ServiceACLSyncError as exc:
+        if patch_attempted:
+            raise ServiceACLSyncError(str(exc), uncertain=True) from exc
         raise
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        raise ServiceACLSyncError("Kubernetes Service refresh failed") from exc
+        raise ServiceACLSyncError("Kubernetes Service refresh failed", uncertain=patch_attempted) from exc

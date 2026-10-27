@@ -11,7 +11,7 @@ linode-image-lab --config /protected/service-acl-sync.toml service-acl-sync --ex
 
 The pod needs `LINODE_OBJ_ACCESS_KEY` and `LINODE_OBJ_SECRET_KEY` from a protected Object Storage read credential Secret. Kubernetes API access uses its mounted ServiceAccount token and CA plus `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`. The LKE repository owns the ServiceAccount, named-Service get/patch RBAC, Secret delivery, Job or CronJob, and Argo deployment; none are installed by this repository.
 
-Before a patch, the command requires a fresh validated registry with at least one active CIDR; the exact Service UID, `LoadBalancer` type, and one TCP port 443; an existing valid CCM ACL annotation; and absence of the `firewall-id` annotation. It compares canonical source CIDRs and does nothing if they match. A patch uses `application/json-patch+json` against `GET /api/v1/namespaces/{namespace}/services/{name}`:
+Before a patch, the command requires a fresh validated registry with at least one active CIDR; the exact Service UID, `LoadBalancer` type, and one TCP port 443; an existing valid CCM ACL annotation; and absence of the `firewall-id` annotation. It compares canonical source CIDRs and does nothing if they match. After a GET of the exact Service, the update uses `PATCH /api/v1/namespaces/{namespace}/services/{name}` with `application/json-patch+json`:
 
 ```json
 [
@@ -22,7 +22,7 @@ Before a patch, the command requires a fresh validated registry with at least on
 ]
 ```
 
-The command re-fetches the registry just before patch and re-reads the exact UID and annotation afterward. Stale or invalid registry input, changed Service identity, denied access, conflicts, malformed responses, and uncertain writes fail without a permissive fallback. A successful annotation readback confirms the Kubernetes value, not CCM convergence; inspect the CCM-managed firewall separately when operating the deployment. Routine output and errors omit CIDRs, credentials, request bodies, and Service identifiers.
+The command re-fetches the registry just before patch and re-reads the exact UID and annotation afterward. Stale or invalid registry input, changed Service identity, denied access, conflicts, malformed responses, and uncertain writes fail without a permissive fallback. A successful result reports `annotation_verified` and `enforcement_verified: false`: readback confirms the Kubernetes value, not CCM convergence. A failure after a patch attempt reports an uncertain outcome and requires Service inspection before retry. Routine output and errors omit CIDRs, credentials, request bodies, and Service identifiers.
 
 The current `Dockerfile` includes the source package. Build a candidate Linux image from the reviewed source commit and verify `service-acl-sync --help` in that image. Publication of a new digest and deployment are separate owner-controlled steps; the existing `.github/workflows/publish-firewall-consumer.yml` is pinned to an earlier source commit and is not an adapter publication path.
 

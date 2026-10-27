@@ -1010,8 +1010,9 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"{exc}\n")
             return 1
         parser.error(str(exc))
-    except ServiceACLSyncError:
-        sys.stderr.write("service-acl-sync failed; inspect the Service before retry if a patch was attempted\n")
+    except ServiceACLSyncError as exc:
+        status = "uncertain; inspect the Service before retry" if exc.uncertain else "refused before patch"
+        sys.stderr.write(f"service-acl-sync {status}: {exc}\n")
         return 1
     except (ConfigError, RegionPolicyError, ValueError) as exc:
         if args.command in {"firewall-sync", "acl-sync"} and args.output_format == "summary":

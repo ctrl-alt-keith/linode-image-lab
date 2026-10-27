@@ -4,7 +4,8 @@ import datetime as dt
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from http.client import BadStatusLine, IncompleteRead
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -59,6 +60,30 @@ def sync(client: FakeServiceClient, *, execute: bool = True) -> dict:
 
 
 class ServiceACLSyncTests(unittest.TestCase):
+    def test_in_cluster_client_requires_valid_connection_and_service_account(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            token = Path(directory) / "token"
+            token.write_text("test-token\n", encoding="utf-8")
+            with patch("linode_image_lab.service_acl_sync.TOKEN_PATH", token), patch(
+                "linode_image_lab.service_acl_sync.ssl.create_default_context", return_value=object()
+            ):
+                client = KubernetesServiceClient(environ={
+                    "KUBERNETES_SERVICE_HOST": "2001:db8::1", "KUBERNETES_SERVICE_PORT": "443",
+                })
+                self.assertEqual(client.base_url, "https://[2001:db8::1]:443")
+                for host, port in (("not-an-ip", "443"), ("192.0.2.1", "0"), ("192.0.2.1", "invalid")):
+                    with self.subTest(host=host, port=port), self.assertRaisesRegex(
+                        ServiceACLSyncError, "connection is not configured"
+                    ):
+                        KubernetesServiceClient(environ={
+                            "KUBERNETES_SERVICE_HOST": host, "KUBERNETES_SERVICE_PORT": port,
+                        })
+                token.write_text("", encoding="utf-8")
+                with self.assertRaisesRegex(ServiceACLSyncError, "credentials are unavailable"):
+                    KubernetesServiceClient(environ={
+                        "KUBERNETES_SERVICE_HOST": "192.0.2.1", "KUBERNETES_SERVICE_PORT": "443",
+                    })
+
     def test_kubernetes_transport_uses_exact_api_path_and_json_patch_content_type(self) -> None:
         client = KubernetesServiceClient.__new__(KubernetesServiceClient)
         client.base_url = "https://kubernetes.example:443"
@@ -102,7 +127,8 @@ class ServiceACLSyncTests(unittest.TestCase):
             def open(self, request, timeout):
                 raise self.error
 
-        for code, reason in ((403, "access denied"), (409, "concurrently"), (422, "precondition")):
+        for code, reason in ((401, "access denied"), (403, "access denied"), (404, "not found"),
+                             (409, "concurrently"), (422, "precondition")):
             error = HTTPError("https://kubernetes.example", code, "private-token 198.51.100.0/24", {}, None)
             with self.subTest(code=code), patch("linode_image_lab.service_acl_sync.build_opener", return_value=Opener(error)):
                 with self.assertRaises(ServiceACLSyncError) as caught:
@@ -131,6 +157,58 @@ class ServiceACLSyncTests(unittest.TestCase):
             client.get_service("traefik", "traefik")
         self.assertEqual(str(caught.exception), "Kubernetes API response is invalid")
 
+    def test_http_layer_open_and_read_failures_after_patch_are_safe_and_uncertain(self) -> None:
+        transport = KubernetesServiceClient.__new__(KubernetesServiceClient)
+        transport.base_url = "https://kubernetes.example:443"
+        transport.token = "x"
+        transport.context = object()
+
+        for failure_stage in ("open", "read"):
+            client = FakeServiceClient()
+            original = client.value["metadata"]["annotations"][ACL_ANNOTATION]
+            client.patch_service = transport.patch_service  # type: ignore[method-assign]
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return None
+
+                def read(self):
+                    raise IncompleteRead(b"opaque-error-sentinel 198.51.100.0/24", 1)
+
+            class Opener:
+                def open(self, request, timeout):
+                    if failure_stage == "open":
+                        raise BadStatusLine("opaque-error-sentinel 198.51.100.0/24")
+                    return Response()
+
+            with self.subTest(failure_stage=failure_stage), patch(
+                "linode_image_lab.service_acl_sync.build_opener", return_value=Opener()
+            ), patch(
+                "linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()
+            ), self.assertRaises(ServiceACLSyncError) as caught:
+                sync(client)
+            self.assertEqual(str(caught.exception), "Kubernetes API request failed")
+            self.assertNotIn("opaque-error-sentinel", str(caught.exception))
+            self.assertTrue(caught.exception.uncertain)
+            self.assertEqual(client.value["metadata"]["annotations"][ACL_ANNOTATION], original)
+
+    def test_patch_precondition_error_keeps_safe_reason_and_uncertain_phase(self) -> None:
+        client = FakeServiceClient()
+
+        def reject_patch(namespace: str, name: str, body: list[dict]) -> None:
+            raise ServiceACLSyncError("Kubernetes Service patch precondition failed")
+
+        client.patch_service = reject_patch  # type: ignore[method-assign]
+        with patch(
+            "linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()
+        ), self.assertRaises(ServiceACLSyncError) as caught:
+            sync(client)
+        self.assertEqual(str(caught.exception), "Kubernetes Service patch precondition failed")
+        self.assertTrue(caught.exception.uncertain)
+
     def test_cli_config_defaults_redact_service_identity_and_registry_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "service.toml"
@@ -149,12 +227,42 @@ class ServiceACLSyncTests(unittest.TestCase):
         for private_value in ("uid-example", "traefik", "example-bucket", "registry.json"):
             self.assertNotIn(private_value, output.getvalue())
 
+    def test_cli_reports_success_and_safe_failure_phase_without_manifest_file(self) -> None:
+        arguments = [
+            "service-acl-sync", "--execute", "--service-namespace", "traefik",
+            "--service-name", "traefik", "--service-uid", "uid-example",
+            "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+            "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
+        ]
+        success = {"schema_version": 1, "command": "service-acl-sync", "status": "annotation_verified",
+                   "dry_run": False, "applied": True, "enforcement_verified": False}
+        output = StringIO()
+        with patch("linode_image_lab.cli.service_acl_sync", return_value=success) as adapter, redirect_stdout(output):
+            self.assertEqual(main(arguments), 0)
+        self.assertEqual(json.loads(output.getvalue()), success)
+        self.assertEqual(adapter.call_args.kwargs["uid"], "uid-example")
+
+        for uncertain, expected in ((False, "refused before patch"), (True, "uncertain; inspect the Service")):
+            output, errors = StringIO(), StringIO()
+            failure = ServiceACLSyncError("Kubernetes Service access denied", uncertain=uncertain)
+            with self.subTest(uncertain=uncertain), patch(
+                "linode_image_lab.cli.service_acl_sync", side_effect=failure
+            ), redirect_stdout(output), redirect_stderr(errors):
+                self.assertEqual(main(arguments), 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn(expected, errors.getvalue())
+            self.assertIn("Kubernetes Service access denied", errors.getvalue())
+            for private_value in ("uid-example", "traefik", "example-bucket", "registry.json"):
+                self.assertNotIn(private_value, errors.getvalue())
+        self.assertEqual(str(ServiceACLSyncError("secret=abc 198.51.100.0/24")), "Kubernetes Service refresh failed")
+
     def test_replaces_only_current_annotation_with_conflict_guards_and_readback(self) -> None:
         client = FakeServiceClient()
         with patch("linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()) as fetch:
             result = sync(client)
         self.assertEqual(fetch.call_count, 2)
-        self.assertEqual((result["status"], result["applied"]), ("verified", True))
+        self.assertEqual((result["status"], result["applied"], result["enforcement_verified"]),
+                         ("annotation_verified", True, False))
         body = client.patches[0]
         self.assertEqual(body[:3], [
             {"op": "test", "path": "/metadata/uid", "value": "uid-example"},
@@ -173,6 +281,17 @@ class ServiceACLSyncTests(unittest.TestCase):
             client.value = service(acl='{"allowList":{"ipv6":[],"ipv4":["198.51.100.0/24"]}}')
             self.assertEqual(sync(client)["status"], "unchanged")
         self.assertEqual(client.patches, [])
+
+    def test_extra_top_level_acl_keys_are_not_treated_as_unchanged(self) -> None:
+        sources = {"ipv4": ["198.51.100.0/24"], "ipv6": []}
+        for extra in ({"denyList": sources}, {"unexpected": True}):
+            client = FakeServiceClient()
+            client.value = service(acl=json.dumps({"allowList": sources, **extra}))
+            with self.subTest(extra=tuple(extra)), patch(
+                "linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()
+            ), self.assertRaisesRegex(ServiceACLSyncError, "current Service ACL annotation is invalid"):
+                sync(client)
+            self.assertEqual(client.patches, [])
 
     def test_stale_and_changed_registry_preserve_existing_acl(self) -> None:
         for payloads in ([registry(stale=True)], [registry(), registry(cidr="192.0.2.0/24")]):
@@ -225,6 +344,7 @@ class ServiceACLSyncTests(unittest.TestCase):
                 "linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()
             ), self.assertRaises(ServiceACLSyncError) as caught:
                 sync(client)
+            self.assertEqual(caught.exception.uncertain, stage != "get")
             self.assertNotIn("secret=abc", str(caught.exception))
             self.assertNotIn("198.51.100.0/24", str(caught.exception))
 
@@ -233,5 +353,6 @@ class ServiceACLSyncTests(unittest.TestCase):
         client.after_patch = lambda: client.value["metadata"].update(uid="replacement")
         with patch("linode_image_lab.service_acl_sync.fetch_registry_from_object_storage", return_value=registry()), self.assertRaisesRegex(
             ServiceACLSyncError, "identity"
-        ):
+        ) as caught:
             sync(client)
+        self.assertTrue(caught.exception.uncertain)
