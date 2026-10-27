@@ -15,6 +15,14 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(redact_text("Bearer abcdefgh123456"), f"Bearer {REDACTION}")
         self.assertEqual(redact_text("token=abcdefgh123456"), f"token={REDACTION}")
 
+    def test_redacts_sensitive_key_value_text(self) -> None:
+        for key in ("api_key", "credential", "root_pass", "user_data"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    redact_text(f"provider error: {key}=synthetic-private-value"),
+                    f"provider error: {key}={REDACTION}",
+                )
+
     def test_redacts_public_ssh_key_text(self) -> None:
         public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA user@example"
 

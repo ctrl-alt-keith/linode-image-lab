@@ -9,7 +9,8 @@ from typing import Any
 REDACTION = "[REDACTED]"
 SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|root[_-]?pass|api[_-]?key|credential|user[_-]?data)", re.I)
 TOKEN_TEXT_RE = re.compile(
-    r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]{8,}|\b(token|secret|password)=([^\s]+)"
+    r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]{8,}|"
+    r"\b(token|secret|password|root[_-]?pass|api[_-]?key|credential|user[_-]?data)=([^\s]+)"
 )
 AUTHORIZED_KEY_TEXT_RE = re.compile(
     r"\b(?:ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|"
