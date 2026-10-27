@@ -83,7 +83,15 @@ class LinodeClientProtocol(Protocol):
 
     def get_firewall_rules(self, firewall_id: int) -> dict[str, Any]: ...
 
+    def get_firewall(self, firewall_id: int) -> dict[str, Any]: ...
+
     def update_firewall_rules(self, firewall_id: int, rules: dict[str, Any]) -> dict[str, Any]: ...
+
+    def get_lke_cluster(self, cluster_id: int) -> dict[str, Any]: ...
+
+    def get_lke_control_plane_acl(self, cluster_id: int) -> dict[str, Any]: ...
+
+    def update_lke_control_plane_acl(self, cluster_id: int, acl: dict[str, Any]) -> dict[str, Any]: ...
 
     def create_instance(
         self,
@@ -231,6 +239,13 @@ class LinodeClient:
             operation="get_firewall_rules",
         )
 
+    def get_firewall(self, firewall_id: int) -> dict[str, Any]:
+        escaped = quote(str(firewall_id), safe="")
+        return self._request(
+            "GET", f"/networking/firewalls/{escaped}",
+            retry=True, operation="get_firewall",
+        )
+
     def update_firewall_rules(self, firewall_id: int, rules: dict[str, Any]) -> dict[str, Any]:
         escaped = quote(str(firewall_id), safe="")
         return self._request(
@@ -239,6 +254,21 @@ class LinodeClient:
             rules,
             retry=False,
             operation="update_firewall_rules",
+        )
+
+    def get_lke_cluster(self, cluster_id: int) -> dict[str, Any]:
+        return self._request("GET", f"/lke/clusters/{cluster_id}", retry=True, operation="get_lke_cluster")
+
+    def get_lke_control_plane_acl(self, cluster_id: int) -> dict[str, Any]:
+        return self._request(
+            "GET", f"/lke/clusters/{cluster_id}/control_plane_acl",
+            retry=True, operation="get_lke_control_plane_acl",
+        )
+
+    def update_lke_control_plane_acl(self, cluster_id: int, acl: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "PUT", f"/lke/clusters/{cluster_id}/control_plane_acl",
+            {"acl": acl}, retry=False, operation="update_lke_control_plane_acl",
         )
 
     def create_instance(

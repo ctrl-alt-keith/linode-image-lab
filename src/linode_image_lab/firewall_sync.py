@@ -27,6 +27,8 @@ class FirewallSyncError(ValueError):
 
 
 class FirewallRulesClientProtocol(LinodeClientProtocol, Protocol):
+    def get_firewall(self, firewall_id: int) -> dict[str, Any]: ...
+
     def get_firewall_rules(self, firewall_id: int) -> dict[str, Any]: ...
 
     def update_firewall_rules(self, firewall_id: int, rules: dict[str, Any]) -> dict[str, Any]: ...
@@ -42,6 +44,7 @@ class FirewallSyncOptions:
     protocol: str = "TCP"
     ports: str | None = None
     managed_label: str = "tnr-allowlist"
+    expected_firewall_label: str | None = None
     execute: bool = False
 
 
@@ -55,6 +58,7 @@ def firewall_sync_plan(
     protocol: str = "TCP",
     ports: str | None = None,
     managed_label: str = "tnr-allowlist",
+    expected_firewall_label: str | None = None,
     execute: bool = False,
     client: FirewallRulesClientProtocol | None = None,
     environ: Mapping[str, str] | None = None,
@@ -69,6 +73,7 @@ def firewall_sync_plan(
         protocol=normalize_protocol(protocol),
         ports=normalize_ports(ports),
         managed_label=normalize_managed_label(managed_label),
+        expected_firewall_label=normalize_expected_firewall_label(expected_firewall_label),
         execute=execute,
     )
     validate_rule_shape(options)
@@ -85,6 +90,8 @@ def firewall_sync_plan(
             environ=environ,
         )
         registry = validate_registry(payload)
+        if options.expected_firewall_label is not None:
+            verify_firewall_identity(sync_client, options)
         current_rules = sync_client.get_firewall_rules(options.firewall_id)
         plan = build_firewall_sync_manifest(
             options=options,
@@ -108,8 +115,9 @@ def firewall_sync_plan(
         return plan
     plan["execution_mode"] = "execute"
     plan["dry_run"] = False
-    plan["safety"]["mutates"] = True
     try:
+        if options.expected_firewall_label is not None:
+            verify_firewall_identity(sync_client, options)
         pre_write_rules = sync_client.get_firewall_rules(options.firewall_id)
         if normalize_firewall_rules(pre_write_rules) != normalize_firewall_rules(current_rules):
             raise FirewallSyncError(
@@ -131,6 +139,7 @@ def firewall_sync_plan(
     plan["status"] = "applied"
     plan["message"] = "trusted registry firewall sync applied managed rule changes"
     plan["applied"] = True
+    plan["safety"]["mutates"] = True
     return plan
 
 
@@ -141,6 +150,10 @@ def build_firewall_sync_manifest(
     current_rules: dict[str, Any],
 ) -> dict[str, Any]:
     rules = normalize_firewall_rules(current_rules)
+    if options.expected_firewall_label is not None and (
+        rules["inbound_policy"] != "DROP" or rules["outbound_policy"] != "ACCEPT"
+    ):
+        raise FirewallSyncError("target firewall policies do not match DROP inbound and ACCEPT outbound")
     intended_rule = intended_managed_rule(options, registry)
     managed_index = managed_rule_index(rules["inbound"], options.managed_label)
     current_managed = rules["inbound"][managed_index] if managed_index is not None else None
@@ -325,6 +338,25 @@ def normalize_managed_label(value: str) -> str:
     if not 3 <= len(label) <= 32:
         raise FirewallSyncError("--managed-label must be between 3 and 32 characters")
     return label
+
+
+def normalize_expected_firewall_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    label = value.strip() if isinstance(value, str) else ""
+    if not 3 <= len(label) <= 32:
+        raise FirewallSyncError("--expected-firewall-label must be between 3 and 32 characters")
+    return label
+
+
+def verify_firewall_identity(client: FirewallRulesClientProtocol, options: FirewallSyncOptions) -> None:
+    firewall = client.get_firewall(options.firewall_id)
+    if (
+        firewall.get("id") != options.firewall_id
+        or firewall.get("label") != options.expected_firewall_label
+        or firewall.get("status") != "enabled"
+    ):
+        raise FirewallSyncError("firewall identity, label, or enabled status does not match the expected target")
 
 
 def validate_rule_shape(options: FirewallSyncOptions) -> None:
