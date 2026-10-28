@@ -21,9 +21,11 @@ role, durable object, and non-goals.
 
 Requires Python 3.12 or newer.
 
-Set `LINODE_TOKEN` first; execute mode reads it from the environment.
-Plain dry-run commands do not need it, except `firewall-sync` because it reads
-the target firewall before planning changes.
+For Linode API execution, set `LINODE_TOKEN` first; those commands read it
+from the environment.
+Plain dry-run commands do not need it, except `firewall-sync` and `acl-sync`
+because they read the target provider resource before planning changes.
+`service-acl-sync` reads Kubernetes instead and needs its in-cluster API access.
 
 ```sh
 python3 -m venv .venv
@@ -109,10 +111,12 @@ PYTHONPATH=src python3 -m linode_image_lab.cli capture-deploy \
 
 ## Authentication
 
-`LINODE_TOKEN` is required when `--execute` is used and when `cleanup
---discover` is used. Dry-run commands, including plain `cleanup` and
-`replicate` and `capture-replicate-deploy`, do not read the token or mutate
-resources. `region-policy generate`, `region-policy validate`, and
+`LINODE_TOKEN` is required for Linode API execute commands, `cleanup
+--discover`, and both planning and execution of `firewall-sync` and `acl-sync`.
+Plain `cleanup`, `replicate`, and `capture-replicate-deploy` dry runs do not
+read the token or mutate resources. `service-acl-sync` uses Kubernetes API
+access and Object Storage credentials, not `LINODE_TOKEN`.
+`region-policy generate`, `region-policy validate`, and
 `capture-replicate-deploy` runs that resolve `deploy_groups` or
 `replication_groups` read public provider region metadata from the Linode
 regions API without account authentication and do not mutate resources.
@@ -217,7 +221,7 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 
 Config uses `schema_version = 1` with optional `[defaults]`, `[capture]`,
 `[deploy]`, `[capture-deploy]`, `[capture-replicate-deploy]`, `[replicate]`,
-and `[firewall-sync]` tables.
+`[firewall-sync]`, `[acl-sync]`, and `[service-acl-sync]` tables.
 Supported values are
 `region` or `regions`, `ttl`, `source_image`, `image_id`, `type` or
 `instance_type`, `image_project_tag`, `firewall_id`, `authorized_keys`,
@@ -509,12 +513,22 @@ outside that marker are preserved; ambiguous ownership fails closed. See
 [docs/trusted-registry-firewall-sync.md](docs/trusted-registry-firewall-sync.md)
 for rollback notes, stale-registry behavior, and log-safety cautions.
 
+The registry also feeds two bounded LKE consumers. `acl-sync` plans or updates
+one existing cluster's control-plane ACL using Linode API and Object Storage
+credentials; first enablement additionally requires `--allow-enable`.
+`service-acl-sync` plans or patches one existing LoadBalancer Service's CCM ACL
+annotation using Kubernetes API access and Object Storage credentials. Neither
+command mutates by default. See the [control-plane ACL guide](docs/trusted-registry-acl-sync.md)
+and [Service ACL guide](docs/trusted-registry-service-acl-sync.md) for protected
+config, identity checks, output safety, and execution examples.
+
 ## Behavior Clarifications
 
 - All commands are dry-run by default.
 - `--execute` enables real Linode API mutations for `capture`, `deploy`,
-  `capture-deploy`, `capture-replicate-deploy`, `replicate`, `cleanup`, and
-  `firewall-sync`.
+  `capture-deploy`, `capture-replicate-deploy`, `replicate`, `cleanup`,
+  `firewall-sync`, and `acl-sync`; for `service-acl-sync`, it enables a guarded
+  Kubernetes Service annotation patch.
 - Existing resources passed to commands remain operator-owned inputs.
   `firewall-sync` is limited to one labeled inbound allowlist rule on an
   existing Cloud Firewall, not broader firewall management.
@@ -572,6 +586,8 @@ linode-image-lab config validate --config examples/config/capture-deploy-smoke.t
 linode-image-lab replicate --region us-east --image-id \"$CUSTOM_IMAGE_ID\"
 linode-image-lab cleanup
 linode-image-lab firewall-sync --config examples/config/firewall-sync.example.toml
+linode-image-lab acl-sync --help
+linode-image-lab service-acl-sync --help
 linode-image-lab region-policy validate --path policy/region-policy.toml
 ```
 
