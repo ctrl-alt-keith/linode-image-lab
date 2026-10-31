@@ -80,8 +80,7 @@ class ACLSyncTests(unittest.TestCase):
         baseline = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []},
                     "revision-id": "baseline-revision"}
         client.acl = {"acl": baseline}
-        canonical = json.dumps({"enabled": True, "addresses": baseline["addresses"]},
-                               sort_keys=True, separators=(",", ":")).encode()
+        canonical = json.dumps(baseline, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(canonical).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "baseline.json"
@@ -100,9 +99,21 @@ class ACLSyncTests(unittest.TestCase):
                 fetch.assert_not_called()
             self.assertEqual(client.writes, [plan["provider_payload"]])
             client.acl = {"acl": {**plan["provider_payload"], "revision-id": "after-addition"}}
+            expected_live = client.acl
+            client.acl = {"acl": {**plan["provider_payload"],
+                                  "addresses": {"ipv4": ["203.0.113.0/24"], "ipv6": []}}}
+            with self.assertRaisesRegex(ACLSyncError, "rollback aborted"):
+                acl_sync_plan(**options, baseline_rollback=True, execute=True)
+            self.assertEqual(len(client.writes), 1)
+            client.acl = expected_live
             rollback = acl_sync_plan(**options, baseline_rollback=True)
             self.assertEqual(rollback["provider_payload"], {"enabled": True, "addresses": baseline["addresses"]})
             self.assertEqual(rollback["diff"]["additions"], {"ipv4": [], "ipv6": []})
+            with patch.object(client, "get_lke_control_plane_acl",
+                              side_effect=[expected_live, {"acl": baseline}]):
+                with self.assertRaisesRegex(ACLSyncError, "pre-write verification failed"):
+                    acl_sync_plan(**options, baseline_rollback=True, execute=True)
+            self.assertEqual(len(client.writes), 1)
             self.assertEqual(acl_sync_plan(**options, baseline_rollback=True, execute=True)["status"], "submitted")
             self.assertEqual(client.writes[-1], rollback["provider_payload"])
 

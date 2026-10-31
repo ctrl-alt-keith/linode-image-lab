@@ -35,7 +35,7 @@ def acl_state(acl: dict[str, Any]) -> dict[str, Any]:
 
 
 def acl_digest(acl: dict[str, Any]) -> str:
-    encoded = json.dumps(acl_state(acl), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(acl, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -187,8 +187,13 @@ def baseline_acl_plan(
 ) -> dict[str, Any]:
     if cluster_id != BASELINE_CLUSTER_ID:
         raise ACLSyncError("protected baseline mode is limited to its reviewed LKE cluster")
-    baseline = load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label)
-    openai_cidrs = load_openai_snapshot()
+    try:
+        baseline = load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label)
+        openai_cidrs = load_openai_snapshot()
+        expected_cluster(client, cluster_id, cluster_label)
+        original_acl = normalize_acl(client.get_lke_control_plane_acl(cluster_id))
+    except (LinodePreflightError, ValueError) as exc:
+        raise ACLSyncError(str(exc)) from exc
     expanded = {
         "enabled": True,
         "addresses": {
@@ -198,8 +203,6 @@ def baseline_acl_plan(
     }
     if sum(len(values) for values in expanded["addresses"].values()) > 2048:
         raise ACLSyncError("OpenAI snapshot plan exceeds the local ACL entry safety bound")
-    expected_cluster(client, cluster_id, cluster_label)
-    original_acl = normalize_acl(client.get_lke_control_plane_acl(cluster_id))
     if baseline_rollback:
         if acl_state(original_acl) != expanded:
             raise ACLSyncError("live ACL is not the exact approved snapshot expansion; rollback aborted")
