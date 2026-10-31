@@ -17,4 +17,4 @@ linode-image-lab = "linode_image_lab.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-linode_image_lab = ["data/chatgpt-agents.json"]
+linode_image_lab = ["data/chatgpt-agents.json", "data/chatgpt-agents-lke-900.txt"]

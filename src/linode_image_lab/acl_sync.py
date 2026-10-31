@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .openai_acl_candidate import ADDITIONAL_ADDRESSES, CANDIDATE_SHA256, load_openai_acl_candidate
 from .openai_snapshot import CREATION_TIME, SHA256, SOURCE_URL, load_openai_snapshot
 from .trusted_registry import (
     TrustedRegistry,
@@ -28,6 +29,7 @@ class ACLSyncError(ValueError):
 
 
 BASELINE_CLUSTER_ID = 664899
+OBSERVED_LKE_ACL_ENTRY_LIMIT = 1000
 DEFINITE_HTTP_REJECTIONS = {
     400: "validation_rejected", 401: "authentication_rejected", 403: "permission_rejected",
     404: "target_not_found", 409: "conflict_rejected", 412: "conflict_rejected",
@@ -294,7 +296,7 @@ def baseline_acl_plan(
         raise ACLSyncError("protected baseline mode is limited to its reviewed LKE cluster")
     try:
         baseline = load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label)
-        openai_cidrs = load_openai_snapshot()
+        openai_cidrs = load_openai_acl_candidate()
         expected_cluster(client, cluster_id, cluster_label)
         original_acl = normalize_acl(client.get_lke_control_plane_acl(cluster_id))
     except (LinodePreflightError, ValueError) as exc:
@@ -306,8 +308,8 @@ def baseline_acl_plan(
             "ipv6": list(baseline["addresses"]["ipv6"]),
         },
     }
-    if sum(len(values) for values in expanded["addresses"].values()) > 2048:
-        raise ACLSyncError("OpenAI snapshot plan exceeds the local ACL entry safety bound")
+    if sum(len(values) for values in expanded["addresses"].values()) > OBSERVED_LKE_ACL_ENTRY_LIMIT:
+        raise ACLSyncError("OpenAI candidate plan exceeds the observed LKE ACL entry limit")
     if baseline_rollback:
         if acl_state(original_acl) != expanded:
             raise ACLSyncError("live ACL is not the exact approved snapshot expansion; rollback aborted")
@@ -334,7 +336,9 @@ def baseline_acl_plan(
         "target": {"cluster_id": cluster_id}, "registry": None,
         "baseline": {"sha256": acl_digest(baseline), "rollback": baseline_rollback},
         "openai_snapshot": {"source_url": SOURCE_URL, "creation_time": CREATION_TIME,
-                            "sha256": SHA256, "cidr_count": len(openai_cidrs)},
+                            "sha256": SHA256, "cidr_count": len(openai_cidrs),
+                            "derived_sha256": CANDIDATE_SHA256,
+                            "additional_addresses": ADDITIONAL_ADDRESSES},
         "planned_action": "rollback_acl" if baseline_rollback else "replace_acl",
         "diff": diff, "provider_payload": intended,
         "safety": {"mutates": False, "requires_execute_for_mutation": True,
@@ -349,8 +353,8 @@ def baseline_acl_plan(
     try:
         if load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label) != baseline:
             raise ACLSyncError("protected ACL baseline changed after planning")
-        if load_openai_snapshot() != openai_cidrs:
-            raise ACLSyncError("OpenAI snapshot changed after planning")
+        if load_openai_acl_candidate() != openai_cidrs:
+            raise ACLSyncError("OpenAI ACL candidate changed after planning")
         expected_cluster(client, cluster_id, cluster_label)
         if normalize_acl(client.get_lke_control_plane_acl(cluster_id)) != original_acl:
             raise ACLSyncError("LKE control-plane ACL changed after planning")
@@ -502,6 +506,9 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
         if manifest["openai_snapshot"] is not None:
             outcome["openai_snapshot_creation_time"] = manifest["openai_snapshot"]["creation_time"]
             outcome["openai_snapshot_cidr_count"] = manifest["openai_snapshot"]["cidr_count"]
+            if "derived_sha256" in manifest["openai_snapshot"]:
+                outcome["openai_acl_candidate_sha256"] = manifest["openai_snapshot"]["derived_sha256"]
+                outcome["openai_acl_additional_addresses"] = manifest["openai_snapshot"]["additional_addresses"]
         outcome["change_counts"] = {
             action: {family: len(manifest["diff"][action][family]) for family in ("ipv4", "ipv6")}
             for action in ("additions", "removals")

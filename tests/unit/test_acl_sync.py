@@ -66,6 +66,28 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
 
 
 class ACLSyncTests(unittest.TestCase):
+    def test_baseline_candidate_refuses_observed_acl_entry_limit(self) -> None:
+        client = FakeACLClient()
+        client.cluster = {"id": 664899, "label": "example-lke"}
+        baseline = {
+            "enabled": True,
+            "addresses": {"ipv4": sorted(f"198.18.0.{number}/32" for number in range(102)), "ipv6": []},
+            "revision-id": "baseline-revision",
+        }
+        client.acl = {"acl": baseline}
+        digest = hashlib.sha256(json.dumps(baseline, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps({"schema_version": 1, "cluster_id": 664899,
+                                        "cluster_label": "example-lke", "acl": baseline}), encoding="utf-8")
+            path.chmod(0o600)
+            with self.assertRaisesRegex(ACLSyncError, "observed LKE ACL entry limit"):
+                acl_sync_plan(cluster_id=664899, cluster_label="example-lke",
+                              registry_endpoint_url="", registry_bucket="", registry_object_key="",
+                              openai_snapshot_cluster_id=664899, baseline_acl_file=str(path),
+                              baseline_acl_sha256=digest, client=client, environ={}, execute=True)
+        self.assertEqual(client.writes, [])
+
     def test_baseline_cli_does_not_require_registry_source(self) -> None:
         args = build_parser().parse_args([
             "acl-sync", "--cluster-id", "664899", "--cluster-label", "example-lke",
@@ -78,7 +100,7 @@ class ACLSyncTests(unittest.TestCase):
     def test_protected_baseline_addition_and_exact_rollback(self) -> None:
         client = FakeACLClient()
         client.cluster = {"id": 664899, "label": "example-lke"}
-        baseline = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []},
+        baseline = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24", "203.0.113.0/24"], "ipv6": []},
                     "revision-id": "baseline-revision"}
         client.acl = {"acl": baseline}
         canonical = json.dumps(baseline, sort_keys=True, separators=(",", ":")).encode()
@@ -96,6 +118,9 @@ class ACLSyncTests(unittest.TestCase):
                 plan = acl_sync_plan(**options)
                 self.assertEqual(plan["diff"]["removals"], {"ipv4": [], "ipv6": []})
                 self.assertIn("198.51.100.0/24", plan["provider_payload"]["addresses"]["ipv4"])
+                self.assertEqual(len(plan["provider_payload"]["addresses"]["ipv4"]), 902)
+                self.assertEqual(plan["openai_snapshot"]["cidr_count"], 900)
+                self.assertEqual(plan["openai_snapshot"]["additional_addresses"], 14944)
                 self.assertEqual(acl_sync_plan(**options, execute=True)["status"], "submitted")
                 fetch.assert_not_called()
             self.assertEqual(client.writes, [plan["provider_payload"]])
