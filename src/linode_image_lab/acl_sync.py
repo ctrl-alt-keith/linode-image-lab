@@ -55,7 +55,7 @@ def raise_acl_update_failure(plan: dict[str, Any], exc: Exception) -> None:
     if status is not None:
         plan["update_failure"]["http_status"] = status
     if plan["status"] == "rejected":
-        raise ACLSyncError("acl-sync update was rejected by the provider", plan) from exc
+        raise ACLSyncError("acl-sync update received an HTTP rejection", plan) from exc
     raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
 
 

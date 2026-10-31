@@ -8,6 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
+from http.client import HTTPException
 from typing import Any, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -537,7 +538,7 @@ class LinodeClient:
                     provider_errors=self._provider_errors(exc),
                     failure_kind="http_response",
                 ) from exc
-            except OSError as exc:
+            except (OSError, HTTPException) as exc:
                 if attempt < attempts:
                     delay, delay_source = self._deterministic_retry_delay(attempt)
                     self._record_retry_event(

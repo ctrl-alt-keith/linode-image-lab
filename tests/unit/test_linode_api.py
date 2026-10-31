@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from http.client import BadStatusLine
 from io import BytesIO
 import unittest
 from unittest.mock import call, patch
@@ -1347,6 +1348,28 @@ class LinodeClientTests(unittest.TestCase):
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
         self.assertEqual(str(raised.exception), "Linode API request failed after 3 attempts")
         self.assertEqual(raised.exception.failure_kind, "transport")
+
+    def test_acl_put_records_bounded_failure_kind_without_retry_or_body(self) -> None:
+        client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
+        payload = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []}}
+        for failure, kind, status in (
+            (self.http_error(400, "private", body={"errors": [{"reason": "token=private-value"}]}),
+             "http_response", 400),
+            (BadStatusLine("token=private-value"), "transport", None),
+        ):
+            with self.subTest(kind=kind), patch("linode_image_lab.linode_api.urlopen", side_effect=failure) as opened:
+                with self.assertRaises(LinodeApiError) as raised:
+                    client.update_lke_control_plane_acl(12345, payload)
+                self.assertEqual(opened.call_count, 1)
+                self.assertEqual(opened.call_args.args[0].get_method(), "PUT")
+                self.assertEqual((raised.exception.failure_kind, raised.exception.status_code), (kind, status))
+                self.assertNotIn("private-value", str(raised.exception))
+        with patch("linode_image_lab.linode_api.urlopen", return_value=FakeHTTPResponse(b"{token=private-value")) as opened:
+            with self.assertRaises(LinodeApiError) as raised:
+                client.update_lke_control_plane_acl(12345, payload)
+            self.assertEqual(opened.call_count, 1)
+            self.assertEqual(raised.exception.failure_kind, "response_parse")
+            self.assertNotIn("private-value", str(raised.exception))
 
 
 if __name__ == "__main__":
