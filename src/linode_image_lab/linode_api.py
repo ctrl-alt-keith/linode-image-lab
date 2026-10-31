@@ -32,9 +32,11 @@ class LinodeApiError(ValueError):
         *,
         status_code: int | None = None,
         provider_errors: list[dict[str, Any]] | None = None,
+        failure_kind: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.failure_kind = failure_kind
         self.provider_errors = []
         for item in provider_errors or []:
             redacted = redact(item)
@@ -511,9 +513,11 @@ class LinodeClient:
                 break
             except HTTPError as exc:
                 if exc.code == 401:
-                    raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API") from exc
+                    raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API",
+                                           status_code=401, failure_kind="http_response") from exc
                 if exc.code == 403:
-                    raise LinodeTokenError("LINODE_TOKEN lacks required Linode permissions or scopes") from exc
+                    raise LinodeTokenError("LINODE_TOKEN lacks required Linode permissions or scopes",
+                                           status_code=403, failure_kind="http_response") from exc
                 if self._should_retry_status(exc.code, attempt=attempt, attempts=attempts):
                     delay, delay_source = self._retry_delay(exc, attempt)
                     self._record_retry_event(
@@ -531,6 +535,7 @@ class LinodeClient:
                     self._failure_message(f"Linode API request failed with status {exc.code}", attempt),
                     status_code=exc.code,
                     provider_errors=self._provider_errors(exc),
+                    failure_kind="http_response",
                 ) from exc
             except OSError as exc:
                 if attempt < attempts:
@@ -546,17 +551,18 @@ class LinodeClient:
                     )
                     self._sleep_before_retry(delay)
                     continue
-                raise LinodeApiError(self._failure_message("Linode API request failed", attempt)) from exc
+                raise LinodeApiError(self._failure_message("Linode API request failed", attempt),
+                                     failure_kind="transport") from exc
 
         if not response_body:
             return {} if allow_empty else {}
         try:
             parsed = json.loads(response_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LinodeApiError("Linode API returned a malformed response") from exc
+            raise LinodeApiError("Linode API returned a malformed response", failure_kind="response_parse") from exc
         if isinstance(parsed, dict):
             return parsed
-        raise LinodeApiError("Linode API returned an unexpected response")
+        raise LinodeApiError("Linode API returned an unexpected response", failure_kind="response_parse")
 
     def consume_retry_events(self) -> list[dict[str, Any]]:
         events = [dict(event) for event in self.retry_events]

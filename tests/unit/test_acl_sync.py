@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import tempfile
@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from linode_image_lab.acl_sync import ACLSyncError, acl_sync_plan, routine_outcome
 from linode_image_lab.cli import build_parser, main, resolve_config_defaults
-from linode_image_lab.linode_api import LinodeClient
+from linode_image_lab.linode_api import LinodeApiError, LinodeClient
 from linode_image_lab.openai_snapshot import load_openai_snapshot
 
 
@@ -345,3 +345,67 @@ class ACLSyncTests(unittest.TestCase):
             run_sync(client, execute=True)
         self.assertEqual(caught.exception.manifest["status"], "uncertain")
         self.assertEqual(routine_outcome(caught.exception.manifest, execute=True, failed=True)["status"], "uncertain")
+
+    def test_update_diagnostics_are_fixed_and_do_not_echo_provider_data(self) -> None:
+        private = "private-cidr=198.51.100.0/24 token=verysecretvalue"
+        cases = (
+            (400, "http_response", "rejected", "validation_rejected"),
+            (401, "http_response", "rejected", "authentication_rejected"),
+            (403, "http_response", "rejected", "permission_rejected"),
+            (422, "http_response", "rejected", "validation_rejected"),
+            (429, "http_response", "uncertain", "http_response_uncertain"),
+            (500, "http_response", "uncertain", "http_response_uncertain"),
+            (None, "transport", "uncertain", "transport_uncertain"),
+            (None, "response_parse", "uncertain", "response_parse_uncertain"),
+        )
+        for status, kind, expected_status, category in cases:
+            with self.subTest(status=status, kind=kind):
+                client = FakeACLClient()
+
+                def fail(cluster_id: int, acl: dict) -> dict:
+                    raise LinodeApiError(private, status_code=status,
+                                         failure_kind=kind, provider_errors=[{"reason": private}])
+
+                client.update_lke_control_plane_acl = fail  # type: ignore[method-assign]
+                with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+                    with self.assertRaises(ACLSyncError) as caught:
+                        run_sync(client, execute=True)
+                manifest = caught.exception.manifest
+                self.assertEqual(manifest["status"], expected_status)
+                expected = {"phase": "control_plane_acl_put", "category": category}
+                if status is not None:
+                    expected["http_status"] = status
+                self.assertEqual(manifest["update_failure"], expected)
+                outcome = routine_outcome(manifest, execute=True, failed=True)
+                self.assertEqual(outcome["status"], expected_status)
+                public_text = json.dumps(outcome) + str(caught.exception)
+                self.assertNotIn(private, public_text)
+                self.assertNotIn("verysecretvalue", public_text)
+                self.assertNotIn("198.51.100.0/24", public_text)
+
+    def test_cli_summary_keeps_rejected_put_body_private(self) -> None:
+        client = FakeACLClient()
+        private = "198.51.100.0/24 token=verysecretvalue"
+
+        def reject(cluster_id: int, acl: dict) -> dict:
+            raise LinodeApiError(private, status_code=400, failure_kind="http_response",
+                                 provider_errors=[{"reason": private}])
+
+        client.update_lke_control_plane_acl = reject  # type: ignore[method-assign]
+        output, errors = StringIO(), StringIO()
+        with patch("linode_image_lab.acl_sync.LinodeClient.from_env", return_value=client), \
+             patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()), \
+             redirect_stdout(output), redirect_stderr(errors):
+            code = main([
+                "acl-sync", "--cluster-id", "12345", "--cluster-label", "example-lke",
+                "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+                "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
+                "--output-format", "summary", "--execute", "--allow-enable",
+            ])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["update_failure"], {
+            "phase": "control_plane_acl_put", "category": "validation_rejected", "http_status": 400,
+        })
+        self.assertNotIn(private, output.getvalue() + errors.getvalue())
+        self.assertNotIn("198.51.100.0/24", output.getvalue() + errors.getvalue())
+        self.assertNotIn("verysecretvalue", output.getvalue() + errors.getvalue())

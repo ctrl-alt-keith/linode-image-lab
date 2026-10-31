@@ -10,7 +10,7 @@ from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
-from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
+from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
 from .openai_snapshot import CREATION_TIME, SHA256, SOURCE_URL, load_openai_snapshot
 from .trusted_registry import (
@@ -28,6 +28,35 @@ class ACLSyncError(ValueError):
 
 
 BASELINE_CLUSTER_ID = 664899
+DEFINITE_HTTP_REJECTIONS = {
+    400: "validation_rejected", 401: "authentication_rejected", 403: "permission_rejected",
+    404: "target_not_found", 409: "conflict_rejected", 412: "conflict_rejected",
+    413: "payload_rejected", 422: "validation_rejected",
+}
+
+
+def raise_acl_update_failure(plan: dict[str, Any], exc: Exception) -> None:
+    status = exc.status_code if isinstance(exc, LinodeApiError) else None
+    status = status if type(status) is int and 100 <= status <= 599 else None
+    kind = exc.failure_kind if isinstance(exc, LinodeApiError) else None
+    category = "unknown"
+    if kind == "http_response" and status in DEFINITE_HTTP_REJECTIONS:
+        category = DEFINITE_HTTP_REJECTIONS[status]
+        plan["status"] = "rejected"
+    else:
+        plan["status"] = "uncertain"
+        if kind == "transport":
+            category = "transport_uncertain"
+        elif kind == "response_parse":
+            category = "response_parse_uncertain"
+        elif kind == "http_response":
+            category = "http_response_uncertain"
+    plan["update_failure"] = {"phase": "control_plane_acl_put", "category": category}
+    if status is not None:
+        plan["update_failure"]["http_status"] = status
+    if plan["status"] == "rejected":
+        raise ACLSyncError("acl-sync update was rejected by the provider", plan) from exc
+    raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
 
 
 def acl_state(acl: dict[str, Any]) -> dict[str, Any]:
@@ -253,9 +282,8 @@ def baseline_acl_plan(
         raise ACLSyncError("baseline ACL pre-write verification failed", plan) from exc
     try:
         client.update_lke_control_plane_acl(cluster_id, intended)
-    except ValueError as exc:
-        plan["status"] = "uncertain"
-        raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
+    except Exception as exc:
+        raise_acl_update_failure(plan, exc)
     plan["status"] = "submitted"
     plan["applied"] = True
     plan["safety"]["mutates"] = True
@@ -353,9 +381,8 @@ def acl_sync_plan(
 
     try:
         sync_client.update_lke_control_plane_acl(cluster_id, plan["provider_payload"])
-    except ValueError as exc:
-        plan["status"] = "uncertain"
-        raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
+    except Exception as exc:
+        raise_acl_update_failure(plan, exc)
     plan["status"] = "submitted"
     plan["applied"] = True
     plan["safety"]["mutates"] = True
@@ -377,7 +404,7 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
     outcome: dict[str, Any] = {
         "outcome_version": 1,
         "command": "acl-sync",
-        "status": "failed" if failed and (manifest is None or manifest["status"] != "uncertain") else (
+        "status": "failed" if failed and (manifest is None or manifest["status"] not in {"uncertain", "rejected"}) else (
             manifest["status"] if manifest is not None else "failed"
         ),
         "execution_mode": "execute" if execute else "dry-run",
@@ -396,4 +423,6 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
             for action in ("additions", "removals")
         }
         outcome["enforcement_verified"] = False
+        if "update_failure" in manifest:
+            outcome["update_failure"] = manifest["update_failure"]
     return outcome

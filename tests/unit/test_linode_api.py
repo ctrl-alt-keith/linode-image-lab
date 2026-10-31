@@ -277,6 +277,7 @@ class LinodeClientTests(unittest.TestCase):
                 client.get_instance(123)
 
         self.assertEqual(str(raised.exception), "Linode API returned a malformed response")
+        self.assertEqual(raised.exception.failure_kind, "response_parse")
         self.assertNotIn("private/789", str(raised.exception))
         self.assertNotIsInstance(raised.exception.__cause__, LinodeApiError)
 
@@ -1034,6 +1035,7 @@ class LinodeClientTests(unittest.TestCase):
 
         self.assertEqual(len(requests), 1)
         self.assertEqual(str(raised.exception), "Linode API request failed with status 400")
+        self.assertEqual(raised.exception.failure_kind, "http_response")
         self.assertEqual(
             raised.exception.provider_error_details(),
             {
@@ -1304,6 +1306,7 @@ class LinodeClientTests(unittest.TestCase):
                 client.preflight()
 
         self.assertEqual(str(raised.exception), "LINODE_TOKEN is invalid, expired, or rejected by the Linode API")
+        self.assertEqual((raised.exception.status_code, raised.exception.failure_kind), (401, "http_response"))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
     def test_forbidden_auth_failure_names_missing_permissions_or_scopes(self) -> None:
@@ -1317,6 +1320,7 @@ class LinodeClientTests(unittest.TestCase):
                 client.preflight()
 
         self.assertEqual(str(raised.exception), "LINODE_TOKEN lacks required Linode permissions or scopes")
+        self.assertEqual((raised.exception.status_code, raised.exception.failure_kind), (403, "http_response"))
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
 
     def test_non_auth_failure_maps_to_api_error_without_token_value(self) -> None:
@@ -1342,6 +1346,7 @@ class LinodeClientTests(unittest.TestCase):
 
         self.assertNotIn(TOKEN_VALUE, str(raised.exception))
         self.assertEqual(str(raised.exception), "Linode API request failed after 3 attempts")
+        self.assertEqual(raised.exception.failure_kind, "transport")
 
 
 if __name__ == "__main__":

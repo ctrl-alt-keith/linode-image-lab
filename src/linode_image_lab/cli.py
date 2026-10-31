@@ -1020,7 +1020,10 @@ def main(argv: list[str] | None = None) -> int:
             serialized = serialize_manifest(acl_routine_outcome(exc.manifest, execute=args.execute, failed=True))
             write_manifest_file(args, serialized)
             sys.stdout.write(serialized)
-            sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
+            if exc.manifest is not None and exc.manifest["status"] == "rejected":
+                sys.stderr.write("acl-sync update rejected; review fixed diagnostics before changing the plan\n")
+            else:
+                sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
             return 1
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)

@@ -11,6 +11,8 @@ linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summ
 
 First enablement of a disabled ACL also requires `--allow-enable`. The writer rejects invalid or stale registry data and rechecks the registry, cluster, and ACL before PUT. Keep it as the sole ACL writer; the API has no compare-and-swap. A submitted PUT does not prove enforcement. Read the provider ACL before retrying an uncertain result.
 
+PUT failures expose only a fixed phase, category, and bounded HTTP status. A recognized 4xx rejection is `rejected`; transport, server, and malformed-response failures remain `uncertain` and require a provider GET before retry.
+
 ## Codex Cloud snapshot
 
 For the selected cluster only, set `openai_snapshot_cluster_id` to its `cluster_id` in protected `[acl-sync]` config. The bundled [egress snapshot](https://openai.com/chatgpt-agents.json) is pinned by digest, creation time, and counts. The normal writer unions it with registry entries, refuses removals, and limits the result to 2,048 entries. The ACL has no port selector; the provider does not document its entry limit.
