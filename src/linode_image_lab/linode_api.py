@@ -535,7 +535,7 @@ class LinodeClient:
                 raise LinodeApiError(
                     self._failure_message(f"Linode API request failed with status {exc.code}", attempt),
                     status_code=exc.code,
-                    provider_errors=self._provider_errors(exc),
+                    provider_errors=self._provider_errors(exc, token=self.token),
                     failure_kind="http_response",
                 ) from exc
             except (OSError, HTTPException) as exc:
@@ -665,29 +665,30 @@ class LinodeClient:
             time.sleep(delay)
 
     @classmethod
-    def _provider_errors(cls, exc: HTTPError) -> list[dict[str, Any]]:
+    def _provider_errors(cls, exc: HTTPError, *, token: str | None = None) -> list[dict[str, Any]]:
         payload = cls._http_error_payload(exc)
         if not isinstance(payload, dict):
             return []
 
         raw_errors = payload.get("errors")
         if isinstance(raw_errors, list):
-            errors = [cls._provider_error_entry(item) for item in raw_errors if isinstance(item, dict)]
+            errors = [cls._provider_error_entry(item, token=token) for item in raw_errors[:16] if isinstance(item, dict)]
             return [error for error in errors if error]
 
         for key in ("reason", "message", "error"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                return [{"reason": redact(value.strip())}]
+                text = value.strip().replace(token, "[REDACTED]") if token else value.strip()
+                return [{"reason": redact(text)}]
         return []
 
     @staticmethod
     def _http_error_payload(exc: HTTPError) -> object | None:
         try:
-            body = exc.read()
-        except (OSError, ValueError):
+            body = exc.read(65537)
+        except (OSError, HTTPException, TypeError, ValueError):
             return None
-        if not body:
+        if not body or len(body) > 65536:
             return None
         try:
             text = body.decode("utf-8")
@@ -699,12 +700,13 @@ class LinodeClient:
             return None
 
     @staticmethod
-    def _provider_error_entry(item: dict[str, Any]) -> dict[str, Any]:
+    def _provider_error_entry(item: dict[str, Any], *, token: str | None = None) -> dict[str, Any]:
         entry: dict[str, Any] = {}
         for key in ("reason", "message", "field"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
-                entry[key] = redact(value.strip())
+                text = value.strip().replace(token, "[REDACTED]") if token else value.strip()
+                entry[key] = redact(text)
         return entry
 
     def _record_retry_event(

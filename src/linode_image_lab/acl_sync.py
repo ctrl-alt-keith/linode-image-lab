@@ -35,7 +35,7 @@ DEFINITE_HTTP_REJECTIONS = {
 }
 
 
-def raise_acl_update_failure(plan: dict[str, Any], exc: Exception) -> None:
+def raise_acl_update_failure(plan: dict[str, Any], exc: Exception, private_file: int | None = None) -> None:
     status = exc.status_code if isinstance(exc, LinodeApiError) else None
     status = status if type(status) is int and 100 <= status <= 599 else None
     kind = exc.failure_kind if isinstance(exc, LinodeApiError) else None
@@ -54,9 +54,73 @@ def raise_acl_update_failure(plan: dict[str, Any], exc: Exception) -> None:
     plan["update_failure"] = {"phase": "control_plane_acl_put", "category": category}
     if status is not None:
         plan["update_failure"]["http_status"] = status
+    finish_private_error_file(private_file, plan, exc)
     if plan["status"] == "rejected":
         raise ACLSyncError("acl-sync update received an HTTP rejection", plan) from exc
     raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
+
+
+def open_private_error_file(path: str) -> int:
+    candidate = Path(path)
+    parent = candidate.parent
+    try:
+        if not candidate.is_absolute() or parent.resolve(strict=True) != parent:
+            raise OSError
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise OSError
+        descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            created = os.fstat(descriptor)
+            if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid():
+                raise OSError
+        except OSError:
+            os.close(descriptor)
+            raise
+        return descriptor
+    except (OSError, RuntimeError) as exc:
+        raise ACLSyncError("private provider error file must be fresh under an owned mode-0700 directory") from exc
+
+
+def write_private_error_file(descriptor: int, plan: dict[str, Any], exc: Exception | None) -> None:
+    try:
+        record: dict[str, Any] = {
+            "schema_version": 1,
+            "status": plan["status"],
+            "update_failure": plan.get("update_failure"),
+        }
+        if isinstance(exc, LinodeApiError):
+            errors = []
+            for item in exc.provider_errors[:8]:
+                entry = {}
+                for key in ("field", "reason", "message"):
+                    value = item.get(key)
+                    if isinstance(value, str):
+                        entry[key] = value[:1024]
+                if entry:
+                    errors.append(entry)
+            record["provider_errors"] = errors
+        encoded = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(encoded) > 16384:
+            raise OSError("private provider error record exceeds limit")
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def finish_private_error_file(descriptor: int | None, plan: dict[str, Any], exc: Exception | None) -> None:
+    if descriptor is None:
+        return
+    try:
+        write_private_error_file(descriptor, plan, exc)
+    except (OSError, ValueError):
+        plan["private_error_artifact"] = "failed"
+    else:
+        plan["private_error_artifact"] = "written"
 
 
 def acl_state(acl: dict[str, Any]) -> dict[str, Any]:
@@ -213,6 +277,7 @@ def baseline_acl_plan(
     *, cluster_id: int, cluster_label: str, baseline_acl_file: str,
     baseline_acl_sha256: str, baseline_rollback: bool, execute: bool,
     client: ACLClientProtocol, plan_reporter: Callable[[str], object] | None,
+    provider_error_file: str | None,
 ) -> dict[str, Any]:
     if cluster_id != BASELINE_CLUSTER_ID:
         raise ACLSyncError("protected baseline mode is limited to its reviewed LKE cluster")
@@ -280,11 +345,13 @@ def baseline_acl_plan(
             raise ACLSyncError("LKE control-plane ACL changed after planning")
     except (ACLSyncError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError("baseline ACL pre-write verification failed", plan) from exc
+    private_file = open_private_error_file(provider_error_file) if provider_error_file is not None else None
     try:
         client.update_lke_control_plane_acl(cluster_id, intended)
     except Exception as exc:
-        raise_acl_update_failure(plan, exc)
+        raise_acl_update_failure(plan, exc, private_file)
     plan["status"] = "submitted"
+    finish_private_error_file(private_file, plan, None)
     plan["applied"] = True
     plan["safety"]["mutates"] = True
     return plan
@@ -302,6 +369,7 @@ def acl_sync_plan(
     baseline_acl_file: str | None = None,
     baseline_acl_sha256: str | None = None,
     baseline_rollback: bool = False,
+    provider_error_file: str | None = None,
     allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
@@ -322,6 +390,8 @@ def acl_sync_plan(
         or openai_snapshot_cluster_id != BASELINE_CLUSTER_ID
     ):
         raise ACLSyncError("protected baseline mode requires its file, digest, and exact OpenAI snapshot target")
+    if provider_error_file is not None and not execute:
+        raise ACLSyncError("private provider error file requires --execute")
     sync_client = client or LinodeClient.from_env(
         command="acl-sync", option="--execute" if execute else "dry-run",
     )
@@ -331,6 +401,7 @@ def acl_sync_plan(
             baseline_acl_file=baseline_acl_file, baseline_acl_sha256=baseline_acl_sha256,
             baseline_rollback=baseline_rollback, execute=execute,
             client=sync_client, plan_reporter=plan_reporter,
+            provider_error_file=provider_error_file,
         )
     try:
         registry = validate_registry(fetch_registry_from_object_storage(
@@ -379,11 +450,13 @@ def acl_sync_plan(
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError("acl-sync pre-write verification failed", plan) from exc
 
+    private_file = open_private_error_file(provider_error_file) if provider_error_file is not None else None
     try:
         sync_client.update_lke_control_plane_acl(cluster_id, plan["provider_payload"])
     except Exception as exc:
-        raise_acl_update_failure(plan, exc)
+        raise_acl_update_failure(plan, exc, private_file)
     plan["status"] = "submitted"
+    finish_private_error_file(private_file, plan, None)
     plan["applied"] = True
     plan["safety"]["mutates"] = True
     return plan
@@ -425,4 +498,6 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
         outcome["enforcement_verified"] = False
         if "update_failure" in manifest:
             outcome["update_failure"] = manifest["update_failure"]
+        if "private_error_artifact" in manifest:
+            outcome["private_error_artifact"] = manifest["private_error_artifact"]
     return outcome

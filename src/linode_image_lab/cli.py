@@ -387,6 +387,8 @@ def build_parser() -> argparse.ArgumentParser:
     acl_sync.add_argument("--baseline-acl-sha256", help="SHA-256 of the baseline's canonical ACL state.")
     acl_sync.add_argument("--baseline-rollback", action="store_true", default=None,
                           help="Restore the exact protected baseline after snapshot addition.")
+    acl_sync.add_argument("--provider-error-file",
+                          help="Fresh private JSON path for this execute attempt's provider error details.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -826,6 +828,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             baseline_acl_file=args.baseline_acl_file,
             baseline_acl_sha256=args.baseline_acl_sha256,
             baseline_rollback=bool(args.baseline_rollback),
+            provider_error_file=args.provider_error_file,
             registry_endpoint_url=args.registry_endpoint_url,
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,

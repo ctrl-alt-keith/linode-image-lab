@@ -386,6 +386,9 @@ class ACLSyncTests(unittest.TestCase):
     def test_cli_summary_keeps_rejected_put_body_private(self) -> None:
         client = FakeACLClient()
         private = "198.51.100.0/24 token=verysecretvalue"
+        private_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(private_dir.cleanup)
+        private_file = Path(private_dir.name) / "provider-error.json"
 
         def reject(cluster_id: int, acl: dict) -> dict:
             raise LinodeApiError(private, status_code=400, failure_kind="http_response",
@@ -401,11 +404,71 @@ class ACLSyncTests(unittest.TestCase):
                 "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
                 "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
                 "--output-format", "summary", "--execute", "--allow-enable",
+                "--provider-error-file", str(private_file),
             ])
         self.assertEqual(code, 1)
+        self.assertTrue(private_file.is_file())
         self.assertEqual(json.loads(output.getvalue())["update_failure"], {
             "phase": "control_plane_acl_put", "category": "validation_rejected", "http_status": 400,
         })
         self.assertNotIn(private, output.getvalue() + errors.getvalue())
         self.assertNotIn("198.51.100.0/24", output.getvalue() + errors.getvalue())
         self.assertNotIn("verysecretvalue", output.getvalue() + errors.getvalue())
+
+    def test_opt_in_provider_error_file_is_private_and_excludes_request_data(self) -> None:
+        client = FakeACLClient()
+
+        def reject(cluster_id: int, acl: dict) -> dict:
+            raise LinodeApiError("Linode API request failed with status 400", status_code=400,
+                                 failure_kind="http_response", provider_errors=[{
+                                     "field": "acl.addresses.ipv4", "reason": "CIDR 198.51.100.0/24 token=private-value",
+                                     "headers": "Bearer private-value", "request_payload": "private-payload",
+                                 }])
+
+        client.update_lke_control_plane_acl = reject  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "provider-error.json"
+            with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+                with self.assertRaises(ACLSyncError) as caught:
+                    acl_sync_plan(
+                        cluster_id=12345, cluster_label="example-lke",
+                        registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                        registry_bucket="example-bucket", registry_object_key="registry.json",
+                        client=client, environ={}, execute=True, allow_enable=True,
+                        provider_error_file=str(target),
+                    )
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            record = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "rejected")
+            self.assertEqual(record["provider_errors"][0]["field"], "acl.addresses.ipv4")
+            self.assertIn("198.51.100.0/24", record["provider_errors"][0]["reason"])
+            self.assertNotIn("private-value", target.read_text(encoding="utf-8"))
+            self.assertNotIn("private-payload", target.read_text(encoding="utf-8"))
+            summary = json.dumps(routine_outcome(caught.exception.manifest, execute=True, failed=True))
+            self.assertEqual(caught.exception.manifest["private_error_artifact"], "written")
+            self.assertNotIn(str(target), summary)
+            self.assertNotIn("198.51.100.0/24", summary)
+
+    def test_private_error_destination_rejects_symlinks_and_unsafe_parent(self) -> None:
+        client = FakeACLClient()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing.json"
+            existing.write_text("retain", encoding="utf-8")
+            link = root / "link.json"
+            link.symlink_to(existing)
+            linked_dir = root / "linked-dir"
+            linked_dir.symlink_to(root, target_is_directory=True)
+            options = dict(cluster_id=12345, cluster_label="example-lke",
+                           registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                           registry_bucket="example-bucket", registry_object_key="registry.json",
+                           client=client, environ={}, execute=True, allow_enable=True)
+            with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+                for path in (existing, link, linked_dir / "new.json"):
+                    with self.assertRaisesRegex(ACLSyncError, "private provider error file"):
+                        acl_sync_plan(**options, provider_error_file=str(path))
+                root.chmod(0o755)
+                with self.assertRaisesRegex(ACLSyncError, "private provider error file"):
+                    acl_sync_plan(**options, provider_error_file=str(root / "new.json"))
+            self.assertEqual(existing.read_text(encoding="utf-8"), "retain")
+            self.assertEqual(client.writes, [])

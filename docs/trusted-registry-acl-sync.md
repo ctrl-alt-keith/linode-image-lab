@@ -13,6 +13,8 @@ First enablement of a disabled ACL also requires `--allow-enable`. The writer re
 
 PUT failures expose only a fixed phase, category, and bounded HTTP status. A recognized 4xx rejection is `rejected`; transport, server, and malformed-response failures remain `uncertain` and require a provider GET before retry.
 
+To retain a rejected rule, pass `--provider-error-file /protected/private-dir/new-error.json` on an execute attempt. The parent directory must be owned and mode 0700; the file is created exclusively at mode 0600. It contains bounded provider `field`, `reason`, and `message` values. Inspect it privately; never print, upload, or commit it. Routine summary output contains only fixed diagnostics.
+
 ## Codex Cloud snapshot
 
 For the selected cluster only, set `openai_snapshot_cluster_id` to its `cluster_id` in protected `[acl-sync]` config. The bundled [egress snapshot](https://openai.com/chatgpt-agents.json) is pinned by digest, creation time, and counts. The normal writer unions it with registry entries, refuses removals, and limits the result to 2,048 entries. The ACL has no port selector; the provider does not document its entry limit.

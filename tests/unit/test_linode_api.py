@@ -1353,7 +1353,10 @@ class LinodeClientTests(unittest.TestCase):
         client = LinodeClient(token=TOKEN_VALUE, api_base_url=API_BASE_URL)
         payload = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []}}
         for failure, kind, status in (
-            (self.http_error(400, "private", body={"errors": [{"reason": "token=private-value"}]}),
+            (self.http_error(400, "private", body={"errors": [{
+                "reason": f"CIDR 198.51.100.0/24 {TOKEN_VALUE}", "field": "acl.addresses.ipv4",
+                "headers": f"Bearer {TOKEN_VALUE}", "request_payload": "private-payload",
+            }]}),
              "http_response", 400),
             (BadStatusLine("token=private-value"), "transport", None),
         ):
@@ -1364,6 +1367,10 @@ class LinodeClientTests(unittest.TestCase):
                 self.assertEqual(opened.call_args.args[0].get_method(), "PUT")
                 self.assertEqual((raised.exception.failure_kind, raised.exception.status_code), (kind, status))
                 self.assertNotIn("private-value", str(raised.exception))
+                if kind == "http_response":
+                    self.assertEqual(set(raised.exception.provider_errors[0]), {"field", "reason"})
+                    self.assertIn("198.51.100.0/24", raised.exception.provider_errors[0]["reason"])
+                    self.assertNotIn(TOKEN_VALUE, str(raised.exception.provider_errors))
         with patch("linode_image_lab.linode_api.urlopen", return_value=FakeHTTPResponse(b"{token=private-value")) as opened:
             with self.assertRaises(LinodeApiError) as raised:
                 client.update_lke_control_plane_acl(12345, payload)
