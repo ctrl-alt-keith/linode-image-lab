@@ -1,8 +1,8 @@
 # Trusted registry to LKE control-plane ACL
 
-`acl-sync` writes only the specified cluster's control-plane ACL. The cluster ID and label must match. It reads the [Trusted Network Registry v1](https://github.com/ctrl-alt-keith/trusted-network-registry/blob/main/docs/registry-schema.md) from Object Storage. It does not change worker or Service firewalls.
+`acl-sync` writes only the specified cluster's control-plane ACL. The cluster ID and label must match. Registry mode reads the [Trusted Network Registry v1](https://github.com/ctrl-alt-keith/trusted-network-registry/blob/main/docs/registry-schema.md) from Object Storage. It does not change worker or Service firewalls.
 
-The default is a dry-run. Use `--output-format summary` for CIDR-free logs; keep the full manifest in protected operator evidence. Set `LINODE_TOKEN`, `LINODE_OBJ_ACCESS_KEY`, and `LINODE_OBJ_SECRET_KEY` for both modes.
+The default is a dry-run. Use `--output-format summary` for CIDR-free logs; keep the full manifest in protected operator evidence. Set `LINODE_TOKEN` for both modes; registry mode also needs `LINODE_OBJ_ACCESS_KEY` and `LINODE_OBJ_SECRET_KEY`.
 
 ```sh
 linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summary
@@ -13,6 +13,8 @@ First enablement of a disabled ACL also requires `--allow-enable`. The writer re
 
 ## Codex Cloud snapshot
 
-For the selected cluster only, set `openai_snapshot_cluster_id` to its `cluster_id` in protected `[acl-sync]` config. The bundled [egress snapshot](https://openai.com/chatgpt-agents.json) is pinned by digest, creation time, and counts. The writer unions its exact-coverage CIDRs with registry entries, refuses to remove an existing ACL entry, and limits the combined list to 2,048. The ACL has no port selector. The provider does not document its entry limit.
+For the selected cluster only, set `openai_snapshot_cluster_id` to its `cluster_id` in protected `[acl-sync]` config. The bundled [egress snapshot](https://openai.com/chatgpt-agents.json) is pinned by digest, creation time, and counts. The normal writer unions it with registry entries, refuses removals, and limits the result to 2,048 entries. The ACL has no port selector; the provider does not document its entry limit.
 
-Before execute, save a protected provider ACL baseline and review the full dry-run diff for the exact target, fresh registry, zero removals, and complete payload. After execute, GET and compare the full ACL. To roll back, remove `openai_snapshot_cluster_id`, review the removal-only dry-run against the baseline, execute through this writer, and GET again.
+For cluster 664899, where the live entries differ from the registry, use `baseline_acl_file` and `baseline_acl_sha256` instead. Save an owner-only mode-0600 JSON file with `schema_version: 1`, exact `cluster_id`, `cluster_label`, and the provider `acl` object. The digest is `acl_digest(normalize_acl({"acl": document["acl"]}))`; pin its hex value in protected config. This mode reads no registry and adds only the snapshot to that exact enabled baseline. It aborts if the live ACL differs. Review the dry-run payload and zero removals before `--execute`, then GET the ACL and compare it with the payload.
+
+For rollback, keep the same baseline and snapshot inputs, set `baseline_rollback = true`, and review the dry-run. It proceeds only if the live ACL exactly matches the expected snapshot expansion. After `--execute`, GET and compare it with the original baseline addresses. Neither operation verifies enforcement automatically.

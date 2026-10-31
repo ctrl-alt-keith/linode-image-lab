@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from contextlib import redirect_stdout
 from io import StringIO
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from linode_image_lab.acl_sync import ACLSyncError, acl_sync_plan, routine_outcome
-from linode_image_lab.cli import main
+from linode_image_lab.cli import build_parser, main, resolve_config_defaults
 from linode_image_lab.linode_api import LinodeClient
 from linode_image_lab.openai_snapshot import load_openai_snapshot
 
@@ -64,6 +65,69 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
 
 
 class ACLSyncTests(unittest.TestCase):
+    def test_baseline_cli_does_not_require_registry_source(self) -> None:
+        args = build_parser().parse_args([
+            "acl-sync", "--cluster-id", "664899", "--cluster-label", "example-lke",
+            "--openai-snapshot-cluster-id", "664899", "--baseline-acl-file", "/protected/acl.json",
+            "--baseline-acl-sha256", "a" * 64,
+        ])
+        resolve_config_defaults(args)
+        self.assertIsNone(args.registry_endpoint_url)
+
+    def test_protected_baseline_addition_and_exact_rollback(self) -> None:
+        client = FakeACLClient()
+        client.cluster = {"id": 664899, "label": "example-lke"}
+        baseline = {"enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []},
+                    "revision-id": "baseline-revision"}
+        client.acl = {"acl": baseline}
+        canonical = json.dumps({"enabled": True, "addresses": baseline["addresses"]},
+                               sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(canonical).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps({"schema_version": 1, "cluster_id": 664899,
+                                        "cluster_label": "example-lke", "acl": baseline}), encoding="utf-8")
+            path.chmod(0o600)
+            options = dict(cluster_id=664899, cluster_label="example-lke",
+                           registry_endpoint_url="", registry_bucket="", registry_object_key="",
+                           openai_snapshot_cluster_id=664899, baseline_acl_file=str(path),
+                           baseline_acl_sha256=digest, client=client, environ={})
+            with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage") as fetch:
+                plan = acl_sync_plan(**options)
+                self.assertEqual(plan["diff"]["removals"], {"ipv4": [], "ipv6": []})
+                self.assertIn("198.51.100.0/24", plan["provider_payload"]["addresses"]["ipv4"])
+                self.assertEqual(acl_sync_plan(**options, execute=True)["status"], "submitted")
+                fetch.assert_not_called()
+            self.assertEqual(client.writes, [plan["provider_payload"]])
+            client.acl = {"acl": {**plan["provider_payload"], "revision-id": "after-addition"}}
+            rollback = acl_sync_plan(**options, baseline_rollback=True)
+            self.assertEqual(rollback["provider_payload"], {"enabled": True, "addresses": baseline["addresses"]})
+            self.assertEqual(rollback["diff"]["additions"], {"ipv4": [], "ipv6": []})
+            self.assertEqual(acl_sync_plan(**options, baseline_rollback=True, execute=True)["status"], "submitted")
+            self.assertEqual(client.writes[-1], rollback["provider_payload"])
+
+            changed = {**baseline, "addresses": {"ipv4": ["203.0.113.0/24"], "ipv6": []}}
+            path.write_text(json.dumps({"schema_version": 1, "cluster_id": 664899,
+                                        "cluster_label": "example-lke", "acl": changed}), encoding="utf-8")
+            with self.assertRaisesRegex(ACLSyncError, "digest does not match"):
+                acl_sync_plan(**options, execute=True)
+            path.write_text(json.dumps({"schema_version": 1, "cluster_id": 664899,
+                                        "cluster_label": "example-lke", "acl": baseline}), encoding="utf-8")
+            with patch.object(client, "get_lke_control_plane_acl",
+                              side_effect=[{"acl": baseline}, {"acl": changed}]):
+                with self.assertRaisesRegex(ACLSyncError, "pre-write verification failed"):
+                    acl_sync_plan(**options, execute=True)
+            self.assertEqual(len(client.writes), 2)
+
+            client.cluster["id"] = 12345
+            with self.assertRaisesRegex(ACLSyncError, "reviewed LKE cluster"):
+                acl_sync_plan(**{**options, "cluster_id": 12345, "openai_snapshot_cluster_id": 12345})
+            client.cluster["id"] = 664899
+            client.acl = {"acl": {**baseline, "addresses": {"ipv4": ["203.0.113.0/24"], "ipv6": []}}}
+            with self.assertRaisesRegex(ACLSyncError, "differs from the protected baseline"):
+                acl_sync_plan(**options, execute=True)
+            self.assertEqual(len(client.writes), 2)
+
     def test_pinned_openai_snapshot_is_exact_and_cluster_scoped(self) -> None:
         cidrs = load_openai_snapshot()
         self.assertEqual(len(cidrs), 1304)
@@ -169,6 +233,8 @@ class ACLSyncTests(unittest.TestCase):
             path.write_text(
                 'schema_version = 1\n[acl-sync]\ncluster_id = 12345\ncluster_label = "example-lke"\n'
                 'openai_snapshot_cluster_id = 12345\n'
+                'baseline_acl_file = "/protected/acl-baseline.json"\n'
+                'baseline_acl_sha256 = "' + 'a' * 64 + '"\n'
                 'registry_endpoint_url = "https://us-east-1.linodeobjects.com"\n'
                 'registry_bucket = "example-bucket"\nregistry_object_key = "registry.json"\n',
                 encoding="utf-8",
@@ -181,6 +247,7 @@ class ACLSyncTests(unittest.TestCase):
         self.assertEqual(payload["target_command"], "acl-sync")
         self.assertEqual(payload["effective_defaults"]["cluster_id"], 12345)
         self.assertEqual(payload["effective_defaults"]["openai_snapshot_cluster_id"], 12345)
+        self.assertEqual(payload["effective_defaults"]["baseline_acl_sha256"], 'a' * 64)
 
     def test_dry_run_is_nonmutating_and_summary_omits_identity_and_cidrs(self) -> None:
         client = FakeACLClient()

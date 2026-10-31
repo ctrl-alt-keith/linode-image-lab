@@ -383,6 +383,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--openai-snapshot-cluster-id", type=positive_firewall_id,
         help="Add the pinned Codex Cloud snapshot only when this exact cluster id matches --cluster-id.",
     )
+    acl_sync.add_argument("--baseline-acl-file", help="Protected exact ACL baseline JSON for the reviewed target.")
+    acl_sync.add_argument("--baseline-acl-sha256", help="SHA-256 of the baseline's canonical ACL state.")
+    acl_sync.add_argument("--baseline-rollback", action="store_true", default=None,
+                          help="Restore the exact protected baseline after snapshot addition.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -516,20 +520,21 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
 
     if args.command == "acl-sync":
         for field in (
-            "cluster_id", "cluster_label", "openai_snapshot_cluster_id", "registry_endpoint_url",
+            "cluster_id", "cluster_label", "openai_snapshot_cluster_id", "baseline_acl_file",
+            "baseline_acl_sha256", "baseline_rollback", "registry_endpoint_url",
             "registry_bucket", "registry_object_key", "registry_region",
         ):
             if getattr(args, field) is None and field in defaults:
                 setattr(args, field, defaults[field])
-        missing = [
-            option for field, option in (
-                ("cluster_id", "--cluster-id"),
-                ("cluster_label", "--cluster-label"),
+        baseline_mode = any((args.baseline_acl_file, args.baseline_acl_sha256, args.baseline_rollback))
+        required = [("cluster_id", "--cluster-id"), ("cluster_label", "--cluster-label")]
+        if not baseline_mode:
+            required.extend((
                 ("registry_endpoint_url", "--registry-endpoint-url"),
                 ("registry_bucket", "--registry-bucket"),
                 ("registry_object_key", "--registry-object-key"),
-            ) if getattr(args, field) is None
-        ]
+            ))
+        missing = [option for field, option in required if getattr(args, field) is None]
         if missing:
             raise ValueError(f"acl-sync requires {', '.join(missing)}")
         args.cluster_id = normalize_firewall_id(args.cluster_id, "--cluster-id")
@@ -818,6 +823,9 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             cluster_id=args.cluster_id,
             cluster_label=args.cluster_label,
             openai_snapshot_cluster_id=args.openai_snapshot_cluster_id,
+            baseline_acl_file=args.baseline_acl_file,
+            baseline_acl_sha256=args.baseline_acl_sha256,
+            baseline_rollback=bool(args.baseline_rollback),
             registry_endpoint_url=args.registry_endpoint_url,
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,

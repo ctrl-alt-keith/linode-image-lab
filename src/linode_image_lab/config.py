@@ -97,6 +97,9 @@ TABLE_FIELDS = {
         "cluster_id",
         "cluster_label",
         "openai_snapshot_cluster_id",
+        "baseline_acl_file",
+        "baseline_acl_sha256",
+        "baseline_rollback",
         "registry_endpoint_url",
         "registry_bucket",
         "registry_object_key",
@@ -163,6 +166,9 @@ COMMAND_DEFAULT_FIELDS = {
         "cluster_id",
         "cluster_label",
         "openai_snapshot_cluster_id",
+        "baseline_acl_file",
+        "baseline_acl_sha256",
+        "baseline_rollback",
         "registry_endpoint_url",
         "registry_bucket",
         "registry_object_key",
@@ -197,6 +203,9 @@ CLI_SOURCE_LABELS = {
     "expected_firewall_label": "cli --expected-firewall-label",
     "cluster_id": "cli --cluster-id",
     "openai_snapshot_cluster_id": "cli --openai-snapshot-cluster-id",
+    "baseline_acl_file": "cli --baseline-acl-file",
+    "baseline_acl_sha256": "cli --baseline-acl-sha256",
+    "baseline_rollback": "cli --baseline-rollback",
     "cluster_label": "cli --cluster-label",
     "service_namespace": "cli --service-namespace",
     "service_name": "cli --service-name",
@@ -362,9 +371,9 @@ def validate_value(table: str, key: str, value: Any) -> None:
             raise ConfigError(f"config [{table}].{key} must be a non-empty list of strings")
         return
 
-    if key == "replication_enabled":
+    if key in {"replication_enabled", "baseline_rollback"}:
         if not isinstance(value, bool):
-            raise ConfigError(f"config [{table}].replication_enabled must be a boolean")
+            raise ConfigError(f"config [{table}].{key} must be a boolean")
         return
 
     if key == "firewall_id":
@@ -410,7 +419,7 @@ def normalize_config(config: dict[str, Any], *, base_dir: Path) -> dict[str, Any
                 normalize_authorized_key(item, f"config [{key}].authorized_keys[{index}]")
                 for index, item in enumerate(table["authorized_keys"])
             ]
-        for path_key in ("authorized_keys_file", "user_data_file", "region_policy_file"):
+        for path_key in ("authorized_keys_file", "user_data_file", "region_policy_file", "baseline_acl_file"):
             if path_key in table:
                 table[path_key] = str(resolve_config_path(table[path_key], base_dir=base_dir))
         if "image_project_tag" in table:
