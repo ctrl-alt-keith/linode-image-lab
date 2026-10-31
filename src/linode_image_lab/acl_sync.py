@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .openai_snapshot import CREATION_TIME, SHA256, SOURCE_URL, load_openai_snapshot
 from .trusted_registry import (
     TrustedRegistry,
     TrustedRegistryError,
@@ -62,18 +63,26 @@ def expected_cluster(client: ACLClientProtocol, cluster_id: int, cluster_label: 
 
 
 def build_acl_sync_manifest(
-    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any]
+    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any],
+    openai_cidrs: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     if registry.cidr_count == 0:
         raise ACLSyncError("trusted registry contains no active CIDRs")
     intended = {
         "enabled": True,
         "addresses": {
-            "ipv4": list(registry.ipv4_cidrs),
+            "ipv4": sorted(set(registry.ipv4_cidrs) | set(openai_cidrs)),
             "ipv6": list(registry.ipv6_cidrs),
         },
     }
+    if openai_cidrs and sum(len(values) for values in intended["addresses"].values()) > 2048:
+        raise ACLSyncError("OpenAI snapshot plan exceeds the local ACL entry safety bound")
     current_addresses = current_acl["addresses"]
+    if openai_cidrs and any(
+        set(current_addresses[family]) - set(intended["addresses"][family])
+        for family in ("ipv4", "ipv6")
+    ):
+        raise ACLSyncError("OpenAI snapshot plan would remove existing ACL entries")
     diff = {
         action: {
             family: sorted(values)
@@ -109,6 +118,12 @@ def build_acl_sync_manifest(
             "ipv4_count": len(registry.ipv4_cidrs),
             "ipv6_count": len(registry.ipv6_cidrs),
         },
+        "openai_snapshot": {
+            "source_url": SOURCE_URL,
+            "creation_time": CREATION_TIME,
+            "sha256": SHA256,
+            "cidr_count": len(openai_cidrs),
+        } if openai_cidrs else None,
         "planned_action": planned_action,
         "diff": diff,
         "provider_payload": intended,
@@ -129,6 +144,7 @@ def acl_sync_plan(
     registry_bucket: str,
     registry_object_key: str,
     registry_region: str | None = None,
+    openai_snapshot_cluster_id: int | None = None,
     allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
@@ -137,6 +153,10 @@ def acl_sync_plan(
 ) -> dict[str, Any]:
     if type(cluster_id) is not int or cluster_id <= 0 or not isinstance(cluster_label, str) or not cluster_label.strip():
         raise ACLSyncError("positive --cluster-id and non-empty --cluster-label are required")
+    if openai_snapshot_cluster_id is not None and (
+        type(openai_snapshot_cluster_id) is not int or openai_snapshot_cluster_id != cluster_id
+    ):
+        raise ACLSyncError("OpenAI snapshot target must match the exact LKE cluster id")
     sync_client = client or LinodeClient.from_env(
         command="acl-sync", option="--execute" if execute else "dry-run",
     )
@@ -145,9 +165,13 @@ def acl_sync_plan(
             endpoint_url=registry_endpoint_url, bucket=registry_bucket,
             object_key=registry_object_key, region=registry_region, environ=environ,
         ))
+        openai_cidrs = load_openai_snapshot() if openai_snapshot_cluster_id is not None else ()
         expected_cluster(sync_client, cluster_id, cluster_label)
         original_acl = normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id))
-        plan = build_acl_sync_manifest(cluster_id=cluster_id, registry=registry, current_acl=original_acl)
+        plan = build_acl_sync_manifest(
+            cluster_id=cluster_id, registry=registry, current_acl=original_acl,
+            openai_cidrs=openai_cidrs,
+        )
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError(str(exc)) from exc
     if not execute:
@@ -173,6 +197,8 @@ def acl_sync_plan(
         ))
         if refreshed_registry != registry:
             raise ACLSyncError("trusted registry changed after planning; rerun acl-sync")
+        if openai_cidrs and load_openai_snapshot() != openai_cidrs:
+            raise ACLSyncError("OpenAI snapshot changed after planning; rerun acl-sync")
         expected_cluster(sync_client, cluster_id, cluster_label)
         if normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id)) != original_acl:
             raise ACLSyncError("LKE control-plane ACL changed after planning; rerun acl-sync")
@@ -217,6 +243,9 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
         outcome["registry_generated_at"] = manifest["registry"]["generated_at"]
         outcome["registry_valid_until"] = manifest["registry"]["valid_until"]
         outcome["cidr_count"] = manifest["registry"]["cidr_count"]
+        if manifest["openai_snapshot"] is not None:
+            outcome["openai_snapshot_creation_time"] = manifest["openai_snapshot"]["creation_time"]
+            outcome["openai_snapshot_cidr_count"] = manifest["openai_snapshot"]["cidr_count"]
         outcome["change_counts"] = {
             action: {family: len(manifest["diff"][action][family]) for family in ("ipv4", "ipv6")}
             for action in ("additions", "removals")

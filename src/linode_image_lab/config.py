@@ -96,6 +96,7 @@ TABLE_FIELDS = {
     "acl-sync": {
         "cluster_id",
         "cluster_label",
+        "openai_snapshot_cluster_id",
         "registry_endpoint_url",
         "registry_bucket",
         "registry_object_key",
@@ -161,6 +162,7 @@ COMMAND_DEFAULT_FIELDS = {
     "acl-sync": (
         "cluster_id",
         "cluster_label",
+        "openai_snapshot_cluster_id",
         "registry_endpoint_url",
         "registry_bucket",
         "registry_object_key",
@@ -194,6 +196,7 @@ CLI_SOURCE_LABELS = {
     "managed_label": "cli --managed-label",
     "expected_firewall_label": "cli --expected-firewall-label",
     "cluster_id": "cli --cluster-id",
+    "openai_snapshot_cluster_id": "cli --openai-snapshot-cluster-id",
     "cluster_label": "cli --cluster-label",
     "service_namespace": "cli --service-namespace",
     "service_name": "cli --service-name",
@@ -368,7 +371,7 @@ def validate_value(table: str, key: str, value: Any) -> None:
         normalize_firewall_id(value, f"config [{table}].firewall_id")
         return
 
-    if key == "cluster_id":
+    if key in {"cluster_id", "openai_snapshot_cluster_id"}:
         normalize_firewall_id(value, f"config [{table}].cluster_id")
         return
 

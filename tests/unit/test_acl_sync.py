@@ -12,6 +12,7 @@ from unittest.mock import patch
 from linode_image_lab.acl_sync import ACLSyncError, acl_sync_plan, routine_outcome
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeClient
+from linode_image_lab.openai_snapshot import load_openai_snapshot
 
 
 def registry_payload(*, cidrs: tuple[str, ...] = ("198.51.100.0/24",)) -> dict:
@@ -63,6 +64,57 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
 
 
 class ACLSyncTests(unittest.TestCase):
+    def test_pinned_openai_snapshot_is_exact_and_cluster_scoped(self) -> None:
+        cidrs = load_openai_snapshot()
+        self.assertEqual(len(cidrs), 1304)
+        client = FakeACLClient()
+        client.acl["acl"] = {
+            "enabled": True, "addresses": {"ipv4": ["198.51.100.0/24"], "ipv6": []},
+        }
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            plan = acl_sync_plan(
+                cluster_id=12345, cluster_label="example-lke",
+                registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                registry_bucket="example-bucket", registry_object_key="registry.json",
+                openai_snapshot_cluster_id=12345, client=client, environ={},
+            )
+            with self.assertRaisesRegex(ACLSyncError, "exact LKE cluster id"):
+                acl_sync_plan(
+                    cluster_id=12345, cluster_label="example-lke",
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket", registry_object_key="registry.json",
+                    openai_snapshot_cluster_id=67890, client=client, environ={},
+                )
+        self.assertEqual(len(plan["diff"]["additions"]["ipv4"]), 1304)
+        self.assertEqual(plan["diff"]["removals"], {"ipv4": [], "ipv6": []})
+        self.assertIn("198.51.100.0/24", plan["provider_payload"]["addresses"]["ipv4"])
+        self.assertEqual(client.writes, [])
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            submitted = acl_sync_plan(
+                cluster_id=12345, cluster_label="example-lke",
+                registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                registry_bucket="example-bucket", registry_object_key="registry.json",
+                openai_snapshot_cluster_id=12345, client=client, environ={}, execute=True,
+            )
+        self.assertEqual(submitted["status"], "submitted")
+        self.assertEqual(client.writes, [plan["provider_payload"]])
+
+    def test_openai_snapshot_refuses_to_remove_existing_acl_entry(self) -> None:
+        client = FakeACLClient()
+        client.acl["acl"] = {
+            "enabled": True,
+            "addresses": {"ipv4": ["198.51.100.0/24", "203.0.113.0/24"], "ipv6": []},
+        }
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
+            with self.assertRaisesRegex(ACLSyncError, "remove existing ACL entries"):
+                acl_sync_plan(
+                    cluster_id=12345, cluster_label="example-lke",
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket", registry_object_key="registry.json",
+                    openai_snapshot_cluster_id=12345, client=client, environ={}, execute=True,
+                )
+        self.assertEqual(client.writes, [])
+
     def test_first_enable_requires_explicit_flag_and_separate_action(self) -> None:
         client = FakeACLClient()
         with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage", return_value=registry_payload()):
@@ -116,6 +168,7 @@ class ACLSyncTests(unittest.TestCase):
             path = Path(directory) / "acl.toml"
             path.write_text(
                 'schema_version = 1\n[acl-sync]\ncluster_id = 12345\ncluster_label = "example-lke"\n'
+                'openai_snapshot_cluster_id = 12345\n'
                 'registry_endpoint_url = "https://us-east-1.linodeobjects.com"\n'
                 'registry_bucket = "example-bucket"\nregistry_object_key = "registry.json"\n',
                 encoding="utf-8",
@@ -127,6 +180,7 @@ class ACLSyncTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["target_command"], "acl-sync")
         self.assertEqual(payload["effective_defaults"]["cluster_id"], 12345)
+        self.assertEqual(payload["effective_defaults"]["openai_snapshot_cluster_id"], 12345)
 
     def test_dry_run_is_nonmutating_and_summary_omits_identity_and_cidrs(self) -> None:
         client = FakeACLClient()
