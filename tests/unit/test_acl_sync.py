@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import os
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -10,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from linode_image_lab.acl_sync import ACLSyncError, acl_sync_plan, routine_outcome
+from linode_image_lab.acl_sync import ACLSyncError, acl_sync_plan, open_private_error_file, routine_outcome
 from linode_image_lab.cli import build_parser, main, resolve_config_defaults
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
 from linode_image_lab.openai_snapshot import load_openai_snapshot
@@ -472,3 +473,25 @@ class ACLSyncTests(unittest.TestCase):
                     acl_sync_plan(**options, provider_error_file=str(root / "new.json"))
             self.assertEqual(existing.read_text(encoding="utf-8"), "retain")
             self.assertEqual(client.writes, [])
+
+    def test_private_error_file_rejects_parent_swap_before_directory_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protected = root / "protected"
+            protected.mkdir(mode=0o700)
+            replacement = root / "replacement"
+            replacement.mkdir(mode=0o755)
+            displaced = root / "displaced"
+            real_open = os.open
+
+            def swap_parent(path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+                if path == protected:
+                    protected.rename(displaced)
+                    replacement.rename(protected)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with patch("linode_image_lab.acl_sync.os.open", side_effect=swap_parent):
+                with self.assertRaisesRegex(ACLSyncError, "private provider error file"):
+                    open_private_error_file(str(protected / "error.json"))
+            self.assertFalse((protected / "error.json").exists())
+            self.assertFalse((displaced / "error.json").exists())

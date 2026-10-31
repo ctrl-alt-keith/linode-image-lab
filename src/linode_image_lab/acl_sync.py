@@ -63,24 +63,35 @@ def raise_acl_update_failure(plan: dict[str, Any], exc: Exception, private_file:
 def open_private_error_file(path: str) -> int:
     candidate = Path(path)
     parent = candidate.parent
+    parent_fd: int | None = None
+    descriptor: int | None = None
     try:
         if not candidate.is_absolute() or parent.resolve(strict=True) != parent:
             raise OSError
         info = parent.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
             raise OSError
-        descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            os.fchmod(descriptor, 0o600)
-            created = os.fstat(descriptor)
-            if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid():
-                raise OSError
-        except OSError:
-            os.close(descriptor)
-            raise
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened_parent = os.fstat(parent_fd)
+        if (opened_parent.st_dev, opened_parent.st_ino) != (info.st_dev, info.st_ino) or (
+            not stat.S_ISDIR(opened_parent.st_mode) or opened_parent.st_uid != os.getuid()
+            or stat.S_IMODE(opened_parent.st_mode) != 0o700
+        ):
+            raise OSError
+        descriptor = os.open(candidate.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent_fd)
+        os.fchmod(descriptor, 0o600)
+        created = os.fstat(descriptor)
+        if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid() or stat.S_IMODE(created.st_mode) != 0o600:
+            raise OSError
         return descriptor
     except (OSError, RuntimeError) as exc:
+        if descriptor is not None:
+            os.close(descriptor)
         raise ACLSyncError("private provider error file must be fresh under an owned mode-0700 directory") from exc
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
 
 
 def write_private_error_file(descriptor: int, plan: dict[str, Any], exc: Exception | None) -> None:
