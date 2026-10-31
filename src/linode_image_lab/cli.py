@@ -379,6 +379,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_manifest_file_arg(acl_sync)
     add_cluster_args(acl_sync)
+    acl_sync.add_argument(
+        "--openai-snapshot-cluster-id", type=positive_firewall_id,
+        help="Add the pinned Codex Cloud snapshot only when this exact cluster id matches --cluster-id.",
+    )
+    acl_sync.add_argument("--baseline-acl-file", help="Protected exact ACL baseline JSON for the reviewed target.")
+    acl_sync.add_argument("--baseline-acl-sha256", help="SHA-256 of the baseline's canonical ACL state.")
+    acl_sync.add_argument("--baseline-rollback", action="store_true", default=None,
+                          help="Restore the exact protected baseline after snapshot addition.")
+    acl_sync.add_argument("--provider-error-file",
+                          help="Fresh private JSON path for this execute attempt's provider error details.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -512,23 +522,28 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
 
     if args.command == "acl-sync":
         for field in (
-            "cluster_id", "cluster_label", "registry_endpoint_url",
+            "cluster_id", "cluster_label", "openai_snapshot_cluster_id", "baseline_acl_file",
+            "baseline_acl_sha256", "baseline_rollback", "registry_endpoint_url",
             "registry_bucket", "registry_object_key", "registry_region",
         ):
             if getattr(args, field) is None and field in defaults:
                 setattr(args, field, defaults[field])
-        missing = [
-            option for field, option in (
-                ("cluster_id", "--cluster-id"),
-                ("cluster_label", "--cluster-label"),
+        baseline_mode = any((args.baseline_acl_file, args.baseline_acl_sha256, args.baseline_rollback))
+        required = [("cluster_id", "--cluster-id"), ("cluster_label", "--cluster-label")]
+        if not baseline_mode:
+            required.extend((
                 ("registry_endpoint_url", "--registry-endpoint-url"),
                 ("registry_bucket", "--registry-bucket"),
                 ("registry_object_key", "--registry-object-key"),
-            ) if getattr(args, field) is None
-        ]
+            ))
+        missing = [option for field, option in required if getattr(args, field) is None]
         if missing:
             raise ValueError(f"acl-sync requires {', '.join(missing)}")
         args.cluster_id = normalize_firewall_id(args.cluster_id, "--cluster-id")
+        if args.openai_snapshot_cluster_id is not None:
+            args.openai_snapshot_cluster_id = normalize_firewall_id(
+                args.openai_snapshot_cluster_id, "--openai-snapshot-cluster-id"
+            )
 
     if args.command == "service-acl-sync":
         fields = ("service_namespace", "service_name", "service_uid", "registry_endpoint_url",
@@ -809,6 +824,11 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         return acl_sync_plan(
             cluster_id=args.cluster_id,
             cluster_label=args.cluster_label,
+            openai_snapshot_cluster_id=args.openai_snapshot_cluster_id,
+            baseline_acl_file=args.baseline_acl_file,
+            baseline_acl_sha256=args.baseline_acl_sha256,
+            baseline_rollback=bool(args.baseline_rollback),
+            provider_error_file=args.provider_error_file,
             registry_endpoint_url=args.registry_endpoint_url,
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,
@@ -1003,7 +1023,10 @@ def main(argv: list[str] | None = None) -> int:
             serialized = serialize_manifest(acl_routine_outcome(exc.manifest, execute=args.execute, failed=True))
             write_manifest_file(args, serialized)
             sys.stdout.write(serialized)
-            sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
+            if exc.manifest is not None and exc.manifest["status"] == "rejected":
+                sys.stderr.write("acl-sync update rejected; review fixed diagnostics before changing the plan\n")
+            else:
+                sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
             return 1
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)

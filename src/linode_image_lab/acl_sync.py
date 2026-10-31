@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import stat
 from ipaddress import ip_network
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
-from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
+from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .openai_acl_candidate import ADDITIONAL_ADDRESSES, CANDIDATE_SHA256, load_openai_acl_candidate
+from .openai_snapshot import CREATION_TIME, SHA256, SOURCE_URL, load_openai_snapshot
 from .trusted_registry import (
     TrustedRegistry,
     TrustedRegistryError,
@@ -19,6 +26,150 @@ class ACLSyncError(ValueError):
     def __init__(self, message: str, manifest: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.manifest = manifest
+
+
+BASELINE_CLUSTER_ID = 664899
+OBSERVED_LKE_ACL_ENTRY_LIMIT = 1000
+DEFINITE_HTTP_REJECTIONS = {
+    400: "validation_rejected", 401: "authentication_rejected", 403: "permission_rejected",
+    404: "target_not_found", 409: "conflict_rejected", 412: "conflict_rejected",
+    413: "payload_rejected", 422: "validation_rejected",
+}
+
+
+def raise_acl_update_failure(plan: dict[str, Any], exc: Exception, private_file: int | None = None) -> None:
+    status = exc.status_code if isinstance(exc, LinodeApiError) else None
+    status = status if type(status) is int and 100 <= status <= 599 else None
+    kind = exc.failure_kind if isinstance(exc, LinodeApiError) else None
+    category = "unknown"
+    if kind == "http_response" and status in DEFINITE_HTTP_REJECTIONS:
+        category = DEFINITE_HTTP_REJECTIONS[status]
+        plan["status"] = "rejected"
+    else:
+        plan["status"] = "uncertain"
+        if kind == "transport":
+            category = "transport_uncertain"
+        elif kind == "response_parse":
+            category = "response_parse_uncertain"
+        elif kind == "http_response":
+            category = "http_response_uncertain"
+    plan["update_failure"] = {"phase": "control_plane_acl_put", "category": category}
+    if status is not None:
+        plan["update_failure"]["http_status"] = status
+    finish_private_error_file(private_file, plan, exc)
+    if plan["status"] == "rejected":
+        raise ACLSyncError("acl-sync update received an HTTP rejection", plan) from exc
+    raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
+
+
+def open_private_error_file(path: str) -> int:
+    candidate = Path(path)
+    parent = candidate.parent
+    parent_fd: int | None = None
+    descriptor: int | None = None
+    try:
+        if not candidate.is_absolute() or parent.resolve(strict=True) != parent:
+            raise OSError
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise OSError
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened_parent = os.fstat(parent_fd)
+        if (opened_parent.st_dev, opened_parent.st_ino) != (info.st_dev, info.st_ino) or (
+            not stat.S_ISDIR(opened_parent.st_mode) or opened_parent.st_uid != os.getuid()
+            or stat.S_IMODE(opened_parent.st_mode) != 0o700
+        ):
+            raise OSError
+        descriptor = os.open(candidate.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent_fd)
+        os.fchmod(descriptor, 0o600)
+        created = os.fstat(descriptor)
+        if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid() or stat.S_IMODE(created.st_mode) != 0o600:
+            raise OSError
+        return descriptor
+    except (OSError, RuntimeError) as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise ACLSyncError("private provider error file must be fresh under an owned mode-0700 directory") from exc
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def write_private_error_file(descriptor: int, plan: dict[str, Any], exc: Exception | None) -> None:
+    try:
+        record: dict[str, Any] = {
+            "schema_version": 1,
+            "status": plan["status"],
+            "update_failure": plan.get("update_failure"),
+        }
+        if isinstance(exc, LinodeApiError):
+            errors = []
+            for item in exc.provider_errors[:8]:
+                entry = {}
+                for key in ("field", "reason", "message"):
+                    value = item.get(key)
+                    if isinstance(value, str):
+                        entry[key] = value[:1024]
+                if entry:
+                    errors.append(entry)
+            record["provider_errors"] = errors
+        encoded = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(encoded) > 16384:
+            raise OSError("private provider error record exceeds limit")
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def finish_private_error_file(descriptor: int | None, plan: dict[str, Any], exc: Exception | None) -> None:
+    if descriptor is None:
+        return
+    try:
+        write_private_error_file(descriptor, plan, exc)
+    except (OSError, ValueError):
+        plan["private_error_artifact"] = "failed"
+    else:
+        plan["private_error_artifact"] = "written"
+
+
+def acl_state(acl: dict[str, Any]) -> dict[str, Any]:
+    return {"enabled": acl["enabled"], "addresses": acl["addresses"]}
+
+
+def acl_digest(acl: dict[str, Any]) -> str:
+    encoded = json.dumps(acl, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def load_protected_baseline(path: str, digest: str, cluster_id: int, cluster_label: str) -> dict[str, Any]:
+    if not isinstance(path, str) or not Path(path).is_absolute() or not isinstance(digest, str) or len(digest) != 64:
+        raise ACLSyncError("protected ACL baseline path or digest is invalid")
+    try:
+        int(digest, 16)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536:
+                raise ACLSyncError("protected ACL baseline file must be owned, regular, and mode 0600")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                raw = handle.read(65537)
+        finally:
+            os.close(descriptor)
+        document = json.loads(raw)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise ACLSyncError("protected ACL baseline could not be read or parsed") from exc
+    if not isinstance(document, dict) or set(document) != {"schema_version", "cluster_id", "cluster_label", "acl"}:
+        raise ACLSyncError("protected ACL baseline schema is invalid")
+    if document["schema_version"] != 1 or document["cluster_id"] != cluster_id or document["cluster_label"] != cluster_label:
+        raise ACLSyncError("protected ACL baseline target identity does not match")
+    baseline = normalize_acl({"acl": document["acl"]})
+    if not baseline["enabled"] or acl_digest(baseline) != digest.lower():
+        raise ACLSyncError("protected ACL baseline state or digest does not match")
+    return baseline
 
 
 class ACLClientProtocol(LinodeClientProtocol, Protocol):
@@ -62,18 +213,26 @@ def expected_cluster(client: ACLClientProtocol, cluster_id: int, cluster_label: 
 
 
 def build_acl_sync_manifest(
-    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any]
+    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any],
+    openai_cidrs: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     if registry.cidr_count == 0:
         raise ACLSyncError("trusted registry contains no active CIDRs")
     intended = {
         "enabled": True,
         "addresses": {
-            "ipv4": list(registry.ipv4_cidrs),
+            "ipv4": sorted(set(registry.ipv4_cidrs) | set(openai_cidrs)),
             "ipv6": list(registry.ipv6_cidrs),
         },
     }
+    if openai_cidrs and sum(len(values) for values in intended["addresses"].values()) > 2048:
+        raise ACLSyncError("OpenAI snapshot plan exceeds the local ACL entry safety bound")
     current_addresses = current_acl["addresses"]
+    if openai_cidrs and any(
+        set(current_addresses[family]) - set(intended["addresses"][family])
+        for family in ("ipv4", "ipv6")
+    ):
+        raise ACLSyncError("OpenAI snapshot plan would remove existing ACL entries")
     diff = {
         action: {
             family: sorted(values)
@@ -109,6 +268,12 @@ def build_acl_sync_manifest(
             "ipv4_count": len(registry.ipv4_cidrs),
             "ipv6_count": len(registry.ipv6_cidrs),
         },
+        "openai_snapshot": {
+            "source_url": SOURCE_URL,
+            "creation_time": CREATION_TIME,
+            "sha256": SHA256,
+            "cidr_count": len(openai_cidrs),
+        } if openai_cidrs else None,
         "planned_action": planned_action,
         "diff": diff,
         "provider_payload": intended,
@@ -121,6 +286,92 @@ def build_acl_sync_manifest(
     }
 
 
+def baseline_acl_plan(
+    *, cluster_id: int, cluster_label: str, baseline_acl_file: str,
+    baseline_acl_sha256: str, baseline_rollback: bool, execute: bool,
+    client: ACLClientProtocol, plan_reporter: Callable[[str], object] | None,
+    provider_error_file: str | None,
+) -> dict[str, Any]:
+    if cluster_id != BASELINE_CLUSTER_ID:
+        raise ACLSyncError("protected baseline mode is limited to its reviewed LKE cluster")
+    try:
+        baseline = load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label)
+        openai_cidrs = load_openai_acl_candidate()
+        expected_cluster(client, cluster_id, cluster_label)
+        original_acl = normalize_acl(client.get_lke_control_plane_acl(cluster_id))
+    except (LinodePreflightError, ValueError) as exc:
+        raise ACLSyncError(str(exc)) from exc
+    expanded = {
+        "enabled": True,
+        "addresses": {
+            "ipv4": sorted(set(baseline["addresses"]["ipv4"]) | set(openai_cidrs)),
+            "ipv6": list(baseline["addresses"]["ipv6"]),
+        },
+    }
+    if sum(len(values) for values in expanded["addresses"].values()) > OBSERVED_LKE_ACL_ENTRY_LIMIT:
+        raise ACLSyncError("OpenAI candidate plan exceeds the observed LKE ACL entry limit")
+    if baseline_rollback:
+        if acl_state(original_acl) != expanded:
+            raise ACLSyncError("live ACL is not the exact approved snapshot expansion; rollback aborted")
+        intended = acl_state(baseline)
+    else:
+        if original_acl != baseline:
+            raise ACLSyncError("live ACL differs from the protected baseline; addition aborted")
+        intended = expanded
+    diff = {
+        action: {
+            family: sorted(set(addresses[family]) - set(other[family]))
+            for family in ("ipv4", "ipv6")
+        }
+        for action, addresses, other in (
+            ("additions", intended["addresses"], original_acl["addresses"]),
+            ("removals", original_acl["addresses"], intended["addresses"]),
+        )
+    }
+    if not baseline_rollback and any(diff["removals"].values()):
+        raise ACLSyncError("OpenAI snapshot plan would remove existing ACL entries")
+    plan = {
+        "schema_version": 1, "project": PROJECT, "command": "acl-sync", "status": "planned",
+        "valid": True, "dry_run": True, "execution_mode": "dry-run",
+        "target": {"cluster_id": cluster_id}, "registry": None,
+        "baseline": {"sha256": acl_digest(baseline), "rollback": baseline_rollback},
+        "openai_snapshot": {"source_url": SOURCE_URL, "creation_time": CREATION_TIME,
+                            "sha256": SHA256, "cidr_count": len(openai_cidrs),
+                            "derived_sha256": CANDIDATE_SHA256,
+                            "additional_addresses": ADDITIONAL_ADDRESSES},
+        "planned_action": "rollback_acl" if baseline_rollback else "replace_acl",
+        "diff": diff, "provider_payload": intended,
+        "safety": {"mutates": False, "requires_execute_for_mutation": True,
+                   "stale_registry_fallback": "disabled", "enforcement_verified": False},
+    }
+    if not execute:
+        return plan
+    if plan_reporter is not None:
+        plan_reporter(execute_plan_summary(plan))
+    plan["execution_mode"] = "execute"
+    plan["dry_run"] = False
+    try:
+        if load_protected_baseline(baseline_acl_file, baseline_acl_sha256, cluster_id, cluster_label) != baseline:
+            raise ACLSyncError("protected ACL baseline changed after planning")
+        if load_openai_acl_candidate() != openai_cidrs:
+            raise ACLSyncError("OpenAI ACL candidate changed after planning")
+        expected_cluster(client, cluster_id, cluster_label)
+        if normalize_acl(client.get_lke_control_plane_acl(cluster_id)) != original_acl:
+            raise ACLSyncError("LKE control-plane ACL changed after planning")
+    except (ACLSyncError, LinodePreflightError, ValueError) as exc:
+        raise ACLSyncError("baseline ACL pre-write verification failed", plan) from exc
+    private_file = open_private_error_file(provider_error_file) if provider_error_file is not None else None
+    try:
+        client.update_lke_control_plane_acl(cluster_id, intended)
+    except Exception as exc:
+        raise_acl_update_failure(plan, exc, private_file)
+    plan["status"] = "submitted"
+    finish_private_error_file(private_file, plan, None)
+    plan["applied"] = True
+    plan["safety"]["mutates"] = True
+    return plan
+
+
 def acl_sync_plan(
     *,
     cluster_id: int,
@@ -129,6 +380,11 @@ def acl_sync_plan(
     registry_bucket: str,
     registry_object_key: str,
     registry_region: str | None = None,
+    openai_snapshot_cluster_id: int | None = None,
+    baseline_acl_file: str | None = None,
+    baseline_acl_sha256: str | None = None,
+    baseline_rollback: bool = False,
+    provider_error_file: str | None = None,
     allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
@@ -137,17 +393,43 @@ def acl_sync_plan(
 ) -> dict[str, Any]:
     if type(cluster_id) is not int or cluster_id <= 0 or not isinstance(cluster_label, str) or not cluster_label.strip():
         raise ACLSyncError("positive --cluster-id and non-empty --cluster-label are required")
+    if openai_snapshot_cluster_id is not None and (
+        type(openai_snapshot_cluster_id) is not int or openai_snapshot_cluster_id != cluster_id
+    ):
+        raise ACLSyncError("OpenAI snapshot target must match the exact LKE cluster id")
+    baseline_mode = baseline_acl_file is not None or baseline_acl_sha256 is not None or baseline_rollback
+    if baseline_mode and cluster_id != BASELINE_CLUSTER_ID:
+        raise ACLSyncError("protected baseline mode is limited to its reviewed LKE cluster")
+    if baseline_mode and (
+        not baseline_acl_file or not baseline_acl_sha256
+        or openai_snapshot_cluster_id != BASELINE_CLUSTER_ID
+    ):
+        raise ACLSyncError("protected baseline mode requires its file, digest, and exact OpenAI snapshot target")
+    if provider_error_file is not None and not execute:
+        raise ACLSyncError("private provider error file requires --execute")
     sync_client = client or LinodeClient.from_env(
         command="acl-sync", option="--execute" if execute else "dry-run",
     )
+    if baseline_mode:
+        return baseline_acl_plan(
+            cluster_id=cluster_id, cluster_label=cluster_label,
+            baseline_acl_file=baseline_acl_file, baseline_acl_sha256=baseline_acl_sha256,
+            baseline_rollback=baseline_rollback, execute=execute,
+            client=sync_client, plan_reporter=plan_reporter,
+            provider_error_file=provider_error_file,
+        )
     try:
         registry = validate_registry(fetch_registry_from_object_storage(
             endpoint_url=registry_endpoint_url, bucket=registry_bucket,
             object_key=registry_object_key, region=registry_region, environ=environ,
         ))
+        openai_cidrs = load_openai_snapshot() if openai_snapshot_cluster_id is not None else ()
         expected_cluster(sync_client, cluster_id, cluster_label)
         original_acl = normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id))
-        plan = build_acl_sync_manifest(cluster_id=cluster_id, registry=registry, current_acl=original_acl)
+        plan = build_acl_sync_manifest(
+            cluster_id=cluster_id, registry=registry, current_acl=original_acl,
+            openai_cidrs=openai_cidrs,
+        )
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError(str(exc)) from exc
     if not execute:
@@ -173,6 +455,8 @@ def acl_sync_plan(
         ))
         if refreshed_registry != registry:
             raise ACLSyncError("trusted registry changed after planning; rerun acl-sync")
+        if openai_cidrs and load_openai_snapshot() != openai_cidrs:
+            raise ACLSyncError("OpenAI snapshot changed after planning; rerun acl-sync")
         expected_cluster(sync_client, cluster_id, cluster_label)
         if normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id)) != original_acl:
             raise ACLSyncError("LKE control-plane ACL changed after planning; rerun acl-sync")
@@ -181,12 +465,13 @@ def acl_sync_plan(
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise ACLSyncError("acl-sync pre-write verification failed", plan) from exc
 
+    private_file = open_private_error_file(provider_error_file) if provider_error_file is not None else None
     try:
         sync_client.update_lke_control_plane_acl(cluster_id, plan["provider_payload"])
-    except ValueError as exc:
-        plan["status"] = "uncertain"
-        raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from exc
+    except Exception as exc:
+        raise_acl_update_failure(plan, exc, private_file)
     plan["status"] = "submitted"
+    finish_private_error_file(private_file, plan, None)
     plan["applied"] = True
     plan["safety"]["mutates"] = True
     return plan
@@ -207,19 +492,30 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
     outcome: dict[str, Any] = {
         "outcome_version": 1,
         "command": "acl-sync",
-        "status": "failed" if failed and (manifest is None or manifest["status"] != "uncertain") else (
+        "status": "failed" if failed and (manifest is None or manifest["status"] not in {"uncertain", "rejected"}) else (
             manifest["status"] if manifest is not None else "failed"
         ),
         "execution_mode": "execute" if execute else "dry-run",
     }
     if manifest is not None:
         outcome["planned_action"] = manifest["planned_action"]
-        outcome["registry_generated_at"] = manifest["registry"]["generated_at"]
-        outcome["registry_valid_until"] = manifest["registry"]["valid_until"]
-        outcome["cidr_count"] = manifest["registry"]["cidr_count"]
+        if manifest["registry"] is not None:
+            outcome["registry_generated_at"] = manifest["registry"]["generated_at"]
+            outcome["registry_valid_until"] = manifest["registry"]["valid_until"]
+            outcome["cidr_count"] = manifest["registry"]["cidr_count"]
+        if manifest["openai_snapshot"] is not None:
+            outcome["openai_snapshot_creation_time"] = manifest["openai_snapshot"]["creation_time"]
+            outcome["openai_snapshot_cidr_count"] = manifest["openai_snapshot"]["cidr_count"]
+            if "derived_sha256" in manifest["openai_snapshot"]:
+                outcome["openai_acl_candidate_sha256"] = manifest["openai_snapshot"]["derived_sha256"]
+                outcome["openai_acl_additional_addresses"] = manifest["openai_snapshot"]["additional_addresses"]
         outcome["change_counts"] = {
             action: {family: len(manifest["diff"][action][family]) for family in ("ipv4", "ipv6")}
             for action in ("additions", "removals")
         }
         outcome["enforcement_verified"] = False
+        if "update_failure" in manifest:
+            outcome["update_failure"] = manifest["update_failure"]
+        if "private_error_artifact" in manifest:
+            outcome["private_error_artifact"] = manifest["private_error_artifact"]
     return outcome
