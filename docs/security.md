@@ -86,8 +86,7 @@ files for:
 - private network URLs,
 - restricted workplace metadata,
 - hidden Unicode bidirectional control characters,
-- non-public fixture placement,
-- legacy image workflow terminology.
+- non-public fixture placement.
 
 The scan is intentionally small and local. It is a guardrail, not a full data
 loss prevention system.
