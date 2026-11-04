@@ -8,7 +8,8 @@ import os
 import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
-from typing import Any, Protocol
+from http.client import HTTPException
+from typing import Any, Iterable, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request
@@ -32,14 +33,22 @@ class LinodeApiError(ValueError):
         *,
         status_code: int | None = None,
         provider_errors: list[dict[str, Any]] | None = None,
+        failure_kind: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.failure_kind = failure_kind
         self.provider_errors = []
-        for item in provider_errors or []:
+        for item in (provider_errors or [])[:16]:
             redacted = redact(item)
             if isinstance(redacted, dict):
-                self.provider_errors.append(redacted)
+                entry = {
+                    key: value[:1024]
+                    for key in ("field", "reason", "message")
+                    if isinstance(value := redacted.get(key), str)
+                }
+                if entry:
+                    self.provider_errors.append(entry)
 
     def provider_error_details(self) -> dict[str, Any] | None:
         if self.status_code is None and not self.provider_errors:
@@ -511,9 +520,11 @@ class LinodeClient:
                 break
             except HTTPError as exc:
                 if exc.code == 401:
-                    raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API") from exc
+                    raise LinodeTokenError("LINODE_TOKEN is invalid, expired, or rejected by the Linode API",
+                                           status_code=401, failure_kind="http_response") from exc
                 if exc.code == 403:
-                    raise LinodeTokenError("LINODE_TOKEN lacks required Linode permissions or scopes") from exc
+                    raise LinodeTokenError("LINODE_TOKEN lacks required Linode permissions or scopes",
+                                           status_code=403, failure_kind="http_response") from exc
                 if self._should_retry_status(exc.code, attempt=attempt, attempts=attempts):
                     delay, delay_source = self._retry_delay(exc, attempt)
                     self._record_retry_event(
@@ -530,9 +541,10 @@ class LinodeClient:
                 raise LinodeApiError(
                     self._failure_message(f"Linode API request failed with status {exc.code}", attempt),
                     status_code=exc.code,
-                    provider_errors=self._provider_errors(exc),
+                    provider_errors=self._provider_errors(exc, token=self.token),
+                    failure_kind="http_response",
                 ) from exc
-            except OSError as exc:
+            except (OSError, HTTPException) as exc:
                 if attempt < attempts:
                     delay, delay_source = self._deterministic_retry_delay(attempt)
                     self._record_retry_event(
@@ -546,17 +558,18 @@ class LinodeClient:
                     )
                     self._sleep_before_retry(delay)
                     continue
-                raise LinodeApiError(self._failure_message("Linode API request failed", attempt)) from exc
+                raise LinodeApiError(self._failure_message("Linode API request failed", attempt),
+                                     failure_kind="transport") from exc
 
         if not response_body:
             return {} if allow_empty else {}
         try:
             parsed = json.loads(response_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LinodeApiError("Linode API returned a malformed response") from exc
+            raise LinodeApiError("Linode API returned a malformed response", failure_kind="response_parse") from exc
         if isinstance(parsed, dict):
             return parsed
-        raise LinodeApiError("Linode API returned an unexpected response")
+        raise LinodeApiError("Linode API returned an unexpected response", failure_kind="response_parse")
 
     def consume_retry_events(self) -> list[dict[str, Any]]:
         events = [dict(event) for event in self.retry_events]
@@ -658,29 +671,30 @@ class LinodeClient:
             time.sleep(delay)
 
     @classmethod
-    def _provider_errors(cls, exc: HTTPError) -> list[dict[str, Any]]:
+    def _provider_errors(cls, exc: HTTPError, *, token: str | None = None) -> list[dict[str, Any]]:
         payload = cls._http_error_payload(exc)
         if not isinstance(payload, dict):
             return []
 
         raw_errors = payload.get("errors")
         if isinstance(raw_errors, list):
-            errors = [cls._provider_error_entry(item) for item in raw_errors if isinstance(item, dict)]
+            errors = [cls._provider_error_entry(item, token=token) for item in raw_errors[:16] if isinstance(item, dict)]
             return [error for error in errors if error]
 
         for key in ("reason", "message", "error"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                return [{"reason": redact(value.strip())}]
+                text = value.strip().replace(token, "[REDACTED]") if token else value.strip()
+                return [{"reason": redact(text)}]
         return []
 
     @staticmethod
     def _http_error_payload(exc: HTTPError) -> object | None:
         try:
-            body = exc.read()
-        except (OSError, ValueError):
+            body = exc.read(65537)
+        except (OSError, HTTPException, TypeError, ValueError):
             return None
-        if not body:
+        if not body or len(body) > 65536:
             return None
         try:
             text = body.decode("utf-8")
@@ -692,12 +706,13 @@ class LinodeClient:
             return None
 
     @staticmethod
-    def _provider_error_entry(item: dict[str, Any]) -> dict[str, Any]:
+    def _provider_error_entry(item: dict[str, Any], *, token: str | None = None) -> dict[str, Any]:
         entry: dict[str, Any] = {}
         for key in ("reason", "message", "field"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
-                entry[key] = redact(value.strip())
+                text = value.strip().replace(token, "[REDACTED]") if token else value.strip()
+                entry[key] = redact(text)
         return entry
 
     def _record_retry_event(

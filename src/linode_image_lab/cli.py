@@ -379,6 +379,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_manifest_file_arg(acl_sync)
     add_cluster_args(acl_sync)
+    acl_sync.add_argument("--provider-error-file",
+                          help="Fresh private JSON path for this execute attempt's provider error details.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -813,6 +815,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,
             registry_region=args.registry_region,
+            provider_error_file=args.provider_error_file,
             allow_enable=args.allow_enable,
             execute=args.execute,
             plan_reporter=sys.stderr.write,
@@ -1003,7 +1006,10 @@ def main(argv: list[str] | None = None) -> int:
             serialized = serialize_manifest(acl_routine_outcome(exc.manifest, execute=args.execute, failed=True))
             write_manifest_file(args, serialized)
             sys.stdout.write(serialized)
-            sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
+            if exc.manifest is not None and exc.manifest["status"] == "rejected":
+                sys.stderr.write("acl-sync update rejected; review fixed diagnostics before changing the plan\n")
+            else:
+                sys.stderr.write("acl-sync failed; inspect provider state before retry if update was attempted\n")
             return 1
         if exc.manifest is not None:
             emit_manifest(args, exc.manifest)
