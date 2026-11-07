@@ -1,21 +1,9 @@
 # AGENTS.md
 
-This repository uses the shared `ai-workflow-playbook` as the canonical source
-for general workflow rules. This file is the thin repo-local execution layer.
-Repo-local rules take precedence only for repo-specific behavior.
-
-## Startup And Interaction Mode
+## Start Here
 
 - Start with `ai-workflow-playbook/docs/start-here.md` before repository or
   software work.
-- Before acting, select the interaction mode from
-  `ai-workflow-playbook/docs/repo-readiness.md`: implementation, review/audit,
-  or orchestration/prompt-authoring.
-- Implementation agents make explicit repo changes and carry them through
-  validation, commit, push, and PR delivery.
-- Review/audit agents inspect and report findings without mutating the repo.
-- Orchestration/prompt-authoring agents produce complete, self-contained
-  handoffs or prompts unless explicitly asked to implement.
 
 ## Repo Scope
 
@@ -58,19 +46,6 @@ Repo-local rules take precedence only for repo-specific behavior.
 - Put example config files under `examples/config/`.
 - Put sanitized fixtures under `tests/fixtures/sanitized/`.
 
-## Local Execution
-
-- Run commands from this repository working directory by default.
-- Keep temporary workflow state repo-local, for example `.worktrees/`.
-- Use direct command execution for ordinary repo commands such as `git ...`,
-  `gh ...`, `make ...`, `python ...`, and repo-local scripts or tools.
-- Before using `zsh`, `bash`, `sh`, `zsh -lc`, `bash -lc`, `sh -c`, aliases, or
-  equivalent wrapper shells, check whether the command has a direct form and
-  use that direct form when it does.
-- Use shell wrappers only when shell syntax is genuinely required, such as
-  pipelines, redirection, glob expansion, command chaining, scoped environment
-  assignment, compound commands, or shell builtins.
-
 ## Provider Assumptions
 
 - Before changing behavior, docs, tests, or user-facing claims that depend on
@@ -99,12 +74,3 @@ Repo-local rules take precedence only for repo-specific behavior.
   Linode resources, and remains manual-only outside canonical PR validation.
 - Release targets and the CI authoritative-source scan sit outside the local
   blocking `make check` path.
-- Keep validation implemented through the Makefile rather than direct tool
-  invocation in normal workflow.
-
-## Branches and PRs
-
-- Branch from current `origin/main`.
-- Follow the shared playbook branch naming guidance; use focused,
-  purpose-based names such as `docs/<short-name>` or `feat/<short-name>`.
-- Open PRs against `main`.
