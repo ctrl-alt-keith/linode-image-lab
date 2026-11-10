@@ -78,22 +78,31 @@ def iter_scanned_files(root: Path) -> list[Path]:
     if not (root / ".git").exists():
         return iter_local_files(root)
 
-    result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached"],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    if result.returncode != 0:
+    untracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--others", "--exclude-standard"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if tracked.returncode != 0 or untracked.returncode != 0:
         return iter_local_files(root)
 
     files: list[Path] = []
-    for name in result.stdout.decode("utf-8").split("\0"):
-        if not name:
-            continue
-        path = root / Path(name)
-        if (path.is_file() or path.is_symlink()) and not should_skip_local_path(path.relative_to(root)):
-            files.append(path)
+    for result, skip_local in ((tracked, False), (untracked, True)):
+        for name in result.stdout.decode("utf-8").split("\0"):
+            if not name:
+                continue
+            path = root / Path(name)
+            if (path.is_file() or path.is_symlink()) and (
+                not skip_local or not should_skip_local_path(path.relative_to(root))
+            ):
+                files.append(path)
     return files
 
 
