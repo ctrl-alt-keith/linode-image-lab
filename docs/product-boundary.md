@@ -85,8 +85,8 @@ Related repository boundaries:
 - Evidence bundle architecture belongs in `trusted-ai-environment`.
 
 Those boundaries keep Linode Image Lab focused on image workflow proof rather
-than deployment, backup, restore, or evidence-platform ownership. The
-The three existing Trusted Network Registry consumers are the command-specific
+than deployment, backup, restore, or evidence-platform ownership. The three
+existing Trusted Network Registry consumers are the command-specific
 exception described in the Core Invariant: `firewall-sync` updates one managed
 inbound allow rule on a Cloud Firewall, `acl-sync` updates the control-plane
 ACL on one specified LKE cluster, and `service-acl-sync` refreshes the ACL
