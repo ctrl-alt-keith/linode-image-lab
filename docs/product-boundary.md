@@ -26,15 +26,17 @@ reported safely.
 ## Core Invariant
 
 Every external mutation must be explicitly requested, preceded by bounded
-validation, and limited to the current workflow, explicitly owned resources, or
-one documented attribute of an explicitly selected operator-owned target.
-Authority to change that attribute extends only to the attribute; it does not
-transfer ownership of the surrounding resource or its lifecycle. Mutations are
-reported as public-safe evidence without expanding into durable infrastructure
-ownership. Temporary workflow resources are cleaned up according to repository
-ownership rules where applicable. Intentionally persistent repository-owned
-resources, such as the single managed inbound allowlist rule, remain narrowly
-scoped and explicitly defined.
+validation, and limited to the current workflow or an explicitly owned
+resource. Report mutations as public-safe evidence without expanding into
+durable infrastructure ownership. The only attribute-level exception for an
+operator-owned target covers the three existing Trusted Network Registry
+consumers described under Repository Boundaries: on explicit `--execute`, each
+may change only its documented attribute on its explicitly selected target.
+This exception grants no ownership of the target or its lifecycle and does not
+authorize additional consumers or attributes. Temporary workflow resources
+are cleaned up according to repository ownership rules where applicable.
+Intentionally persistent repository-owned resources, such as the single
+managed inbound allowlist rule, remain narrowly scoped and explicitly defined.
 
 This means mutation paths stay opt-in. Preflight checks run before mutation.
 Created or discovered resources are handled only when they match the current
@@ -71,10 +73,10 @@ do not make this repository the owner of broader cloud intent.
 
 Long-lived infrastructure ownership belongs elsewhere. This repository may read
 or reference existing provider resources when required for validation or a
-bounded execute path, but those resources remain operator-owned inputs. The
-Core Invariant permits a registry consumer to change only its documented
-attribute on an explicitly selected target; it does not make that resource or
-its lifecycle repository-owned.
+bounded execute path, but those resources remain operator-owned inputs unless
+the current workflow or tag contract explicitly owns them. The three registry
+consumers below are the attribute-level exception described in the Core
+Invariant.
 
 Related repository boundaries:
 
@@ -84,16 +86,13 @@ Related repository boundaries:
 
 Those boundaries keep Linode Image Lab focused on image workflow proof rather
 than deployment, backup, restore, or evidence-platform ownership. The
-repository also provides three narrowly scoped Trusted Network Registry
-consumers. Each requires explicit `--execute` and changes only one documented
-attribute on an explicitly selected operator-owned target: `firewall-sync`
-updates one managed inbound allow rule on a Cloud Firewall, `acl-sync` updates
-the control-plane ACL on one specified LKE cluster, and `service-acl-sync`
-refreshes the ACL annotation on one exact Kubernetes Service for Linode CCM.
-Under the Core Invariant, authority over these attributes does not make the
-repository an owner of the targets or their lifecycle. The commands do not make
-the repository an LKE/Kubernetes orchestrator; deployment and ownership of the
-surrounding resources remain with the operator and the LKE repository.
+The three existing Trusted Network Registry consumers are the command-specific
+exception described in the Core Invariant: `firewall-sync` updates one managed
+inbound allow rule on a Cloud Firewall, `acl-sync` updates the control-plane
+ACL on one specified LKE cluster, and `service-acl-sync` refreshes the ACL
+annotation on one exact Kubernetes Service for Linode CCM. These commands do
+not make the repository an LKE/Kubernetes orchestrator; deployment remains
+with the operator and the LKE repository.
 
 ## Operational Philosophy
 
