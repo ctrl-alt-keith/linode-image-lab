@@ -79,12 +79,15 @@ Related repository boundaries:
 
 Those boundaries keep Linode Image Lab focused on image workflow proof rather
 than deployment, backup, restore, or evidence-platform ownership. The
-repository also provides narrowly scoped Trusted Network Registry consumers:
-`acl-sync` updates one explicitly selected LKE control-plane ACL, and
-`service-acl-sync` refreshes one explicitly selected Service ACL annotation for
-Linode CCM. These commands do not make the repository an LKE or Kubernetes
-orchestrator; deployment and ownership of the surrounding resources remain in
-the LKE repository.
+repository also provides three narrowly scoped Trusted Network Registry
+consumers. Each changes only one explicitly selected attribute on an existing
+operator-owned target: `firewall-sync` updates one managed inbound allow rule
+on a Cloud Firewall, `acl-sync` updates the control-plane ACL on one specified
+LKE cluster, and `service-acl-sync` refreshes the ACL annotation on one exact
+Kubernetes Service for Linode CCM. These bounded writes do not make the
+repository an infrastructure owner or an LKE/Kubernetes orchestrator;
+deployment and ownership of the surrounding resources remain with the operator
+and the LKE repository.
 
 ## Operational Philosophy
 
