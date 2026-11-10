@@ -3,7 +3,7 @@
 Linode Image Lab owns guarded operational validation for Linode custom-image
 workflows. It plans requested work, validates provider inputs, optionally
 executes a bounded workflow, cleans up resources within explicit ownership
-rules, and emits redacted evidence of what happened.
+rules, and emits command-specific evidence of what happened.
 
 It is not an infrastructure management tool. Infrastructure mutation is not the
 product. Bounded, evidence-producing execution is the product.
@@ -15,37 +15,44 @@ The repository owns:
 - guarded operational validation,
 - bounded execution after explicit operator request,
 - provider/API-level validation,
-- redacted operational evidence,
+- operational evidence,
 - cleanup within explicit ownership boundaries,
 - operational proof of image workflow behavior.
 
 Execution exists to answer whether a requested image workflow was planned,
-validated, run when requested, cleaned up according to the tag contract, and
-reported safely.
+validated, run when requested, and cleaned up according to the tag contract.
 
 ## Core Invariant
 
-Every provider mutation must be explicitly requested, preceded by bounded
-validation, limited to the current workflow or explicitly owned resources, and
-reported as public-safe evidence without expanding into durable infrastructure
-ownership. Temporary workflow resources are cleaned up according to repository
-ownership rules where applicable. Intentionally persistent repository-owned
-resources, such as the single managed inbound allowlist rule, remain narrowly
-scoped and explicitly defined.
+Every external mutation must be explicitly requested, preceded by bounded
+validation, and limited to the current workflow or an explicitly owned
+resource, without expanding into durable infrastructure ownership. Handle
+mutation output under its command-specific safety guidance: full
+`firewall-sync` and `acl-sync` manifests may include CIDRs and require protected
+handling; see the [firewall-sync guide](trusted-registry-firewall-sync.md) and
+[acl-sync guide](trusted-registry-acl-sync.md). The only attribute-level
+exception for an operator-owned target covers the three existing Trusted
+Network Registry consumers described under Repository Boundaries: on explicit
+`--execute`, each may change only its documented attribute on its explicitly
+selected target. This exception grants no ownership of the target or its
+lifecycle and does not authorize additional consumers or attributes. Temporary
+workflow resources are cleaned up according to repository ownership rules
+where applicable. Intentionally persistent repository-owned resources, such
+as the single managed inbound allowlist rule, remain narrowly scoped and
+explicitly defined.
 
 This means mutation paths stay opt-in. Preflight checks run before mutation.
 Created or discovered resources are handled only when they match the current
 workflow, explicit operator input, or the repository's managed tag contract.
 Temporary cleanup is part of the workflow result, not a background ownership
 promise. Persistent managed resources stay within their documented ownership
-marker and do not become broader infrastructure ownership. Normal output
-remains safe to publish and does not expose provider identifiers.
+marker and do not become broader infrastructure ownership.
 
 ## Product Object
 
 The primary durable product object is the operational run receipt.
 
-The run receipt is the redacted manifest that records:
+The run receipt is the command-specific manifest that records:
 
 - requested workflow intent,
 - planned actions,
@@ -57,7 +64,7 @@ The run receipt is the redacted manifest that records:
 
 The receipt is evidence of a bounded operation. Custom images may remain as
 explicit workflow deliverables when intentionally requested, but the durable
-product remains the operational run receipt and public-safe evidence, not
+product remains the operational run receipt and command-specific evidence, not
 ongoing ownership of infrastructure, deployments, accounts, or environments.
 
 ## Repository Boundaries
@@ -69,7 +76,9 @@ do not make this repository the owner of broader cloud intent.
 Long-lived infrastructure ownership belongs elsewhere. This repository may read
 or reference existing provider resources when required for validation or a
 bounded execute path, but those resources remain operator-owned inputs unless
-the current workflow or tag contract explicitly owns them.
+the current workflow or tag contract explicitly owns them. The three registry
+consumers below are the attribute-level exception described in the Core
+Invariant.
 
 Related repository boundaries:
 
@@ -78,7 +87,14 @@ Related repository boundaries:
 - Evidence bundle architecture belongs in `trusted-ai-environment`.
 
 Those boundaries keep Linode Image Lab focused on image workflow proof rather
-than deployment, backup, restore, or evidence-platform ownership.
+than deployment, backup, restore, or evidence-platform ownership. The three
+existing Trusted Network Registry consumers are the command-specific
+exception described in the Core Invariant: `firewall-sync` updates one managed
+inbound allow rule on a Cloud Firewall, `acl-sync` updates the control-plane
+ACL on one specified LKE cluster, and `service-acl-sync` refreshes the ACL
+annotation on one exact Kubernetes Service for Linode CCM. These commands do
+not make the repository an LKE/Kubernetes orchestrator; deployment remains
+with the operator and the LKE repository.
 
 ## Operational Philosophy
 
@@ -96,7 +112,7 @@ Execution does not imply:
 - cloud lifecycle management.
 
 The repository should continue to prefer explicit inputs, fail-closed
-validation, narrow mutation, public-safe manifests, and cleanup that respects
+validation, narrow mutation, and cleanup that respects
 tag and ownership boundaries.
 
 ## Product Decision Filter
