@@ -113,6 +113,76 @@ def managed_rule(*, ipv4: list[str] | None = None, ipv6: list[str] | None = None
 
 
 class FirewallSyncTests(unittest.TestCase):
+    def test_two_qualification_clients_use_same_version_without_writes(self) -> None:
+        clients = [FakeFirewallClient(firewall_rules()) for _ in range(2)]
+        kwargs = dict(firewall_id=12345,
+                      registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                      registry_bucket="example-bucket", registry_object_key="registry.json",
+                      ports="443", exact_version_id="synthetic-version")
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload()) as fetch:
+            plans = [firewall_sync_plan(**kwargs, client=client) for client in clients]
+        self.assertEqual(plans[0]["registry"], plans[1]["registry"])
+        self.assertTrue(plans[0]["registry"]["exact_version_verified"])
+        self.assertEqual(plans[0]["registry"]["currentness"], "unverified")
+        self.assertTrue(all(call.kwargs["exact_version_id"] == "synthetic-version"
+                            for call in fetch.call_args_list))
+        self.assertTrue(all(client.update_attempts == 0 for client in clients))
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage") as fetch:
+            with self.assertRaisesRegex(FirewallSyncError, "only for dry-run"):
+                firewall_sync_plan(**kwargs, execute=True, client=clients[0])
+            fetch.assert_not_called()
+        self.assertEqual(clients[0].update_attempts, 0)
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload()) as fetch:
+            default = firewall_sync_plan(**{k: v for k, v in kwargs.items()
+                                           if k != "exact_version_id"}, client=clients[0])
+        self.assertFalse(default["registry"]["exact_version_verified"])
+        self.assertNotIn("exact_version_id", fetch.call_args.kwargs)
+
+    def test_pinned_stale_registry_fails_without_firewall_writes(self) -> None:
+        client = FakeFirewallClient(firewall_rules())
+        stale = registry_payload()
+        stale["registry"]["generated_at"] = "1999-12-31T23:00:00Z"
+        stale["registry"]["valid_until"] = "2000-01-01T00:00:00Z"
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
+                   return_value=stale) as fetch:
+            with self.assertRaisesRegex(FirewallSyncError, "valid_until is stale"):
+                firewall_sync_plan(
+                    firewall_id=12345,
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket",
+                    registry_object_key="registry.json",
+                    exact_version_id="synthetic-version",
+                    ports="443",
+                    client=client,
+                )
+        self.assertEqual(fetch.call_args.kwargs["exact_version_id"], "synthetic-version")
+        self.assertEqual(client.update_attempts, 0)
+
+    def test_cli_refuses_pinned_execute_before_provider_access(self) -> None:
+        output = StringIO()
+        error = StringIO()
+        with (
+            patch("linode_image_lab.firewall_sync.LinodeClient.from_env") as client,
+            patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage") as fetch,
+            redirect_stdout(output),
+            patch("sys.stderr", error),
+        ):
+            with self.assertRaises(SystemExit):
+                main([
+                    "firewall-sync", "--firewall-id", "12345",
+                    "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+                    "--registry-bucket", "example-bucket",
+                    "--registry-object-key", "registry.json",
+                    "--ports", "443",
+                    "--registry-version-id", "synthetic-version", "--execute",
+                ])
+        client.assert_not_called()
+        fetch.assert_not_called()
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("only for dry-run", error.getvalue())
+
     def test_expected_firewall_identity_and_policies_guard_ingress_target(self) -> None:
         client = FakeFirewallClient(firewall_rules())
         kwargs = dict(

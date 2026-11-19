@@ -22,8 +22,9 @@ PRODUCER_REGISTRY_FIXTURE = ROOT / "tests/fixtures/sanitized/trusted-network-reg
 
 
 class FakeHTTPResponse:
-    def __init__(self, body: dict[str, object] | bytes) -> None:
+    def __init__(self, body: dict[str, object] | bytes, version_id: str | None = None) -> None:
         self.body = body
+        self.headers = {"x-amz-version-id": version_id} if version_id is not None else {}
 
     def __enter__(self) -> "FakeHTTPResponse":
         return self
@@ -75,6 +76,64 @@ def registry_payload(*, valid_until: str = "2030-01-01T00:00:00Z", cidr: str = "
 
 
 class TrustedRegistryTests(unittest.TestCase):
+    def test_exact_version_is_signed_and_response_must_match(self) -> None:
+        requests: list[object] = []
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            requests.append(request)
+            return FakeHTTPResponse(registry_payload(), "synthetic+version/1")
+        kwargs = dict(endpoint_url="https://us-east-1.linodeobjects.com",
+                      bucket="example-bucket", object_key="registry.json",
+                      environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"},
+                      exact_version_id="synthetic+version/1")
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(fetch_registry_from_object_storage(**kwargs)["schema_version"], 1)
+        self.assertEqual(len(requests), 1)
+        self.assertIn("?versionId=synthetic%2Bversion%2F1", requests[0].full_url)
+        self.assertIn("AWS4-HMAC-SHA256", requests[0].get_header("Authorization"))
+        for observed in (None, "synthetic-other", "null"):
+            with self.subTest(observed=observed), patch(
+                "linode_image_lab.trusted_registry.urlopen",
+                return_value=FakeHTTPResponse(registry_payload(), observed),
+            ):
+                with self.assertRaisesRegex(RegistryFetchError, "response mismatch"):
+                    fetch_registry_from_object_storage(**kwargs)
+        for bad in ("", "null", "bad\nvalue", "x" * 1025):
+            with self.subTest(bad=bad), patch("linode_image_lab.trusted_registry.urlopen") as fetch:
+                with self.assertRaisesRegex(RegistryFetchError, "version is invalid"):
+                    fetch_registry_from_object_storage(**{**kwargs, "exact_version_id": bad})
+                fetch.assert_not_called()
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=HTTPError(
+            "https://example.test", 404, "missing", {}, None,
+        )):
+            with self.assertRaisesRegex(RegistryFetchError, "fetch failed"):
+                fetch_registry_from_object_storage(**kwargs)
+
+    def test_concurrent_latest_replacement_does_not_change_pinned_reads(self) -> None:
+        latest_version = "synthetic-new"
+        seen_urls: list[str] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+            nonlocal latest_version
+            seen_urls.append(request.full_url)
+            if "?versionId=synthetic-old" in request.full_url:
+                result = FakeHTTPResponse(registry_payload(cidr="198.51.100.0/24"), "synthetic-old")
+            else:
+                result = FakeHTTPResponse(registry_payload(cidr="203.0.113.0/24"), latest_version)
+            latest_version = "synthetic-newer"
+            return result
+
+        kwargs = dict(endpoint_url="https://us-east-1.linodeobjects.com",
+                      bucket="example-bucket", object_key="registry.json",
+                      environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-secret"})
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=fake_urlopen):
+            pinned = [fetch_registry_from_object_storage(**kwargs, exact_version_id="synthetic-old")
+                      for _ in ("mac", "lke")]
+            latest = fetch_registry_from_object_storage(**kwargs)
+        self.assertEqual(pinned[0], pinned[1])
+        self.assertNotEqual(pinned[0], latest)
+        self.assertEqual(sum("?versionId=synthetic-old" in url for url in seen_urls), 2)
+        self.assertNotIn("?", seen_urls[-1])
+
     def test_registry_fetch_success_uses_object_storage_credentials(self) -> None:
         requests: list[object] = []
 

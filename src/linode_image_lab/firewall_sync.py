@@ -46,6 +46,7 @@ class FirewallSyncOptions:
     managed_label: str = "tnr-allowlist"
     expected_firewall_label: str | None = None
     execute: bool = False
+    exact_version_id: str | None = None
 
 
 def firewall_sync_plan(
@@ -60,6 +61,7 @@ def firewall_sync_plan(
     managed_label: str = "tnr-allowlist",
     expected_firewall_label: str | None = None,
     execute: bool = False,
+    exact_version_id: str | None = None,
     client: FirewallRulesClientProtocol | None = None,
     environ: Mapping[str, str] | None = None,
     plan_reporter: Callable[[str], object] | None = None,
@@ -75,8 +77,11 @@ def firewall_sync_plan(
         managed_label=normalize_managed_label(managed_label),
         expected_firewall_label=normalize_expected_firewall_label(expected_firewall_label),
         execute=execute,
+        exact_version_id=exact_version_id,
     )
     validate_rule_shape(options)
+    if execute and exact_version_id is not None:
+        raise FirewallSyncError("exact registry version is allowed only for dry-run")
     sync_client = client or LinodeClient.from_env(
         command="firewall-sync",
         option="--execute" if execute else "dry-run",
@@ -88,6 +93,7 @@ def firewall_sync_plan(
             object_key=options.registry_object_key,
             region=options.registry_region,
             environ=environ,
+            **({"exact_version_id": exact_version_id} if exact_version_id is not None else {}),
         )
         registry = validate_registry(payload)
         if options.expected_firewall_label is not None:
@@ -206,6 +212,8 @@ def build_firewall_sync_manifest(
             "cidr_count": registry.cidr_count,
             "ipv4_count": len(registry.ipv4_cidrs),
             "ipv6_count": len(registry.ipv6_cidrs),
+            "exact_version_verified": options.exact_version_id is not None,
+            "currentness": "unverified" if options.exact_version_id is not None else "latest_read",
         },
         "managed_rule": public_rule_summary(intended_rule),
         "planned_action": action,

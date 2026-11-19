@@ -67,6 +67,18 @@ ports = "22"
 
 ## Dry-Run Workflow
 
+For a supervised comparison, `firewall-sync --registry-version-id <reviewed-version>`
+requests one exact Object Storage version in dry-run mode. The response must
+carry the same `x-amz-version-id`; absence or mismatch fails the read, with no
+latest-version fallback. The result reports verification without printing the
+ID. Currentness remains unverified: selecting a version does not prove it is
+still current. The existing schema, CIDR and freshness checks still apply. A
+missing, expired or deleted version fails closed. Establish the intended version
+independently; noncurrent versions may expire under bucket lifecycle policy.
+`--execute` rejects this option before provider access. Ordinary scheduled runs
+omit it and continue to read latest. Qualify `s3:GetObjectVersion` permission
+before a live comparison.
+
 Dry-run fetches and validates the registry, reads the current firewall rules,
 computes the intended change, and emits a redacted JSON manifest. It does not
 call the firewall update endpoint.
