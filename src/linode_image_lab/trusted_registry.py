@@ -56,6 +56,7 @@ def fetch_registry_from_object_storage(
     region: str | None = None,
     environ: Mapping[str, str] | None = None,
     timeout_seconds: float = 30,
+    exact_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Fetch registry JSON from Linode Object Storage using S3 SigV4."""
 
@@ -63,12 +64,21 @@ def fetch_registry_from_object_storage(
     access_key = _required_env_value(values, ACCESS_KEY_ENV)
     secret_key = _required_env_value(values, SECRET_KEY_ENV)
     endpoint = _parse_endpoint(endpoint_url)
+    if exact_version_id is not None and (
+        not isinstance(exact_version_id, str)
+        or not exact_version_id
+        or exact_version_id == "null"
+        or len(exact_version_id.encode("utf-8")) > 1024
+        or any(ord(char) < 33 or ord(char) == 127 for char in exact_version_id)
+    ):
+        raise RegistryFetchError("exact registry version is invalid")
     signing_region = region or _region_from_endpoint(endpoint.hostname or "")
     if not signing_region:
         raise RegistryFetchError("registry Object Storage region is required")
 
     path = f"/{quote(bucket, safe='')}/{quote(object_key, safe='/')}"
-    request_url = f"{endpoint.scheme}://{endpoint.netloc}{path}"
+    query = f"versionId={quote(exact_version_id, safe='')}" if exact_version_id is not None else ""
+    request_url = f"{endpoint.scheme}://{endpoint.netloc}{path}" + (f"?{query}" if query else "")
     now = dt.datetime.now(dt.timezone.utc)
     headers = _signed_get_headers(
         access_key=access_key,
@@ -77,10 +87,13 @@ def fetch_registry_from_object_storage(
         host=endpoint.netloc,
         path=path,
         now=now,
+        query=query,
     )
     request = Request(request_url, method="GET", headers=headers)
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
+            if exact_version_id is not None and response.headers.get("x-amz-version-id") != exact_version_id:
+                raise RegistryFetchError("exact registry version response mismatch")
             body = response.read()
     except HTTPError as exc:
         raise RegistryFetchError("trusted registry fetch failed") from exc
@@ -197,6 +210,7 @@ def _signed_get_headers(
     host: str,
     path: str,
     now: dt.datetime,
+    query: str = "",
 ) -> dict[str, str]:
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
@@ -211,7 +225,7 @@ def _signed_get_headers(
         [
             "GET",
             path,
-            "",
+            query,
             canonical_headers,
             signed_headers,
             payload_hash,

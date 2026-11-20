@@ -67,6 +67,24 @@ ports = "22"
 
 ## Dry-Run Workflow
 
+For a supervised comparison, `firewall-sync --registry-version-file <protected-path>`
+reads one per-attempt JSON file in process, with exactly `version_id` and a
+32-byte random `proof_key` encoded as 64 lowercase hex characters. The file
+must be absolute, regular, owner- or root-owned, readable by the process, and
+neither group-writable nor world-accessible. The option requests the exact
+Object Storage version in dry-run mode. A missing or different
+`x-amz-version-id` fails without a latest-version fallback. The full plan and
+opt-in summary report verification, `currentness: unverified`, and an opaque
+HMAC proof of the selected version. Compare that proof with the independently
+selected private input across runs; matching timestamps or CIDRs alone do not
+establish version identity. The proof key and raw version ID are never printed.
+The existing schema, CIDR and freshness checks still apply. A missing,
+expired or deleted version fails closed. Noncurrent versions may expire under
+bucket lifecycle policy. `--execute` rejects the option before provider access.
+Ordinary scheduled runs omit it, keep their existing full-plan and summary
+schemas, and read latest. Qualify the intended key's version-read behavior
+before a live comparison.
+
 Dry-run fetches and validates the registry, reads the current firewall rules,
 computes the intended change, and emits a redacted JSON manifest. It does not
 call the firewall update endpoint.

@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from .linode_api import LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .registry_version_selection import version_proof
 from .trusted_registry import (
     TrustedRegistry,
     TrustedRegistryError,
@@ -46,6 +47,7 @@ class FirewallSyncOptions:
     managed_label: str = "tnr-allowlist"
     expected_firewall_label: str | None = None
     execute: bool = False
+    exact_version_id: str | None = None
 
 
 def firewall_sync_plan(
@@ -60,6 +62,8 @@ def firewall_sync_plan(
     managed_label: str = "tnr-allowlist",
     expected_firewall_label: str | None = None,
     execute: bool = False,
+    exact_version_id: str | None = None,
+    version_proof_key: bytes | None = None,
     client: FirewallRulesClientProtocol | None = None,
     environ: Mapping[str, str] | None = None,
     plan_reporter: Callable[[str], object] | None = None,
@@ -75,8 +79,15 @@ def firewall_sync_plan(
         managed_label=normalize_managed_label(managed_label),
         expected_firewall_label=normalize_expected_firewall_label(expected_firewall_label),
         execute=execute,
+        exact_version_id=exact_version_id,
     )
     validate_rule_shape(options)
+    if execute and exact_version_id is not None:
+        raise FirewallSyncError("exact registry version is allowed only for dry-run")
+    if (exact_version_id is None) != (version_proof_key is None):
+        raise FirewallSyncError("exact registry version and proof key must be paired")
+    if version_proof_key is not None and len(version_proof_key) != 32:
+        raise FirewallSyncError("exact registry version proof key is invalid")
     sync_client = client or LinodeClient.from_env(
         command="firewall-sync",
         option="--execute" if execute else "dry-run",
@@ -88,6 +99,7 @@ def firewall_sync_plan(
             object_key=options.registry_object_key,
             region=options.registry_region,
             environ=environ,
+            **({"exact_version_id": exact_version_id} if exact_version_id is not None else {}),
         )
         registry = validate_registry(payload)
         if options.expected_firewall_label is not None:
@@ -97,6 +109,8 @@ def firewall_sync_plan(
             options=options,
             registry=registry,
             current_rules=current_rules,
+            version_proof=(version_proof(exact_version_id, version_proof_key)
+                         if version_proof_key is not None and exact_version_id is not None else None),
         )
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
         raise FirewallSyncError(str(exc)) from exc
@@ -148,6 +162,7 @@ def build_firewall_sync_manifest(
     options: FirewallSyncOptions,
     registry: TrustedRegistry,
     current_rules: dict[str, Any],
+    version_proof: str | None = None,
 ) -> dict[str, Any]:
     rules = normalize_firewall_rules(current_rules)
     if options.expected_firewall_label is not None and (
@@ -206,6 +221,8 @@ def build_firewall_sync_manifest(
             "cidr_count": registry.cidr_count,
             "ipv4_count": len(registry.ipv4_cidrs),
             "ipv6_count": len(registry.ipv6_cidrs),
+            **({"exact_version_verified": True, "currentness": "unverified",
+                "version_proof": version_proof} if version_proof is not None else {}),
         },
         "managed_rule": public_rule_summary(intended_rule),
         "planned_action": action,
@@ -403,6 +420,10 @@ def routine_outcome(
             }
             for action in ("additions", "removals", "kept")
         }
+        if "version_proof" in manifest["registry"]:
+            outcome["exact_version_verified"] = manifest["registry"]["exact_version_verified"]
+            outcome["currentness"] = manifest["registry"]["currentness"]
+            outcome["version_proof"] = manifest["registry"]["version_proof"]
         if not failed:
             outcome["applied"] = manifest.get("applied", False)
     return outcome
