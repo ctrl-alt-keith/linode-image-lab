@@ -23,9 +23,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: f99549696d3c5043553270e983172bb2e623ae8b
+  SOURCE_SHA: 0b6676da09eba2ed11d12fc91aa30b343f665a3c
   IMAGE: ghcr.io/ctrl-alt-keith/linode-image-lab/firewall-consumer
-  TAG: sha-f99549696d3c5043553270e983172bb2e623ae8b
+  TAG: sha-0b6676da09eba2ed11d12fc91aa30b343f665a3c
 
 jobs:
   publish:
