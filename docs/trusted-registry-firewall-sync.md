@@ -202,9 +202,10 @@ docker build --platform linux/amd64 --tag linode-image-lab:local .
 
 The source-owned `Publish firewall consumer image` workflow pins an exact
 source commit and source-derived tag. Manual dispatch from `main` offers
-`publish` and `verify-public` modes. The publish job checks out the pinned
-source, runs `make check`, builds Linux amd64, smoke-tests `firewall-sync` and
-`service-acl-sync`, and records source, workflow, builder, run, and digest.
+`publish`, `verify-public`, and `verify-private` modes. The publish job checks
+out the pinned source, runs `make check`, builds Linux amd64, smoke-tests
+`firewall-sync` and `service-acl-sync`, and records source, workflow, builder,
+run, and digest.
 Only that job receives a repository token with package write permission.
 
 Before push, the workflow requires readable package metadata and tag inventory,
@@ -214,7 +215,11 @@ back to confirm the same digest, and verifies that package visibility did not
 change. A new source requires a reviewed pin update. The optional
 `verify-public` job has no package permission; with an empty Docker auth config,
 it checks an anonymous pull against a supplied digest, source-revision label,
-and Linux amd64 platform. Neither mode changes package visibility.
+and Linux amd64 platform. `verify-private` uses only job-scoped `packages: read`
+to pull the fixed published digest, then checks Linux amd64, source revision,
+and the `--registry-version-file` help option with networking disabled and no
+credentials passed to the container. Neither verification mode changes package
+visibility.
 
 For a private package, the LKE workload needs a namespace-scoped pull Secret
 with package-read access. Keep the pull credential and runtime configuration
