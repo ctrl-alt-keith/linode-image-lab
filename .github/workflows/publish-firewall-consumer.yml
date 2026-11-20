@@ -4,15 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Publish once, or verify public access after package visibility changes
+        description: Publish once, verify public access, or verify the private image
         required: true
         type: choice
         options:
           - publish
           - verify-public
+          - verify-private
         default: publish
       expected_digest:
-        description: Required for verify-public; copy the pushed digest from the publish run
+        description: Digest for verification modes; unused for publish
         required: false
         type: string
 
@@ -195,4 +196,54 @@ jobs:
             echo "Verified digest: $IMAGE@$expected_digest"
             echo "Workflow commit: $GITHUB_SHA"
             echo "Verification run: $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-private:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.mode == 'verify-private'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: read
+    env:
+      EXPECTED_DIGEST: sha256:b69b72d39911cffd2044ba165f2bd033b9eb36097fe0fd64856423e847325b87
+      REQUESTED_DIGEST: ${{ inputs.expected_digest }}
+    steps:
+      - name: Pull exact private digest with job-scoped package read
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(uname -m)" = x86_64
+          [[ "$REQUESTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$REQUESTED_DIGEST" = "$EXPECTED_DIGEST"
+          if docker image inspect "$IMAGE@$EXPECTED_DIGEST" >/dev/null 2>&1; then
+            echo 'Refusing verification with a locally cached image.' >&2
+            exit 1
+          fi
+          auth_config="$(mktemp -d "$RUNNER_TEMP/ghcr-consumer-private.XXXXXX")"
+          trap 'rm -rf "$auth_config"' EXIT
+          printf '%s' "$GHCR_TOKEN" | DOCKER_CONFIG="$auth_config" docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin >/dev/null
+          DOCKER_CONFIG="$auth_config" docker manifest inspect "$IMAGE@$EXPECTED_DIGEST" >/dev/null
+          DOCKER_CONFIG="$auth_config" docker pull --platform linux/amd64 "$IMAGE@$EXPECTED_DIGEST" >/dev/null
+
+      - name: Check exact image revision and firewall flag offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE@$EXPECTED_DIGEST")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE@$EXPECTED_DIGEST")" = "$SOURCE_SHA"
+          help_output="$(docker run --rm --pull never --platform linux/amd64 --network none --read-only --cap-drop ALL --security-opt no-new-privileges "$IMAGE@$EXPECTED_DIGEST" firewall-sync --help)"
+          grep -Eq -- '^[[:space:]]*--registry-version-file[[:space:]]+' <<< "$help_output"
+          {
+            echo '### Private firewall consumer image verification'
+            echo "- Digest: \`$IMAGE@$EXPECTED_DIGEST\`"
+            echo "- Source revision: \`$SOURCE_SHA\`"
+            echo '- Platform: `linux/amd64`'
+            echo '- `firewall-sync --help` exposes `--registry-version-file`.'
+            echo '- Help ran with networking disabled and no credentials passed to the container.'
           } >> "$GITHUB_STEP_SUMMARY"
