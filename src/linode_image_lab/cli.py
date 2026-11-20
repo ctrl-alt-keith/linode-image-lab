@@ -39,6 +39,7 @@ from .region_policy import (
     validate_region_policy_artifact,
     write_region_policy_artifact,
 )
+from .registry_version_selection import load_selection
 from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
 from .service_acl_sync import ServiceACLSyncError, service_acl_sync
@@ -365,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_manifest_file_arg(firewall_sync)
     add_registry_firewall_sync_args(firewall_sync)
-    firewall_sync.add_argument("--registry-version-id", help="Exact Object Storage version for a qualification dry-run only.")
+    firewall_sync.add_argument("--registry-version-file", help="Protected per-attempt version selection file for a qualification dry-run only.")
 
     acl_sync = subparsers.add_parser(
         "acl-sync", help="Sync one LKE control-plane ACL from a trusted registry.",
@@ -794,13 +795,17 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "firewall-sync":
+        if args.registry_version_file and args.execute:
+            raise FirewallSyncError("exact registry version is allowed only for dry-run")
+        selection = load_selection(args.registry_version_file) if args.registry_version_file else None
         return firewall_sync_plan(
             firewall_id=args.firewall_id,
             registry_endpoint_url=args.registry_endpoint_url,
             registry_bucket=args.registry_bucket,
             registry_object_key=args.registry_object_key,
             registry_region=args.registry_region,
-            exact_version_id=args.registry_version_id,
+            exact_version_id=selection.version_id if selection else None,
+            version_proof_key=selection.proof_key if selection else None,
             protocol=args.protocol or "TCP",
             ports=args.ports,
             managed_label=args.managed_label or "tnr-allowlist",

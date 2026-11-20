@@ -14,6 +14,7 @@ from linode_image_lab.firewall_sync import (
     FirewallSyncError,
     firewall_sync_plan,
 )
+from linode_image_lab.firewall_sync import routine_outcome
 from linode_image_lab.trusted_registry import validate_registry
 
 
@@ -118,13 +119,18 @@ class FirewallSyncTests(unittest.TestCase):
         kwargs = dict(firewall_id=12345,
                       registry_endpoint_url="https://us-east-1.linodeobjects.com",
                       registry_bucket="example-bucket", registry_object_key="registry.json",
-                      ports="443", exact_version_id="synthetic-version")
+                      ports="443", exact_version_id="synthetic-version",
+                      version_proof_key=b"s" * 32)
         with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
                    return_value=registry_payload()) as fetch:
             plans = [firewall_sync_plan(**kwargs, client=client) for client in clients]
         self.assertEqual(plans[0]["registry"], plans[1]["registry"])
         self.assertTrue(plans[0]["registry"]["exact_version_verified"])
         self.assertEqual(plans[0]["registry"]["currentness"], "unverified")
+        self.assertEqual(len(plans[0]["registry"]["version_proof"]), 64)
+        pinned_summary = routine_outcome(plans[0], execute=False)
+        self.assertEqual(pinned_summary["version_proof"], plans[0]["registry"]["version_proof"])
+        self.assertEqual(pinned_summary["currentness"], "unverified")
         self.assertTrue(all(call.kwargs["exact_version_id"] == "synthetic-version"
                             for call in fetch.call_args_list))
         self.assertTrue(all(client.update_attempts == 0 for client in clients))
@@ -136,9 +142,25 @@ class FirewallSyncTests(unittest.TestCase):
         with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
                    return_value=registry_payload()) as fetch:
             default = firewall_sync_plan(**{k: v for k, v in kwargs.items()
-                                           if k != "exact_version_id"}, client=clients[0])
-        self.assertFalse(default["registry"]["exact_version_verified"])
+                                           if k not in {"exact_version_id", "version_proof_key"}}, client=clients[0])
+        self.assertNotIn("exact_version_verified", default["registry"])
+        self.assertNotIn("currentness", default["registry"])
         self.assertNotIn("exact_version_id", fetch.call_args.kwargs)
+        self.assertNotIn("version_proof", routine_outcome(default, execute=False))
+
+    def test_distinct_pins_with_identical_payloads_have_distinct_proofs(self) -> None:
+        base = dict(firewall_id=12345,
+                    registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                    registry_bucket="example-bucket", registry_object_key="registry.json",
+                    ports="443", version_proof_key=b"s" * 32)
+        with patch("linode_image_lab.firewall_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload()):
+            first = firewall_sync_plan(**base, exact_version_id="synthetic-a",
+                                       client=FakeFirewallClient(firewall_rules()))
+            second = firewall_sync_plan(**base, exact_version_id="synthetic-b",
+                                        client=FakeFirewallClient(firewall_rules()))
+        self.assertEqual(first["registry"]["generated_at"], second["registry"]["generated_at"])
+        self.assertNotEqual(first["registry"]["version_proof"], second["registry"]["version_proof"])
 
     def test_pinned_stale_registry_fails_without_firewall_writes(self) -> None:
         client = FakeFirewallClient(firewall_rules())
@@ -154,6 +176,7 @@ class FirewallSyncTests(unittest.TestCase):
                     registry_bucket="example-bucket",
                     registry_object_key="registry.json",
                     exact_version_id="synthetic-version",
+                    version_proof_key=b"s" * 32,
                     ports="443",
                     client=client,
                 )
@@ -176,7 +199,7 @@ class FirewallSyncTests(unittest.TestCase):
                     "--registry-bucket", "example-bucket",
                     "--registry-object-key", "registry.json",
                     "--ports", "443",
-                    "--registry-version-id", "synthetic-version", "--execute",
+                    "--registry-version-file", "/synthetic/version.json", "--execute",
                 ])
         client.assert_not_called()
         fetch.assert_not_called()
