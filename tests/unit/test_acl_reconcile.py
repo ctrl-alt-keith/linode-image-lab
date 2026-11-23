@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from io import StringIO
+from io import BytesIO, StringIO
 from ipaddress import IPv4Address
 import json
+import os
 from pathlib import Path
 from contextlib import redirect_stdout
 import tempfile
 import unittest
 from unittest.mock import PropertyMock, patch
 
-from linode_image_lab.acl_reconcile import ACLReconcileError, host_route, reconcile_acl
+from linode_image_lab.acl_reconcile import (
+    ACLReconcileError, WanObservation, WanSource, bind_wan_observations, host_route, reconcile_acl,
+)
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
 from linode_image_lab.registry_version_selection import RegistryVersionSelection
@@ -29,6 +33,12 @@ OBSERVED = {
 SLOTS = {"synthetic-a": "wan1", "synthetic-b": "wan2"}
 SELECTION = RegistryVersionSelection("example-registry-version", bytes(range(32)))
 BASELINE = {"enabled": True, "addresses": RETAINED, "revision-id": "baseline"}
+REGISTRY_ARGS = {
+    "endpoint_url": "https://us-east-1.linodeobjects.com",
+    "bucket": "example-bucket",
+    "object_key": "registry.json",
+}
+REGISTRY_ENV = {"LINODE_OBJ_ACCESS_KEY": "synthetic-access", "LINODE_OBJ_SECRET_KEY": "synthetic-secret"}
 
 
 def registry_payload(observed: dict) -> dict:
@@ -48,6 +58,12 @@ def registry_payload(observed: dict) -> dict:
             for slot, routes in observed.items() for family, route in routes.items()
         ],
     }
+
+
+def registry_response(payload, version=SELECTION.version_id):
+    response = BytesIO(json.dumps(payload).encode())
+    response.headers = {} if version is None else {"x-amz-version-id": version}
+    return response
 
 
 class FakeACL:
@@ -324,3 +340,112 @@ class PublicHostValidationTest(unittest.TestCase):
         ):
             with self.subTest(route=route), self.assertRaisesRegex(ACLReconcileError, "invalid_source_host"):
                 host_route(route)
+
+
+class WanObservationBindingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.approved = {slot: WanSource("synthetic-device", interface) for slot, interface in SLOTS.items()}
+        self.now = datetime.now(timezone.utc)
+        self.observations = [
+            WanObservation(source, OBSERVED[slot]["ipv4"], self.now) for slot, source in self.approved.items()
+        ]
+        self.registry = registry_payload(OBSERVED)
+        self.enterContext(patch.object(IPv4Address, "is_global", new_callable=PropertyMock, return_value=True))
+        self.enterContext(patch.dict(os.environ, REGISTRY_ENV))
+
+    def bind(self, **overrides):
+        args = {
+            "approved_slots": self.approved,
+            "observations": self.observations,
+            "max_age": timedelta(minutes=5),
+            "selection": SELECTION,
+            "registry_args": REGISTRY_ARGS,
+        }
+        return bind_wan_observations(**(args | overrides))
+
+    def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            selection = Path(root).resolve() / "selection.json"
+            selection.write_text(json.dumps({"version_id": SELECTION.version_id, "proof_key": SELECTION.proof_key.hex()}))
+            selection.chmod(0o600)
+            client = FakeACL(selection.parent)
+            output = StringIO()
+            with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(self.registry), registry_response(self.registry),
+            ]) as reader, patch(
+                "linode_image_lab.acl_reconcile.LinodeClient.from_env", return_value=LinodeClient(),
+            ), patch.object(LinodeClient, "_request", autospec=True, side_effect=[
+                client.get_lke_cluster(12345), client.get_lke_control_plane_acl(12345),
+            ]) as management:
+                binding = self.bind(observations=self.observations[::-1])
+                self.assertEqual(binding, {
+                    "slots": SLOTS, "observed": OBSERVED, "registry_version_proof": SELECTION.proof(),
+                })
+                protected = {
+                    "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
+                    "acl": BASELINE, "retained": RETAINED, "checkpoint": None, **binding,
+                }
+                with patch("sys.stdin", StringIO(json.dumps(protected))), redirect_stdout(output):
+                    self.assertEqual(main([
+                        "acl-sync", "--cluster-id", "12345", "--cluster-label", "synthetic-cluster",
+                        "--registry-endpoint-url", REGISTRY_ARGS["endpoint_url"],
+                        "--registry-bucket", REGISTRY_ARGS["bucket"], "--registry-object-key", REGISTRY_ARGS["object_key"],
+                        "--output-format", "summary", "--reconcile-from-stdin", "--registry-version-file", str(selection),
+                    ]), 0)
+            self.assertEqual([call.args[1] for call in management.call_args_list], ["GET", "GET"])
+            self.assertEqual(list(selection.parent.glob("*.jsonl")), [])
+
+        exact_url = (
+            f'{REGISTRY_ARGS["endpoint_url"]}/{REGISTRY_ARGS["bucket"]}/{REGISTRY_ARGS["object_key"]}'
+            f"?versionId={SELECTION.version_id}"
+        )
+        self.assertEqual([call.args[0].full_url for call in reader.call_args_list], [exact_url, exact_url])
+        summary = json.loads(output.getvalue())
+        self.assertEqual(summary["status"], "planned")
+        self.assertEqual(summary["change_counts"], {
+            "additions": {"ipv4": 2, "ipv6": 0}, "removals": {"ipv4": 0, "ipv6": 0},
+        })
+        for private in ("synthetic-device", SELECTION.version_id, "198.51.100", "2001:db8"):
+            self.assertNotIn(private, output.getvalue())
+
+    def test_missing_duplicate_or_wrong_device_observations_stop_before_registry_read(self) -> None:
+        first, second = self.observations
+        wrong_device = replace(second, source=WanSource("other-device", second.source.interface))
+        for observations in ([first], [first, first], [first, wrong_device], [first, second, wrong_device]):
+            with self.subTest(observations=observations), patch("linode_image_lab.trusted_registry.urlopen") as reader:
+                with self.assertRaisesRegex(ACLReconcileError, "^incomplete_or_unapproved_sources$"):
+                    self.bind(observations=observations)
+                reader.assert_not_called()
+
+    def test_independent_observations_must_be_fresh(self) -> None:
+        first, second = self.observations
+        for timestamp in (self.now - timedelta(minutes=5), self.now + timedelta(minutes=1),
+                          self.now.replace(tzinfo=None)):
+            with self.subTest(timestamp=timestamp), patch(
+                "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry),
+            ), self.assertRaisesRegex(ACLReconcileError, "^source_observation_not_fresh$"):
+                self.bind(observations=[replace(first, observed_at=timestamp), second])
+
+    def test_missing_or_wrong_registry_response_version_does_not_fall_back_to_latest(self) -> None:
+        for version in (None, "other-version"):
+            with self.subTest(version=version), patch(
+                "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry, version),
+            ) as reader:
+                with self.assertRaisesRegex(ACLReconcileError, "^registry_invalid_or_unavailable$"):
+                    self.bind()
+                reader.assert_called_once()
+
+    def test_registry_must_corroborate_each_interface_with_fresh_discovery(self) -> None:
+        candidates = (
+            {"source_ref": "wan2"},
+            {"cidr": "198.51.100.42/32"},
+            {"expires_at": (self.now - timedelta(seconds=1)).isoformat()},
+            {"kind": "static", "source_type": "config"},
+        )
+        for candidate in candidates:
+            payload = deepcopy(self.registry)
+            payload["entries"][0].update(candidate)
+            with self.subTest(candidate=candidate), patch(
+                "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(payload),
+            ), self.assertRaisesRegex(ACLReconcileError, "^source_observation_does_not_match_registry$"):
+                self.bind()

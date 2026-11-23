@@ -83,6 +83,18 @@ The owner prepares the input in protected storage:
   from the previous enforced receipt. Only its recorded managed IPv4 routes may
   be retired. A current observation covered by retained access stays retained.
 
+In a protected caller, use `acl_reconcile.bind_wan_observations` to prepare
+`slots`, `observed`, and `registry_version_proof` for one attempt. Supply the
+approved slot-to-device and interface mapping separately from the fresh
+observations. Use the device identity, interface, and public IPv4 from the
+[Meraki uplink read](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/),
+and timestamp each reading at collection. Pass the owner-approved age limit,
+registry destination, and independently selected version. The binder uses
+the exact-version registry reader and checks both observations after
+the read. Use the returned fields and the same selection in the guarded
+preview within that observation window. Keep the observations and binding
+private. Use a fixture transport for offline tests.
+
 The operation refuses incomplete or ambiguous observations, unsupported host
 addresses, invalid ownership, stale inputs, and drift. When explicitly approved,
 add `--execute --acl-receipt-dir /protected/acl-receipts`. Use one owner-only

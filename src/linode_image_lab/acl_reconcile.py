@@ -9,8 +9,8 @@ import os
 import re
 import time
 import uuid
-from dataclasses import replace
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,19 @@ class ACLReconcileError(ACLSyncError):
     def __init__(self, reason: str, *, status: str = "failed") -> None:
         super().__init__(reason)
         self.status = status
+
+
+@dataclass(frozen=True)
+class WanSource:
+    device_id: str
+    interface: str
+
+
+@dataclass(frozen=True)
+class WanObservation:
+    source: WanSource
+    ipv4: str
+    observed_at: datetime
 
 
 def policy(acl: Any) -> dict[str, Any]:
@@ -110,14 +123,12 @@ def observed_entry_is_fresh(entry: dict, now: datetime) -> bool:
         return False
 
 
-def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
-    slots, observed = document["slots"], document["observed"]
+def corroborate_observations(slots: dict, observed: Any, registry: dict, now: datetime) -> dict[str, str]:
     if not isinstance(observed, dict) or observed.keys() != slots.keys():
         raise ACLReconcileError("incomplete_or_unapproved_sources")
 
     # The protected observation binds the intended device and slot. Registry v1
     # supplies corroboration by interface and IPv4 host, but omits device IDs.
-    now = datetime.now(timezone.utc)
     discovered = {
         (entry["source_ref"], entry["cidr"])
         for entry in registry["entries"]
@@ -126,9 +137,8 @@ def planned_addresses(document: dict, before: dict, retained: dict, registry: di
         and isinstance(entry.get("source_ref"), str)
         and observed_entry_is_fresh(entry, now)
     }
-    coverage = [ip_network(route) for route in retained["ipv4"]]
     seen = set()
-    next_managed = {}
+    corroborated = {}
     for slot, interface in slots.items():
         routes = observed[slot]
         if not isinstance(routes, dict) or routes.keys() != {"ipv4"}:
@@ -139,8 +149,61 @@ def planned_addresses(document: dict, before: dict, retained: dict, registry: di
         seen.add(route)
         if (interface, route) not in discovered:
             raise ACLReconcileError("source_observation_does_not_match_registry")
-        if not any(ip_network(route).subnet_of(network) for network in coverage):
-            next_managed[slot] = {"ipv4": route}
+        corroborated[slot] = route
+    return corroborated
+
+
+def bind_wan_observations(
+    *,
+    approved_slots: dict[str, WanSource],
+    observations: list[WanObservation],
+    max_age: timedelta,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+) -> dict[str, Any]:
+    """Prepare guarded input fields from independently collected WAN observations."""
+    slots = {slot: source.interface for slot, source in approved_slots.items()}
+    validate_slots(slots)
+    by_source = {observation.source: observation for observation in observations}
+    expected_sources = set(approved_slots.values())
+    if (
+        len(observations) != len(expected_sources) or by_source.keys() != expected_sources
+        or any(not source.device_id or source.device_id != source.device_id.strip() for source in expected_sources)
+    ):
+        raise ACLReconcileError("incomplete_or_unapproved_sources")
+    if max_age <= timedelta(0):
+        raise ACLReconcileError("invalid_source_observation_age")
+    if not selection.version_id:
+        raise ACLReconcileError("invalid_registry_version_selection")
+
+    try:
+        registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
+        now = datetime.now(timezone.utc)
+        validate_registry(registry, now=now)
+    except ValueError:
+        raise ACLReconcileError("registry_invalid_or_unavailable") from None
+
+    observed = {}
+    for slot, source in approved_slots.items():
+        observation = by_source[source]
+        timestamp = observation.observed_at
+        if timestamp.utcoffset() is None or not timedelta(0) <= now - timestamp < max_age:
+            raise ACLReconcileError("source_observation_not_fresh")
+        observed[slot] = {"ipv4": observation.ipv4}
+    corroborate_observations(slots, observed, registry, now)
+    return {"slots": slots, "observed": observed, "registry_version_proof": selection.proof()}
+
+
+def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
+    routes = corroborate_observations(
+        document["slots"], document["observed"], registry, datetime.now(timezone.utc),
+    )
+    coverage = [ip_network(route) for route in retained["ipv4"]]
+    next_managed = {
+        slot: {"ipv4": route}
+        for slot, route in routes.items()
+        if not any(ip_network(route).subnet_of(network) for network in coverage)
+    }
     current = before["addresses"]["ipv4"]
     managed = {routes["ipv4"] for routes in next_managed.values()}
     wanted = set(retained["ipv4"]) | managed
