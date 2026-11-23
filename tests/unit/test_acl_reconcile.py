@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import StringIO
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address
 import json
 from pathlib import Path
 from contextlib import redirect_stdout
@@ -18,10 +18,13 @@ from linode_image_lab.registry_version_selection import RegistryVersionSelection
 from linode_image_lab.trusted_registry import RegistryFetchError
 
 
-RETAINED = {"ipv4": ["192.0.2.1/32"], "ipv6": ["2001:db8:abcd::1/128"]}
+RETAINED = {
+    "ipv4": ["192.0.2.9", "192.0.2.1/32"],
+    "ipv6": ["2001:0DB8:abcd::1/128", "2001:db8::2"],
+}
 OBSERVED = {
-    "synthetic-a": {"ipv4": "198.51.100.2/32", "ipv6": "2001:db8:1::2/128"},
-    "synthetic-b": {"ipv4": "203.0.113.2/32", "ipv6": "2001:db8:2::2/128"},
+    "synthetic-a": {"ipv4": "198.51.100.2/32"},
+    "synthetic-b": {"ipv4": "203.0.113.2/32"},
 }
 SLOTS = {"synthetic-a": "wan1", "synthetic-b": "wan2"}
 SELECTION = RegistryVersionSelection("example-registry-version", bytes(range(32)))
@@ -96,8 +99,7 @@ class GuardedACLTest(unittest.TestCase):
         self.client = FakeACL(self.directory)
         # Permit RFC documentation addresses in simulated provider responses.
         # Production public-address validation is checked separately below.
-        for cls in (IPv4Address, IPv6Address):
-            self.enterContext(patch.object(cls, "is_global", new_callable=PropertyMock, return_value=True))
+        self.enterContext(patch.object(IPv4Address, "is_global", new_callable=PropertyMock, return_value=True))
         self.enterContext(patch("linode_image_lab.acl_reconcile.time.sleep"))
         self.document = {
             "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
@@ -122,10 +124,10 @@ class GuardedACLTest(unittest.TestCase):
         return [[json.loads(line) for line in path.read_text().splitlines()]
                 for path in self.directory.glob("*.jsonl")]
 
-    def test_guarded_preview_and_successive_dual_stack_updates(self) -> None:
+    def test_guarded_preview_and_successive_ipv4_updates_without_ipv6_observations(self) -> None:
         plan = self.run_acl(execute=False)
         self.assertEqual(plan["status"], "planned")
-        self.assertEqual(plan["change_counts"]["additions"], {"ipv4": 2, "ipv6": 2})
+        self.assertEqual(plan["change_counts"]["additions"], {"ipv4": 2, "ipv6": 0})
         self.assertEqual(self.receipts(), [])
         self.assertEqual(self.client.requests, [])
         self.client.stale_after_put = True
@@ -139,18 +141,30 @@ class GuardedACLTest(unittest.TestCase):
         self.assertEqual(intent["managed_before"], {})
         self.assertEqual(intent["managed_after"], OBSERVED)
         self.assertTrue(intent["after"]["enabled"])
+        self.assertEqual(intent["after"]["addresses"]["ipv4"][:2], RETAINED["ipv4"])
+        self.assertEqual(intent["after"]["addresses"]["ipv6"], RETAINED["ipv6"])
         self.assertNotEqual(intent["before"]["revision-id"], intent["after"]["revision-id"])
 
         self.document.update(acl=intent["after"], checkpoint={"intent": intent, "outcome": outcome})
-        self.document["observed"]["synthetic-a"] = {"ipv4": "198.51.100.3/32", "ipv6": "2001:db8:1::3/128"}
+        self.document["observed"]["synthetic-a"] = {"ipv4": "198.51.100.3/32"}
         result = self.run_acl()
         self.assertEqual(result["change_counts"], {
-            "additions": {"ipv4": 1, "ipv6": 1}, "removals": {"ipv4": 1, "ipv6": 1},
+            "additions": {"ipv4": 1, "ipv6": 0}, "removals": {"ipv4": 1, "ipv6": 0},
         })
-        for family in RETAINED:
-            self.assertEqual(set(self.client.acl["addresses"][family]), {
-                *RETAINED[family], *(routes[family] for routes in self.document["observed"].values()),
-            })
+        self.assertEqual(self.client.acl["addresses"]["ipv6"], RETAINED["ipv6"])
+        self.assertEqual(self.client.acl["addresses"]["ipv4"][:2], RETAINED["ipv4"])
+        self.assertEqual(set(self.client.acl["addresses"]["ipv4"]), {
+            *RETAINED["ipv4"], *(routes["ipv4"] for routes in self.document["observed"].values()),
+        })
+
+    def test_present_registry_ipv6_never_enters_guarded_policy(self) -> None:
+        payload = registry_payload(OBSERVED)
+        payload["entries"].append({
+            **payload["entries"][0], "cidr": "2001:db8:1::2/128", "address_family": "ipv6",
+        })
+        result = self.run_acl(effect=[payload, payload])
+        self.assertEqual(result["change_counts"]["additions"]["ipv6"], 0)
+        self.assertEqual(self.client.requests[0]["addresses"]["ipv6"], RETAINED["ipv6"])
 
     def test_preexisting_matches_are_never_enrolled_by_equality(self) -> None:
         for family, route in OBSERVED["synthetic-a"].items():
@@ -160,18 +174,18 @@ class GuardedACLTest(unittest.TestCase):
         self.run_acl()
         [[intent, _]] = self.receipts()
         self.assertNotIn("synthetic-a", intent["managed_after"])
-        self.assertEqual(intent["retained"], {
-            family: sorted(routes) for family, routes in self.document["retained"].items()
-        })
+        self.assertEqual(intent["retained"], self.document["retained"])
 
     def test_incomplete_ambiguous_or_externally_unproven_input_fails_closed(self) -> None:
         for reason, mutate in (
-            ("incomplete_or_unapproved_sources", lambda d: d["observed"]["synthetic-b"].pop("ipv6")),
+            ("incomplete_or_unapproved_sources", lambda d: d["observed"]["synthetic-b"].pop("ipv4")),
+            ("incomplete_or_unapproved_sources", lambda d: d["observed"]["synthetic-b"].update(ipv6="2001:db8::9/128")),
             ("incomplete_or_unapproved_sources", lambda d: d["observed"].pop("synthetic-b")),
             ("ambiguous_source_observations", lambda d: d["observed"]["synthetic-b"].update(OBSERVED["synthetic-a"])),
             ("source_version_proof_mismatch", lambda d: d.update(registry_version_proof="0" * 64)),
             ("unverified_ownership_checkpoint", lambda d: d.update(checkpoint={"intent": {}, "outcome": {}})),
-            ("unclassified_baseline_routes", lambda d: d["retained"]["ipv6"].clear()),
+            ("unclassified_baseline_routes", lambda d: d["retained"]["ipv4"].clear()),
+            ("ipv6_policy_changed", lambda d: d["retained"]["ipv6"].reverse()),
         ):
             document = deepcopy(self.document)
             mutate(document)
@@ -218,6 +232,14 @@ class GuardedACLTest(unittest.TestCase):
             self.run_acl()
         self.assertEqual(failure.exception.status, "uncertain")
         self.assertEqual(len(self.receipts()[0]), 1)
+
+    def test_guarded_rollback_refuses_a_receipt_with_ipv6_changes(self) -> None:
+        self.run_acl()
+        [[intent, _]] = self.receipts()
+        intent["after"]["addresses"]["ipv6"].reverse()
+        with self.assertRaisesRegex(ACLReconcileError, "ipv6_policy_changed"):
+            self.run_acl(document=intent, rollback=True)
+        self.assertEqual(len(self.client.requests), 1)
 
     def test_timeout_keeps_pending_receipt_without_a_second_put(self) -> None:
         self.client.accept_put = False
@@ -297,9 +319,8 @@ class GuardedACLTest(unittest.TestCase):
 
 class PublicHostValidationTest(unittest.TestCase):
     def test_rejects_nonpublic_or_nonhost_routes(self) -> None:
-        for route, family in (
-            ("fe80::1/128", "ipv6"), ("fd00::1/128", "ipv6"), ("ff02::1/128", "ipv6"),
-            ("::ffff:192.0.2.1/128", "ipv6"), ("2001:db8::/64", "ipv6"), ("10.0.0.1/32", "ipv4"),
+        for route in (
+            "2001:db8::1/128", "::ffff:192.0.2.1/128", "10.0.0.1/32", "192.0.2.0/24",
         ):
             with self.subTest(route=route), self.assertRaisesRegex(ACLReconcileError, "invalid_source_host"):
-                host_route(route, family)
+                host_route(route)

@@ -53,7 +53,7 @@ does not fall back to latest. The summary emits a keyed `version_proof` for
 private comparison with the selection, without printing the version or key.
 The proof identifies the read version and does not establish that it is current.
 
-## Guarded dual-stack reconciliation
+## Guarded IPv4 reconciliation
 
 Use `--reconcile-from-stdin` for a separate summary-only operation on two explicit
 WAN slots. It requires the exact-version selection file. Start with a preview:
@@ -69,17 +69,18 @@ The owner prepares the input in protected storage:
 - `schema_version` is `1`. `cluster_id` and `cluster_label` identify the exact
   provider target. `acl` is the full enabled policy and enforced revision.
 - `slots` maps two approved opaque device/uplink identifiers to `wan1` and
-  `wan2`. `observed` maps those same identifiers to objects with exactly one
-  `ipv4` CIDR and one `ipv6` CIDR apiece. Use independently qualified public
-  host routes for the actual API client source. The registry corroborates the
-  interface, address family, and host through a fresh Meraki discovery entry.
+  `wan2`. `observed` maps those same identifiers to objects with one `ipv4`
+  host CIDR apiece. Use independently qualified public WAN IPv4 host routes.
+  The registry corroborates each interface and host through fresh Meraki
+  discovery entries. Existing IPv6 entries keep their exact spelling and order.
+  IPv6 observations are outside the guarded writer's scope.
   Registry v1 cannot identify a physical device by interface name or address.
 - `registry_version_proof` is the keyed proof of the exact version associated
   with these independent observations, using the protected selection.
 - `retained` contains the two address lists for manual, recovery, and unresolved
   routes. Initially copy both lists from the baseline and set `checkpoint`
   to JSON `null`. For later runs, `checkpoint` contains `intent` and `outcome`
-  from the previous enforced receipt. Only its recorded managed routes may
+  from the previous enforced receipt. Only its recorded managed IPv4 routes may
   be retired. A current observation covered by retained access stays retained.
 
 The operation refuses incomplete or ambiguous observations, unsupported host
@@ -99,7 +100,8 @@ ID and label supplied by protected configuration. This uses the provider
 management API independently of Kubernetes and Object Storage. Use a preview
 before explicitly enabling execution with the same receipt directory. The
 operation requires the complete forward policy and forward revision and
-restores the prior policy with a new revision. Use the verified rollback receipt
+restores the prior policy with a new revision. The receipt is rejected if
+the IPv6 lists differ. Use the verified rollback receipt
 as the next checkpoint. A conflicting revision or unresolved provider state
 halts recovery.
 
@@ -111,11 +113,8 @@ halts recovery.
    Run the preview with read access
    against a fresh provider baseline, then observe a real registry transition
    in preview mode. Verify every planned removal against the reviewed managed
-   set. Qualify IPv6 for both approved uplinks before using the guarded
-   operation: observe public IPv6 and the actual client source to the API endpoint.
-   Verify IPv6 endpoint reachability for the target cluster. Missing,
-   ambiguous, private, or link-local observations cannot authorize additions
-   or retirement of existing routes.
+   set. Missing, ambiguous, or nonpublic IPv4 observations stop the run.
+   Check that both approved uplinks serve the intended IPv4 access.
 2. Give the scheduling owner a protected baseline record outside the cluster.
    Start it with the separately verified full policy, revision and managed
    list. Journal the baseline, planned policy and a distinct forward revision

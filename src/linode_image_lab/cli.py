@@ -389,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     acl_input.add_argument("--preserve-from-stdin", action="store_true",
                           help="Preview with a protected ACL ownership baseline from stdin. Requires summary output.")
     acl_input.add_argument("--reconcile-from-stdin", action="store_true",
-                           help="Read independently qualified dual-stack observations and ACL ownership from stdin.")
+                           help="Read independently qualified IPv4 observations and ACL ownership from stdin.")
     acl_input.add_argument("--rollback-from-stdin", action="store_true",
                            help="Read the first JSON line of a protected forward receipt from stdin.")
     acl_sync.add_argument("--registry-version-file",

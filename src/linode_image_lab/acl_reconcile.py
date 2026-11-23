@@ -49,19 +49,20 @@ def policy(acl: Any) -> dict[str, Any]:
                for routes in result["addresses"].values())
     ):
         raise ACLReconcileError("invalid_acl_policy")
-    return result
+    # Normalize for validation only. The provider's literal address lists are
+    # needed for drift checks, passthrough, and restoration.
+    return {**result, "addresses": {family: list(addresses[family]) for family in FAMILIES}}
 
 
-def host_route(route: Any, family: str) -> str:
+def host_route(route: Any) -> str:
     try:
         if not isinstance(route, str):
             raise ValueError
         network = ip_network(route, strict=True)
         address = network.network_address
         if (
-            network.version != int(family[-1]) or network.prefixlen != network.max_prefixlen
-            or route != str(network) or not address.is_global or address.is_multicast
-            or (network.version == 6 and (address.is_site_local or address.ipv4_mapped is not None))
+            network.version != 4 or network.prefixlen != 32 or route != str(network)
+            or not address.is_global or address.is_multicast
         ):
             raise ValueError
     except ValueError:
@@ -90,13 +91,14 @@ def validate_slots(slots: Any) -> None:
 def validate_ownership(slots: dict, retained: dict, managed: Any, addresses: dict) -> None:
     if not isinstance(managed, dict) or not managed.keys() <= slots.keys():
         raise ACLReconcileError("invalid_managed_ownership")
-    previous = {family: set(retained[family]) for family in FAMILIES}
+    if retained["ipv6"] != addresses["ipv6"]:
+        raise ACLReconcileError("ipv6_policy_changed")
+    previous = set(retained["ipv4"])
     for routes in managed.values():
-        if not isinstance(routes, dict) or not routes or not routes.keys() <= set(FAMILIES):
+        if not isinstance(routes, dict) or routes.keys() != {"ipv4"}:
             raise ACLReconcileError("invalid_managed_ownership")
-        for family, route in routes.items():
-            previous[family].add(host_route(route, family))
-    if any(previous[family] != set(addresses[family]) for family in FAMILIES):
+        previous.add(host_route(routes["ipv4"]))
+    if previous != set(addresses["ipv4"]):
         raise ACLReconcileError("unclassified_baseline_routes")
 
 
@@ -108,40 +110,42 @@ def observed_entry_is_fresh(entry: dict, now: datetime) -> bool:
         return False
 
 
-def planned_addresses(document: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
+def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
     slots, observed = document["slots"], document["observed"]
     if not isinstance(observed, dict) or observed.keys() != slots.keys():
         raise ACLReconcileError("incomplete_or_unapproved_sources")
 
     # The protected observation binds the intended device and slot. Registry v1
-    # supplies corroboration by interface, family and host, but omits device IDs.
+    # supplies corroboration by interface and IPv4 host, but omits device IDs.
     now = datetime.now(timezone.utc)
     discovered = {
-        (entry["source_ref"], entry["address_family"], entry["cidr"])
+        (entry["source_ref"], entry["cidr"])
         for entry in registry["entries"]
         if entry.get("kind") == "discovered" and entry.get("source_type") == "meraki_uplink_addresses"
+        and entry.get("address_family") == "ipv4"
         and isinstance(entry.get("source_ref"), str)
         and observed_entry_is_fresh(entry, now)
     }
-    wanted = {family: set(retained[family]) for family in FAMILIES}
-    coverage = {family: [ip_network(route) for route in retained[family]] for family in FAMILIES}
-    seen = {family: set() for family in FAMILIES}
+    coverage = [ip_network(route) for route in retained["ipv4"]]
+    seen = set()
     next_managed = {}
     for slot, interface in slots.items():
         routes = observed[slot]
-        if not isinstance(routes, dict) or set(routes) != set(FAMILIES):
+        if not isinstance(routes, dict) or routes.keys() != {"ipv4"}:
             raise ACLReconcileError("incomplete_or_unapproved_sources")
-        for family in FAMILIES:
-            route = host_route(routes[family], family)
-            if route in seen[family]:
-                raise ACLReconcileError("ambiguous_source_observations")
-            seen[family].add(route)
-            if (interface, family, route) not in discovered:
-                raise ACLReconcileError("source_observation_does_not_match_registry")
-            if not any(ip_network(route).subnet_of(network) for network in coverage[family]):
-                wanted[family].add(route)
-                next_managed.setdefault(slot, {})[family] = route
-    return {family: sorted(wanted[family]) for family in FAMILIES}, next_managed
+        route = host_route(routes["ipv4"])
+        if route in seen:
+            raise ACLReconcileError("ambiguous_source_observations")
+        seen.add(route)
+        if (interface, route) not in discovered:
+            raise ACLReconcileError("source_observation_does_not_match_registry")
+        if not any(ip_network(route).subnet_of(network) for network in coverage):
+            next_managed[slot] = {"ipv4": route}
+    current = before["addresses"]["ipv4"]
+    managed = {routes["ipv4"] for routes in next_managed.values()}
+    wanted = set(retained["ipv4"]) | managed
+    ipv4 = [route for route in current if route in wanted] + sorted(managed - set(current))
+    return {"ipv4": ipv4, "ipv6": list(before["addresses"]["ipv6"])}, next_managed
 
 
 def read_acl(client: ACLClientProtocol, cluster_id: int) -> dict[str, Any]:
@@ -267,7 +271,7 @@ def reconcile_acl(
             validate_registry(registry)
         except ValueError:
             raise ACLReconcileError("registry_invalid_or_unavailable") from None
-        addresses, managed_after = planned_addresses(document, retained, registry)
+        addresses, managed_after = planned_addresses(document, before, retained, registry)
 
     try:
         if client is None:
@@ -297,7 +301,7 @@ def reconcile_acl(
                 validate_registry(latest)
                 if latest != registry:
                     raise ValueError
-                planned_addresses(document, retained, latest)
+                planned_addresses(document, before, retained, latest)
             except ValueError:
                 raise ACLReconcileError("registry_changed_or_unavailable") from None
         receipt = {
