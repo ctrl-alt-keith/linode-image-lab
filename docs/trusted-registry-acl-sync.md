@@ -53,17 +53,66 @@ does not fall back to latest. The summary emits a keyed `version_proof` for
 private comparison with the selection, without printing the version or key.
 The proof identifies the read version and does not establish that it is current.
 
-## Qualification before recurring writes
+## Guarded dual-stack reconciliation
+
+Use `--reconcile-from-stdin` for a separate summary-only operation on two explicit
+WAN slots. It requires the exact-version selection file. Start with a preview:
+
+```sh
+linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summary \
+  --reconcile-from-stdin --registry-version-file /protected/selection.json \
+  < /protected/reconciliation.json
+```
+
+The owner prepares the input in protected storage:
+
+- `schema_version` is `1`. `cluster_id` and `cluster_label` identify the exact
+  provider target. `acl` is the full enabled policy and enforced revision.
+- `slots` maps two approved opaque device/uplink identifiers to `wan1` and
+  `wan2`. `observed` maps those same identifiers to objects with exactly one
+  `ipv4` CIDR and one `ipv6` CIDR apiece. Use independently qualified public
+  host routes for the actual API client source. The registry corroborates the
+  interface, address family, and host through a fresh Meraki discovery entry.
+  Registry v1 cannot identify a physical device by interface name or address.
+- `registry_version_proof` is the keyed proof of the exact version associated
+  with these independent observations, using the protected selection.
+- `retained` contains the two address lists for manual, recovery, and unresolved
+  routes. Initially copy both lists from the baseline and set `checkpoint`
+  to JSON `null`. For later runs, `checkpoint` contains `intent` and `outcome`
+  from the previous enforced receipt. Only its recorded managed routes may
+  be retired. A current observation covered by retained access stays retained.
+
+The operation refuses incomplete or ambiguous observations, unsupported host
+addresses, invalid ownership, stale inputs, and drift. When explicitly approved,
+add `--execute --acl-receipt-dir /protected/acl-receipts`. Use one owner-only
+directory shared by the sole writer and recovery operator. The command requires
+the same version to still be current, durably creates an exclusive receipt for
+the baseline revision, and rechecks the full ACL immediately before one PUT.
+It reports enforcement only after provider GET returns the exact policy and new
+revision. The receipt's first JSON line records intent and its second records
+enforcement. An interrupted or uncertain attempt leaves the intent available.
+Keep the receipt and reconcile the actual provider state before another run.
+
+For recovery, send only the first JSON line of the protected forward receipt to
+`acl-sync --rollback-from-stdin --output-format summary`, with the exact cluster
+ID and label supplied by protected configuration. This uses the provider
+management API independently of Kubernetes and Object Storage. Use a preview
+before explicitly enabling execution with the same receipt directory. The
+operation requires the complete forward policy and forward revision and
+restores the prior policy with a new revision. Use the verified rollback receipt
+as the next checkpoint. A conflicting revision or unresolved provider state
+halts recovery.
+
+## Qualification before scheduling writes
 
 1. Keep the staged Job suspended. Privately classify existing routes and review
    the cap, registry sources eligible for API access, allowable add/remove
-   deltas, and fresh registry behavior. Initially retain any route with
-   unresolved ownership. Run the preview with read access
+   deltas, and fresh registry behavior. Initially retain all existing routes.
+   Run the preview with read access
    against a fresh provider baseline, then observe a real registry transition
    in preview mode. Verify every planned removal against the reviewed managed
-   set. This preview preserves IPv6 as read from the baseline. Qualify IPv6
-   separately before extending planning: identify each approved uplink and
-   observe its public IPv6 and the actual client source to the API endpoint.
+   set. Qualify IPv6 for both approved uplinks before using the guarded
+   operation: observe public IPv6 and the actual client source to the API endpoint.
    Verify IPv6 endpoint reachability for the target cluster. Missing,
    ambiguous, private, or link-local observations cannot authorize additions
    or retirement of existing routes.

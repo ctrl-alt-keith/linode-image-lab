@@ -19,6 +19,8 @@ from .trusted_registry import (
     validate_registry,
 )
 
+MAX_PROTECTED_ACL_INPUT = 256 * 1024
+
 
 class ACLSyncError(ValueError):
     def __init__(self, message: str, manifest: dict[str, Any] | None = None) -> None:
@@ -37,7 +39,7 @@ def read_preservation_baseline(stream: TextIO) -> dict[str, Any]:
             raise ValueError("duplicate key")
         return result
 
-    limit = 256 * 1024
+    limit = MAX_PROTECTED_ACL_INPUT
     try:
         payload = stream.read(limit + 1)
         if len(payload) > limit:
@@ -81,7 +83,7 @@ def raise_acl_update_failure(plan: dict[str, Any], exc: Exception, private_file:
     raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from None
 
 
-def open_private_error_file(path: str) -> int:
+def open_private_error_file(path: str, *, sync_parent: bool = False) -> int:
     candidate = Path(path)
     parent = candidate.parent
     parent_fd: int | None = None
@@ -105,6 +107,8 @@ def open_private_error_file(path: str) -> int:
         created = os.fstat(descriptor)
         if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid() or stat.S_IMODE(created.st_mode) != 0o600:
             raise OSError
+        if sync_parent:
+            os.fsync(parent_fd)
         return descriptor
     except (OSError, RuntimeError) as exc:
         if descriptor is not None:

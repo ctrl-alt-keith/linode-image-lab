@@ -76,6 +76,20 @@ def registry_payload(*, valid_until: str = "2030-01-01T00:00:00Z", cidr: str = "
 
 
 class TrustedRegistryTests(unittest.TestCase):
+    def test_current_registry_version_check_requests_latest_and_rejects_drift(self) -> None:
+        kwargs = dict(endpoint_url="https://us-east-1.linodeobjects.com",
+                      bucket="example-bucket", object_key="registry.json",
+                      environ={ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-value"},
+                      expected_current_version_id="synthetic-version")
+        with patch("linode_image_lab.trusted_registry.urlopen",
+                   return_value=FakeHTTPResponse(registry_payload(), "synthetic-version")) as fetch:
+            self.assertEqual(fetch_registry_from_object_storage(**kwargs)["schema_version"], 1)
+        self.assertTrue(fetch.call_args.args[0].full_url.endswith("/example-bucket/registry.json"))
+        with patch("linode_image_lab.trusted_registry.urlopen",
+                   return_value=FakeHTTPResponse(registry_payload(), "different-version")):
+            with self.assertRaisesRegex(RegistryFetchError, "response mismatch"):
+                fetch_registry_from_object_storage(**kwargs)
+
     def test_exact_version_is_signed_and_response_must_match(self) -> None:
         requests: list[object] = []
         def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:

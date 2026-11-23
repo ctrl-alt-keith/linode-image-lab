@@ -1,0 +1,305 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from io import StringIO
+from ipaddress import IPv4Address, IPv6Address
+import json
+from pathlib import Path
+from contextlib import redirect_stdout
+import tempfile
+import unittest
+from unittest.mock import PropertyMock, patch
+
+from linode_image_lab.acl_reconcile import ACLReconcileError, host_route, reconcile_acl
+from linode_image_lab.cli import main
+from linode_image_lab.linode_api import LinodeApiError, LinodeClient
+from linode_image_lab.registry_version_selection import RegistryVersionSelection
+from linode_image_lab.trusted_registry import RegistryFetchError
+
+
+RETAINED = {"ipv4": ["192.0.2.1/32"], "ipv6": ["2001:db8:abcd::1/128"]}
+OBSERVED = {
+    "synthetic-a": {"ipv4": "198.51.100.2/32", "ipv6": "2001:db8:1::2/128"},
+    "synthetic-b": {"ipv4": "203.0.113.2/32", "ipv6": "2001:db8:2::2/128"},
+}
+SLOTS = {"synthetic-a": "wan1", "synthetic-b": "wan2"}
+SELECTION = RegistryVersionSelection("example-registry-version", bytes(range(32)))
+BASELINE = {"enabled": True, "addresses": RETAINED, "revision-id": "baseline"}
+
+
+def registry_payload(observed: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    start, stop = (now - timedelta(minutes=1)).isoformat(), (now + timedelta(minutes=15)).isoformat()
+    return {
+        "schema_version": 1,
+        "registry": {
+            "name": "synthetic-registry", "generated_at": start, "valid_until": stop, "publisher_version": "1",
+        },
+        "entries": [
+            {
+                "cidr": route, "address_family": family, "status": "active", "kind": "discovered",
+                "source_type": "meraki_uplink_addresses", "source_ref": SLOTS[slot],
+                "observed_at": start, "expires_at": stop,
+            }
+            for slot, routes in observed.items() for family, route in routes.items()
+        ],
+    }
+
+
+class FakeACL:
+    def __init__(self, directory: Path) -> None:
+        self.acl = deepcopy(BASELINE)
+        self.directory = directory
+        self.requests = []
+        self.reads = 0
+        self.fail_put = False
+        self.accept_put = True
+        self.drift_after_put = False
+        self.stale_after_put = False
+        self.drift_at_read = None
+        self.stale = None
+
+    def get_lke_cluster(self, cluster_id) -> dict:
+        return {"id": 12345, "label": "synthetic-cluster"}
+
+    def get_lke_control_plane_acl(self, cluster_id) -> dict:
+        self.reads += 1
+        if self.reads == self.drift_at_read:
+            return {"acl": {**self.acl, "revision-id": "changed-after-plan"}}
+        if self.stale is not None:
+            stale, self.stale = self.stale, None
+            return {"acl": deepcopy(stale)}
+        return {"acl": deepcopy(self.acl)}
+
+    def update_lke_control_plane_acl(self, cluster_id, acl) -> dict:
+        receipts = [json.loads(path.read_text().splitlines()[0]) for path in self.directory.glob("*.jsonl")]
+        if not any(receipt["after"] == acl for receipt in receipts):
+            raise AssertionError("PUT preceded durable intent")
+        self.requests.append(deepcopy(acl))
+        if self.stale_after_put:
+            self.stale = self.acl
+        if self.accept_put:
+            self.acl = deepcopy(acl)
+        if self.drift_after_put:
+            self.acl["addresses"]["ipv6"] = []
+        if self.fail_put:
+            raise LinodeApiError("synthetic lost response")
+        return {"acl": deepcopy(acl)}
+
+
+class GuardedACLTest(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name).resolve()
+        self.client = FakeACL(self.directory)
+        # Permit RFC documentation addresses in simulated provider responses.
+        # Production public-address validation is checked separately below.
+        for cls in (IPv4Address, IPv6Address):
+            self.enterContext(patch.object(cls, "is_global", new_callable=PropertyMock, return_value=True))
+        self.enterContext(patch("linode_image_lab.acl_reconcile.time.sleep"))
+        self.document = {
+            "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
+            "acl": deepcopy(BASELINE), "retained": deepcopy(RETAINED), "slots": SLOTS, "checkpoint": None,
+            "observed": deepcopy(OBSERVED), "registry_version_proof": SELECTION.proof(),
+        }
+
+    def run_acl(self, *, document=None, execute=True, rollback=False, effect=None):
+        document = self.document if document is None else document
+        payload = {} if rollback else registry_payload(document["observed"])
+        with patch("linode_image_lab.acl_reconcile.fetch_registry_from_object_storage",
+                   return_value=payload, side_effect=effect) as fetch:
+            result = reconcile_acl(
+                document=document, cluster_id=12345, cluster_label="synthetic-cluster", rollback=rollback,
+                execute=execute, receipt_dir=str(self.directory) if execute else None,
+                selection=None if rollback else SELECTION, registry_args={}, client=self.client,
+            )
+        self.reads = [call.kwargs for call in fetch.call_args_list]
+        return result
+
+    def receipts(self) -> list:
+        return [[json.loads(line) for line in path.read_text().splitlines()]
+                for path in self.directory.glob("*.jsonl")]
+
+    def test_guarded_preview_and_successive_dual_stack_updates(self) -> None:
+        plan = self.run_acl(execute=False)
+        self.assertEqual(plan["status"], "planned")
+        self.assertEqual(plan["change_counts"]["additions"], {"ipv4": 2, "ipv6": 2})
+        self.assertEqual(self.receipts(), [])
+        self.assertEqual(self.client.requests, [])
+        self.client.stale_after_put = True
+        result = self.run_acl()
+        self.assertEqual(self.reads, [
+            {"exact_version_id": SELECTION.version_id}, {"expected_current_version_id": SELECTION.version_id},
+        ])
+        self.assertTrue(result["enforcement_verified"])
+        [[intent, outcome]] = self.receipts()
+        self.assertEqual(outcome, {"status": "enforced"})
+        self.assertEqual(intent["managed_before"], {})
+        self.assertEqual(intent["managed_after"], OBSERVED)
+        self.assertTrue(intent["after"]["enabled"])
+        self.assertNotEqual(intent["before"]["revision-id"], intent["after"]["revision-id"])
+
+        self.document.update(acl=intent["after"], checkpoint={"intent": intent, "outcome": outcome})
+        self.document["observed"]["synthetic-a"] = {"ipv4": "198.51.100.3/32", "ipv6": "2001:db8:1::3/128"}
+        result = self.run_acl()
+        self.assertEqual(result["change_counts"], {
+            "additions": {"ipv4": 1, "ipv6": 1}, "removals": {"ipv4": 1, "ipv6": 1},
+        })
+        for family in RETAINED:
+            self.assertEqual(set(self.client.acl["addresses"][family]), {
+                *RETAINED[family], *(routes[family] for routes in self.document["observed"].values()),
+            })
+
+    def test_preexisting_matches_are_never_enrolled_by_equality(self) -> None:
+        for family, route in OBSERVED["synthetic-a"].items():
+            self.document["retained"][family].append(route)
+        self.document["acl"]["addresses"] = deepcopy(self.document["retained"])
+        self.client.acl = deepcopy(self.document["acl"])
+        self.run_acl()
+        [[intent, _]] = self.receipts()
+        self.assertNotIn("synthetic-a", intent["managed_after"])
+        self.assertEqual(intent["retained"], {
+            family: sorted(routes) for family, routes in self.document["retained"].items()
+        })
+
+    def test_incomplete_ambiguous_or_externally_unproven_input_fails_closed(self) -> None:
+        for reason, mutate in (
+            ("incomplete_or_unapproved_sources", lambda d: d["observed"]["synthetic-b"].pop("ipv6")),
+            ("incomplete_or_unapproved_sources", lambda d: d["observed"].pop("synthetic-b")),
+            ("ambiguous_source_observations", lambda d: d["observed"]["synthetic-b"].update(OBSERVED["synthetic-a"])),
+            ("source_version_proof_mismatch", lambda d: d.update(registry_version_proof="0" * 64)),
+            ("unverified_ownership_checkpoint", lambda d: d.update(checkpoint={"intent": {}, "outcome": {}})),
+            ("unclassified_baseline_routes", lambda d: d["retained"]["ipv6"].clear()),
+        ):
+            document = deepcopy(self.document)
+            mutate(document)
+            with self.subTest(reason=reason), self.assertRaisesRegex(ACLReconcileError, reason):
+                self.run_acl(document=document)
+        for kind in ("static", "stale"):
+            payload = registry_payload(OBSERVED)
+            entry = payload["entries"][1]
+            if kind == "static":
+                entry.update(kind="static", source_type="config")
+            else:
+                entry["expires_at"] = "2000-01-01T00:00:00Z"
+            with self.subTest(kind=kind), self.assertRaisesRegex(ACLReconcileError, "does_not_match_registry"):
+                self.run_acl(effect=[payload])
+        self.assertEqual(self.receipts(), [])
+        self.assertEqual(self.client.requests, [])
+
+    def test_registry_and_acl_are_rechecked_before_write(self) -> None:
+        payload = registry_payload(OBSERVED)
+        for changed in (RegistryFetchError("version mismatch"), {**payload, "unexpected": True}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ACLReconcileError, "registry_changed"):
+                self.run_acl(effect=[payload, changed])
+        self.assertEqual(self.receipts(), [])
+        self.client.drift_at_read = self.client.reads + 2
+        with self.assertRaisesRegex(ACLReconcileError, "baseline_drift"):
+            self.run_acl()
+        self.assertEqual(len(self.receipts()[0]), 1)
+        self.assertEqual(self.client.requests, [])
+
+    def test_response_loss_prevents_retry_from_same_baseline(self) -> None:
+        self.client.fail_put = True
+        self.client.accept_put = False
+        with self.assertRaisesRegex(ACLReconcileError, "provider_result_unverified") as failure:
+            self.run_acl()
+        self.assertEqual(failure.exception.status, "uncertain")
+        self.assertEqual(len(self.receipts()[0]), 1)
+        with self.assertRaisesRegex(ACLReconcileError, "already_exists"):
+            self.run_acl()
+        self.assertEqual(len(self.client.requests), 1)
+
+    def test_matching_revision_without_exact_addresses_does_not_verify(self) -> None:
+        self.client.drift_after_put = True
+        with self.assertRaisesRegex(ACLReconcileError, "unexpected_readback") as failure:
+            self.run_acl()
+        self.assertEqual(failure.exception.status, "uncertain")
+        self.assertEqual(len(self.receipts()[0]), 1)
+
+    def test_timeout_keeps_pending_receipt_without_a_second_put(self) -> None:
+        self.client.accept_put = False
+        with self.assertRaisesRegex(ACLReconcileError, "enforcement_timeout") as failure:
+            self.run_acl()
+        self.assertEqual(failure.exception.status, "uncertain")
+        self.assertEqual(len(self.receipts()[0]), 1)
+        self.assertEqual(len(self.client.requests), 1)
+
+    def test_rollback_recovers_lost_ack_only_if_forward_is_fully_enforced(self) -> None:
+        self.client.fail_put = True
+        with self.assertRaises(ACLReconcileError):
+            self.run_acl()
+        [[intent]] = self.receipts()
+        self.client.fail_put = False
+        self.client.acl["revision-id"] = "different-revision"
+        with self.assertRaisesRegex(ACLReconcileError, "baseline_drift"):
+            self.run_acl(document=intent, rollback=True)
+        self.client.acl = deepcopy(intent["after"])
+        result = self.run_acl(document=intent, rollback=True)
+        self.assertEqual(result["status"], "enforced")
+        self.assertEqual(self.client.acl["addresses"], BASELINE["addresses"])
+        self.assertNotIn(self.client.acl["revision-id"], (BASELINE["revision-id"], intent["after"]["revision-id"]))
+        self.assertEqual(self.reads, [])
+
+    def test_cli_rollback_needs_only_the_provider_and_protected_receipt(self) -> None:
+        self.run_acl()
+        [[intent, _]] = self.receipts()
+        output = StringIO()
+        with patch("sys.stdin", StringIO(json.dumps(intent))), redirect_stdout(output), patch(
+            "linode_image_lab.acl_reconcile.LinodeClient.from_env", return_value=LinodeClient()
+        ), patch("linode_image_lab.acl_reconcile.LinodeClient._request",
+                 side_effect=[self.client.get_lke_cluster(12345), self.client.get_lke_control_plane_acl(12345)]):
+            self.assertEqual(main([
+                "acl-sync", "--cluster-id", "12345", "--cluster-label", "synthetic-cluster",
+                "--output-format", "summary", "--rollback-from-stdin",
+            ]), 0)
+        self.assertEqual(json.loads(output.getvalue())["operation"], "rollback")
+        for private in ("synthetic-cluster", "198.51.100", intent["after"]["revision-id"]):
+            self.assertNotIn(private, output.getvalue())
+
+    def test_cli_guarded_execute_uses_exact_provider_resource_and_summary(self) -> None:
+        selection = self.directory / "selection.json"
+        selection.write_text(json.dumps({"version_id": SELECTION.version_id, "proof_key": SELECTION.proof_key.hex()}))
+        selection.chmod(0o600)
+
+        def provider_request(_client, method, path, payload=None, **options):
+            if path == "/lke/clusters/12345" and method == "GET":
+                return self.client.get_lke_cluster(12345)
+            self.assertEqual(path, "/lke/clusters/12345/control_plane_acl")
+            if method == "GET":
+                return self.client.get_lke_control_plane_acl(12345)
+            self.assertEqual(method, "PUT")
+            self.assertFalse(options["retry"])
+            return self.client.update_lke_control_plane_acl(12345, payload["acl"])
+
+        output = StringIO()
+        with patch("sys.stdin", StringIO(json.dumps(self.document))), redirect_stdout(output), patch(
+            "linode_image_lab.acl_reconcile.LinodeClient.from_env", return_value=LinodeClient()
+        ), patch.object(LinodeClient, "_request", autospec=True, side_effect=provider_request), patch(
+            "linode_image_lab.acl_reconcile.fetch_registry_from_object_storage", return_value=registry_payload(OBSERVED)
+        ):
+            self.assertEqual(main([
+                "acl-sync", "--cluster-id", "12345", "--cluster-label", "synthetic-cluster",
+                "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+                "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
+                "--output-format", "summary", "--reconcile-from-stdin", "--registry-version-file", str(selection),
+                "--execute", "--acl-receipt-dir", str(self.directory),
+            ]), 0)
+        self.assertEqual(len(self.client.requests), 1)
+        summary = json.loads(output.getvalue())
+        self.assertEqual(summary["status"], "enforced")
+        self.assertTrue(summary["enforcement_verified"])
+        for private in (SELECTION.version_id, "12345", "198.51.100", "2001:db8", str(self.directory)):
+            self.assertNotIn(private, output.getvalue())
+
+
+class PublicHostValidationTest(unittest.TestCase):
+    def test_rejects_nonpublic_or_nonhost_routes(self) -> None:
+        for route, family in (
+            ("fe80::1/128", "ipv6"), ("fd00::1/128", "ipv6"), ("ff02::1/128", "ipv6"),
+            ("::ffff:192.0.2.1/128", "ipv6"), ("2001:db8::/64", "ipv6"), ("10.0.0.1/32", "ipv4"),
+        ):
+            with self.subTest(route=route), self.assertRaisesRegex(ACLReconcileError, "invalid_source_host"):
+                host_route(route, family)
