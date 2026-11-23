@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Protocol, TextIO
 
 from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import (
     TrustedRegistry,
     TrustedRegistryError,
@@ -324,6 +325,7 @@ def acl_sync_plan(
     registry_region: str | None = None,
     provider_error_file: str | None = None,
     preservation_baseline: dict[str, Any] | None = None,
+    registry_selection: RegistryVersionSelection | None = None,
     allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
@@ -334,6 +336,8 @@ def acl_sync_plan(
         raise ACLSyncError("positive --cluster-id and non-empty --cluster-label are required")
     if preservation_baseline is not None and (execute or allow_enable or provider_error_file is not None):
         raise ACLPreviewError("preservation_preview_only")
+    if registry_selection is not None and preservation_baseline is None:
+        raise ACLPreviewError("registry_version_requires_preservation_preview")
     if provider_error_file is not None and not execute:
         raise ACLSyncError("private provider error file requires --execute")
     sync_client = client or LinodeClient.from_env(
@@ -343,6 +347,7 @@ def acl_sync_plan(
         registry = validate_registry(fetch_registry_from_object_storage(
             endpoint_url=registry_endpoint_url, bucket=registry_bucket,
             object_key=registry_object_key, region=registry_region, environ=environ,
+            **({"exact_version_id": registry_selection.version_id} if registry_selection is not None else {}),
         ))
         expected_cluster(sync_client, cluster_id, cluster_label)
         original_acl = normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id))
@@ -360,6 +365,8 @@ def acl_sync_plan(
     plan = build_acl_sync_manifest(cluster_id=cluster_id, registry=registry, current_acl=original_acl, intended=intended)
     if preservation_baseline is not None:
         plan["preview_mode"] = "preserve_routes"
+    if registry_selection is not None:
+        plan["registry"]["version_proof"] = registry_selection.proof()
     if not execute:
         return plan
 
@@ -444,6 +451,8 @@ def routine_outcome(
         if manifest.get("preview_mode") == "preserve_routes":
             outcome["preview_mode"] = "preserve_routes"
             outcome["baseline_verified"] = True
+        if "version_proof" in manifest["registry"]:
+            outcome["version_proof"] = manifest["registry"]["version_proof"]
         if "update_failure" in manifest:
             outcome["update_failure"] = manifest["update_failure"]
         if "private_error_artifact" in manifest:

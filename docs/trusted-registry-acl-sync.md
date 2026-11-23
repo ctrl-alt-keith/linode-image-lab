@@ -44,6 +44,15 @@ drift, unsuitable registry data, or a proposed managed list above the cap.
 The summary shows change counts and a failure reason where available. The
 preview accepts neither execute nor first enablement.
 
+For a qualification run, pass `--registry-version-file /protected/selection.json`
+as well. Use the same per-attempt selection format as the
+[firewall dry run](trusted-registry-firewall-sync.md). Require an independently
+selected fresh version of the exact configured key. The reader sends a
+version-specific GET, refuses a missing or different response version, and
+does not fall back to latest. The summary emits a keyed `version_proof` for
+private comparison with the selection, without printing the version or key.
+The proof identifies the read version and does not establish that it is current.
+
 ## Qualification before recurring writes
 
 1. Keep the staged Job suspended. Privately classify existing routes and review
@@ -52,7 +61,12 @@ preview accepts neither execute nor first enablement.
    unresolved ownership. Run the preview with read access
    against a fresh provider baseline, then observe a real registry transition
    in preview mode. Verify every planned removal against the reviewed managed
-   set. Keep IPv6 policy unchanged.
+   set. This preview preserves IPv6 as read from the baseline. Qualify IPv6
+   separately before extending planning: identify each approved uplink and
+   observe its public IPv6 and the actual client source to the API endpoint.
+   Verify IPv6 endpoint reachability for the target cluster. Missing,
+   ambiguous, private, or link-local observations cannot authorize additions
+   or retirement of existing routes.
 2. Give the scheduling owner a protected baseline record outside the cluster.
    Start it with the separately verified full policy, revision and managed
    list. Journal the baseline, planned policy and a distinct forward revision

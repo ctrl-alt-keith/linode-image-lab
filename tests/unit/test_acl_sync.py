@@ -8,13 +8,15 @@ from io import StringIO
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from linode_image_lab.acl_sync import (
     ACLPreviewError, ACLSyncError, acl_sync_plan, finish_private_error_file, open_private_error_file, routine_outcome,
 )
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
+from linode_image_lab.registry_version_selection import version_proof
+from linode_image_lab.trusted_registry import ACCESS_KEY_ENV, SECRET_KEY_ENV
 
 
 def registry_payload(*, cidrs: tuple[str, ...] = ("198.51.100.0/24",)) -> dict:
@@ -66,6 +68,13 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
 
 
 class ACLPreservationPreviewTests(unittest.TestCase):
+    CLI_ARGS = [
+        "acl-sync", "--cluster-id", "12345", "--cluster-label", "example-lke",
+        "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+        "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
+        "--output-format", "summary",
+    ]
+
     def setUp(self) -> None:
         self.client = FakeACLClient()
         self.retained = ["192.0.2.1/32", "203.0.113.0/24"]
@@ -148,12 +157,7 @@ class ACLPreservationPreviewTests(unittest.TestCase):
         self.assertEqual(self.client.writes, [])
 
     def test_cli_preview_blocks_execute_and_emits_only_summary(self) -> None:
-        args = [
-            "acl-sync", "--cluster-id", "12345", "--cluster-label", "example-lke",
-            "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
-            "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
-            "--output-format", "summary", "--preserve-from-stdin",
-        ]
+        args = [*self.CLI_ARGS, "--preserve-from-stdin"]
         output = StringIO()
         with patch("linode_image_lab.acl_sync.LinodeClient.from_env", return_value=self.client) as factory, \
              patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage",
@@ -174,6 +178,54 @@ class ACLPreservationPreviewTests(unittest.TestCase):
         self.assertEqual(summary["change_counts"]["removals"]["ipv4"], 1)
         self.assertNotIn("198.51.100.", output.getvalue())
         self.assertNotIn("12345", output.getvalue())
+        self.assertEqual(self.client.writes, [])
+
+    def test_version_selection_requires_preservation_preview_before_credentials(self) -> None:
+        output = StringIO()
+        with patch("linode_image_lab.cli.load_selection") as load, \
+             patch("linode_image_lab.acl_sync.LinodeClient.from_env") as provider, redirect_stdout(output):
+            self.assertEqual(main([*self.CLI_ARGS, "--registry-version-file", "/example/selection.json", "--execute"]), 1)
+        load.assert_not_called()
+        provider.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["preview_failure"], "registry_version_requires_preservation_preview")
+
+    def test_bound_version_read_from_cli_requires_matching_header_and_keeps_all_baseline_routes(self) -> None:
+        self.baseline["managed_ipv4"] = []
+        version, proof_key = "synthetic+version/1", bytes(range(32))
+        payload = registry_payload(cidrs=("198.51.100.2/32",))
+        payload["entries"].append({"status": "active", "address_family": "ipv6", "cidr": "2001:db8::2/128"})
+        with tempfile.TemporaryDirectory() as directory:
+            selection = Path(directory) / "selection.json"
+            selection.write_text(json.dumps({"version_id": version, "proof_key": proof_key.hex()}), encoding="utf-8")
+            selection.chmod(0o600)
+            args = [*self.CLI_ARGS, "--preserve-from-stdin", "--registry-version-file", str(selection)]
+            for observed in (version, "other-version", None):
+                with self.subTest(observed=observed):
+                    output = StringIO()
+                    response = MagicMock()
+                    response.__enter__.return_value = response
+                    response.headers = {"x-amz-version-id": observed}
+                    response.read.return_value = json.dumps(payload).encode("utf-8")
+                    with patch("linode_image_lab.acl_sync.LinodeClient.from_env", return_value=self.client), \
+                         patch("linode_image_lab.trusted_registry.urlopen", return_value=response) as get, \
+                         patch.dict(os.environ, {ACCESS_KEY_ENV: "test-access", SECRET_KEY_ENV: "test-value"}), \
+                         patch("sys.stdin", StringIO(json.dumps(self.baseline))), redirect_stdout(output):
+                        code = main(args)
+                    get.assert_called_once()
+                    self.assertTrue(get.call_args.args[0].full_url.endswith("?versionId=synthetic%2Bversion%2F1"))
+                    summary = json.loads(output.getvalue())
+                    if observed == version:
+                        self.assertEqual(code, 0)
+                        self.assertEqual(summary["version_proof"], version_proof(version, proof_key))
+                        self.assertEqual(summary["change_counts"], {
+                            "additions": {"ipv4": 1, "ipv6": 0}, "removals": {"ipv4": 0, "ipv6": 0},
+                        })
+                    else:
+                        self.assertEqual(code, 1)
+                        self.assertEqual(summary["preview_failure"], "registry_invalid_or_unavailable")
+                        self.assertNotIn("version_proof", summary)
+                    for private in (version, proof_key.hex(), "12345", "198.51.100", "2001:db8", str(selection)):
+                        self.assertNotIn(private, output.getvalue())
         self.assertEqual(self.client.writes, [])
 
 

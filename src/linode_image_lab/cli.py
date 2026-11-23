@@ -40,7 +40,7 @@ from .region_policy import (
     validate_region_policy_artifact,
     write_region_policy_artifact,
 )
-from .registry_version_selection import load_selection
+from .registry_version_selection import VersionSelectionError, load_selection
 from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
 from .service_acl_sync import ServiceACLSyncError, service_acl_sync
@@ -386,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Fresh private JSON path for this execute attempt's provider error details.")
     acl_sync.add_argument("--preserve-from-stdin", action="store_true",
                           help="Preview with a protected ACL ownership baseline from stdin. Requires summary output.")
+    acl_sync.add_argument("--registry-version-file",
+                          help="Protected per-attempt version selection file for the preservation preview.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -819,6 +821,10 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.command == "acl-sync":
         baseline = read_preservation_baseline(sys.stdin) if args.preserve_from_stdin else None
+        try:
+            selection = load_selection(args.registry_version_file) if args.registry_version_file is not None else None
+        except VersionSelectionError:
+            raise ACLPreviewError("registry_version_selection_invalid") from None
         return acl_sync_plan(
             cluster_id=args.cluster_id,
             cluster_label=args.cluster_label,
@@ -828,6 +834,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             registry_region=args.registry_region,
             provider_error_file=args.provider_error_file,
             preservation_baseline=baseline,
+            registry_selection=selection,
             allow_enable=args.allow_enable,
             execute=args.execute,
             plan_reporter=sys.stderr.write,
@@ -947,6 +954,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "acl-sync" and args.registry_version_file is not None and not args.preserve_from_stdin:
+            raise ACLPreviewError("registry_version_requires_preservation_preview")
         if args.command == "acl-sync" and args.preserve_from_stdin:
             if args.execute or args.allow_enable or args.provider_error_file is not None:
                 raise ACLPreviewError("preservation_preview_only")
