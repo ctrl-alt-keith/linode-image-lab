@@ -7,10 +7,11 @@ import os
 import stat
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, TextIO
 
 from .linode_api import LinodeApiError, LinodeClient, LinodeClientProtocol, LinodePreflightError
 from .manifest import PROJECT
+from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import (
     TrustedRegistry,
     TrustedRegistryError,
@@ -18,11 +19,37 @@ from .trusted_registry import (
     validate_registry,
 )
 
+MAX_PROTECTED_ACL_INPUT = 256 * 1024
+
 
 class ACLSyncError(ValueError):
     def __init__(self, message: str, manifest: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.manifest = manifest
+
+
+class ACLPreviewError(ACLSyncError):
+    """A preview stop with a fixed, safe reason for observer output."""
+
+
+def read_preservation_baseline(stream: TextIO) -> dict[str, Any]:
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError("duplicate key")
+        return result
+
+    limit = MAX_PROTECTED_ACL_INPUT
+    try:
+        payload = stream.read(limit + 1)
+        if len(payload) > limit:
+            raise ValueError("oversize baseline")
+        baseline = json.loads(payload, object_pairs_hook=unique)
+        if not isinstance(baseline, dict):
+            raise ValueError("invalid baseline")
+    except (OSError, ValueError, RecursionError):
+        raise ACLPreviewError("invalid_baseline_input") from None
+    return baseline
 
 
 DEFINITE_HTTP_REJECTIONS = {
@@ -56,7 +83,7 @@ def raise_acl_update_failure(plan: dict[str, Any], exc: Exception, private_file:
     raise ACLSyncError("acl-sync update outcome is uncertain; inspect provider ACL before retry", plan) from None
 
 
-def open_private_error_file(path: str) -> int:
+def open_private_error_file(path: str, *, sync_parent: bool = False) -> int:
     candidate = Path(path)
     parent = candidate.parent
     parent_fd: int | None = None
@@ -80,6 +107,8 @@ def open_private_error_file(path: str) -> int:
         created = os.fstat(descriptor)
         if not stat.S_ISREG(created.st_mode) or created.st_uid != os.getuid() or stat.S_IMODE(created.st_mode) != 0o600:
             raise OSError
+        if sync_parent:
+            os.fsync(parent_fd)
         return descriptor
     except (OSError, RuntimeError) as exc:
         if descriptor is not None:
@@ -170,18 +199,78 @@ def expected_cluster(client: ACLClientProtocol, cluster_id: int, cluster_label: 
         raise ACLSyncError("LKE cluster identity does not match the expected id and label")
 
 
+def preservation_payload(
+    baseline: dict[str, Any], *, cluster_id: int, cluster_label: str,
+    current_acl: dict[str, Any], registry: TrustedRegistry,
+) -> dict[str, Any]:
+    keys = {"schema_version", "cluster_id", "cluster_label", "acl", "managed_ipv4", "max_managed_ipv4"}
+    if (
+        set(baseline) != keys or type(baseline.get("schema_version")) is not int or baseline["schema_version"] != 1
+        or type(baseline.get("cluster_id")) is not int or baseline["cluster_id"] != cluster_id
+        or baseline.get("cluster_label") != cluster_label
+    ):
+        raise ACLPreviewError("invalid_baseline_identity")
+    saved_acl = baseline["acl"]
+    if (
+        not isinstance(saved_acl, dict) or set(saved_acl) != {"enabled", "addresses", "revision-id"}
+        or not isinstance(saved_acl["addresses"], dict) or set(saved_acl["addresses"]) != {"ipv4", "ipv6"}
+    ):
+        raise ACLPreviewError("invalid_baseline_policy")
+    try:
+        expected = normalize_acl(baseline)
+    except ACLSyncError:
+        raise ACLPreviewError("invalid_baseline_policy") from None
+    if not expected["enabled"] or not expected["revision-id"]:
+        raise ACLPreviewError("invalid_baseline_policy")
+    if expected != current_acl:
+        raise ACLPreviewError("baseline_drift")
+
+    addresses = expected["addresses"]
+    if any(
+        len(set(routes)) != len(routes) or any(ip_network(route).prefixlen == 0 for route in routes)
+        for routes in addresses.values()
+    ):
+        raise ACLPreviewError("invalid_baseline_policy")
+    managed, limit = baseline["managed_ipv4"], baseline["max_managed_ipv4"]
+    if (
+        type(limit) is not int or limit < 1 or not isinstance(managed, list)
+        or not all(isinstance(route, str) and route in addresses["ipv4"] and ip_network(route).prefixlen == 32
+                   for route in managed)
+        or len(set(managed)) != len(managed) or len(managed) > limit
+    ):
+        raise ACLPreviewError("invalid_managed_routes")
+    if not registry.ipv4_cidrs or any(ip_network(route).prefixlen != 32 for route in registry.ipv4_cidrs):
+        raise ACLPreviewError("registry_requires_ipv4_hosts")
+
+    retained = set(addresses["ipv4"]) - set(managed)
+    retained_networks = [ip_network(route) for route in retained]
+    next_managed = set()
+    for route in registry.ipv4_cidrs:
+        host = ip_network(route)
+        if not any(host.subnet_of(network) for network in retained_networks):
+            next_managed.add(route)
+    if len(next_managed) > limit:
+        raise ACLPreviewError("managed_route_limit_exceeded")
+    return {
+        "enabled": True,
+        "addresses": {"ipv4": sorted(retained | next_managed), "ipv6": addresses["ipv6"]},
+    }
+
+
 def build_acl_sync_manifest(
-    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any]
+    *, cluster_id: int, registry: TrustedRegistry, current_acl: dict[str, Any],
+    intended: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if registry.cidr_count == 0:
         raise ACLSyncError("trusted registry contains no active CIDRs")
-    intended = {
-        "enabled": True,
-        "addresses": {
-            "ipv4": list(registry.ipv4_cidrs),
-            "ipv6": list(registry.ipv6_cidrs),
-        },
-    }
+    if intended is None:
+        intended = {
+            "enabled": True,
+            "addresses": {
+                "ipv4": list(registry.ipv4_cidrs),
+                "ipv6": list(registry.ipv6_cidrs),
+            },
+        }
     current_addresses = current_acl["addresses"]
     diff = {
         action: {
@@ -239,6 +328,8 @@ def acl_sync_plan(
     registry_object_key: str,
     registry_region: str | None = None,
     provider_error_file: str | None = None,
+    preservation_baseline: dict[str, Any] | None = None,
+    registry_selection: RegistryVersionSelection | None = None,
     allow_enable: bool = False,
     execute: bool = False,
     client: ACLClientProtocol | None = None,
@@ -247,6 +338,10 @@ def acl_sync_plan(
 ) -> dict[str, Any]:
     if type(cluster_id) is not int or cluster_id <= 0 or not isinstance(cluster_label, str) or not cluster_label.strip():
         raise ACLSyncError("positive --cluster-id and non-empty --cluster-label are required")
+    if preservation_baseline is not None and (execute or allow_enable or provider_error_file is not None):
+        raise ACLPreviewError("preservation_preview_only")
+    if registry_selection is not None and preservation_baseline is None:
+        raise ACLPreviewError("registry_version_requires_preservation_preview")
     if provider_error_file is not None and not execute:
         raise ACLSyncError("private provider error file requires --execute")
     sync_client = client or LinodeClient.from_env(
@@ -256,12 +351,26 @@ def acl_sync_plan(
         registry = validate_registry(fetch_registry_from_object_storage(
             endpoint_url=registry_endpoint_url, bucket=registry_bucket,
             object_key=registry_object_key, region=registry_region, environ=environ,
+            **({"exact_version_id": registry_selection.version_id} if registry_selection is not None else {}),
         ))
         expected_cluster(sync_client, cluster_id, cluster_label)
         original_acl = normalize_acl(sync_client.get_lke_control_plane_acl(cluster_id))
-        plan = build_acl_sync_manifest(cluster_id=cluster_id, registry=registry, current_acl=original_acl)
     except (TrustedRegistryError, LinodePreflightError, ValueError) as exc:
+        if preservation_baseline is not None:
+            reason = "registry_invalid_or_unavailable" if isinstance(exc, TrustedRegistryError) else "target_read_failed"
+            raise ACLPreviewError(reason) from None
         raise ACLSyncError(str(exc)) from exc
+    intended = None
+    if preservation_baseline is not None:
+        intended = preservation_payload(
+            preservation_baseline, cluster_id=cluster_id, cluster_label=cluster_label,
+            current_acl=original_acl, registry=registry,
+        )
+    plan = build_acl_sync_manifest(cluster_id=cluster_id, registry=registry, current_acl=original_acl, intended=intended)
+    if preservation_baseline is not None:
+        plan["preview_mode"] = "preserve_routes"
+    if registry_selection is not None:
+        plan["registry"]["version_proof"] = registry_selection.proof()
     if not execute:
         return plan
 
@@ -320,7 +429,9 @@ def execute_plan_summary(plan: dict[str, Any]) -> str:
     )
 
 
-def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: bool = False) -> dict[str, Any]:
+def routine_outcome(
+    manifest: dict[str, Any] | None, *, execute: bool, failed: bool = False, preview_failure: str | None = None,
+) -> dict[str, Any]:
     outcome: dict[str, Any] = {
         "outcome_version": 1,
         "command": "acl-sync",
@@ -329,6 +440,8 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
         ),
         "execution_mode": "execute" if execute else "dry-run",
     }
+    if preview_failure is not None:
+        outcome.update(preview_mode="preserve_routes", preview_failure=preview_failure)
     if manifest is not None:
         outcome["planned_action"] = manifest["planned_action"]
         outcome["registry_generated_at"] = manifest["registry"]["generated_at"]
@@ -339,6 +452,11 @@ def routine_outcome(manifest: dict[str, Any] | None, *, execute: bool, failed: b
             for action in ("additions", "removals")
         }
         outcome["enforcement_verified"] = False
+        if manifest.get("preview_mode") == "preserve_routes":
+            outcome["preview_mode"] = "preserve_routes"
+            outcome["baseline_verified"] = True
+        if "version_proof" in manifest["registry"]:
+            outcome["version_proof"] = manifest["registry"]["version_proof"]
         if "update_failure" in manifest:
             outcome["update_failure"] = manifest["update_failure"]
         if "private_error_artifact" in manifest:

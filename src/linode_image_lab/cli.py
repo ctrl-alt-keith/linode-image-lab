@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from .cleanup import CleanupError, cleanup_plan
-from .acl_sync import ACLSyncError, acl_sync_plan, routine_outcome as acl_routine_outcome
+from .acl_reconcile import ACLReconcileError, reconcile_acl
+from .acl_sync import ACLPreviewError, ACLSyncError, acl_sync_plan, read_preservation_baseline
+from .acl_sync import routine_outcome as acl_routine_outcome
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
 from .capture_replicate_deploy import CaptureReplicateDeployError, capture_replicate_deploy_plan
@@ -39,7 +41,7 @@ from .region_policy import (
     validate_region_policy_artifact,
     write_region_policy_artifact,
 )
-from .registry_version_selection import load_selection
+from .registry_version_selection import VersionSelectionError, load_selection
 from .replicate import ReplicateError, replicate_plan
 from .regions import parse_regions
 from .service_acl_sync import ServiceACLSyncError, service_acl_sync
@@ -383,6 +385,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_cluster_args(acl_sync)
     acl_sync.add_argument("--provider-error-file",
                           help="Fresh private JSON path for this execute attempt's provider error details.")
+    acl_input = acl_sync.add_mutually_exclusive_group()
+    acl_input.add_argument("--preserve-from-stdin", action="store_true",
+                          help="Preview with a protected ACL ownership baseline from stdin. Requires summary output.")
+    acl_input.add_argument("--reconcile-from-stdin", action="store_true",
+                           help="Read independently qualified IPv4 observations and ACL ownership from stdin.")
+    acl_input.add_argument("--rollback-from-stdin", action="store_true",
+                           help="Read the first JSON line of a protected forward receipt from stdin.")
+    acl_sync.add_argument("--registry-version-file",
+                          help="Protected per-attempt version selection for a guarded ACL plan.")
+    acl_sync.add_argument("--acl-receipt-dir",
+                          help="Owner-only directory for guarded ACL execute receipts.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -528,7 +541,7 @@ def resolve_config_defaults(args: argparse.Namespace) -> None:
                 ("registry_endpoint_url", "--registry-endpoint-url"),
                 ("registry_bucket", "--registry-bucket"),
                 ("registry_object_key", "--registry-object-key"),
-            ) if getattr(args, field) is None
+            ) if getattr(args, field) is None and (not args.rollback_from_stdin or field in {"cluster_id", "cluster_label"})
         ]
         if missing:
             raise ValueError(f"acl-sync requires {', '.join(missing)}")
@@ -815,6 +828,27 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "acl-sync":
+        guarded = args.reconcile_from_stdin or args.rollback_from_stdin
+        try:
+            baseline = read_preservation_baseline(sys.stdin) if args.preserve_from_stdin or guarded else None
+            selection = load_selection(args.registry_version_file) if args.registry_version_file is not None else None
+        except ACLPreviewError:
+            if guarded:
+                raise ACLReconcileError("invalid_protected_input") from None
+            raise
+        except VersionSelectionError:
+            if guarded:
+                raise ACLReconcileError("registry_version_selection_invalid") from None
+            raise ACLPreviewError("registry_version_selection_invalid") from None
+        if guarded:
+            return reconcile_acl(
+                document=baseline, cluster_id=args.cluster_id, cluster_label=args.cluster_label,
+                rollback=args.rollback_from_stdin, execute=args.execute, receipt_dir=args.acl_receipt_dir,
+                selection=selection, registry_args=dict(
+                    endpoint_url=args.registry_endpoint_url, bucket=args.registry_bucket,
+                    object_key=args.registry_object_key, region=args.registry_region,
+                ),
+            )
         return acl_sync_plan(
             cluster_id=args.cluster_id,
             cluster_label=args.cluster_label,
@@ -823,6 +857,8 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             registry_object_key=args.registry_object_key,
             registry_region=args.registry_region,
             provider_error_file=args.provider_error_file,
+            preservation_baseline=baseline,
+            registry_selection=selection,
             allow_enable=args.allow_enable,
             execute=args.execute,
             plan_reporter=sys.stderr.write,
@@ -942,6 +978,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        guarded_acl = args.command == "acl-sync" and (args.reconcile_from_stdin or args.rollback_from_stdin)
+        if guarded_acl:
+            if (
+                args.output_format != "summary" or args.allow_enable or args.provider_error_file is not None
+                or args.manifest_file not in (None, "-")
+            ):
+                raise ACLReconcileError("guarded_acl_requires_summary_and_enabled_baseline")
+            if args.execute != (args.acl_receipt_dir is not None):
+                raise ACLReconcileError("execute_requires_receipt_directory")
+            if args.rollback_from_stdin == (args.registry_version_file is not None):
+                raise ACLReconcileError("forward_requires_exact_version_and_rollback_uses_receipt")
+        if args.command == "acl-sync" and not guarded_acl and args.acl_receipt_dir is not None:
+            raise ACLReconcileError("receipt_directory_requires_guarded_acl")
+        if args.command == "acl-sync" and not guarded_acl and args.registry_version_file is not None and not args.preserve_from_stdin:
+            raise ACLPreviewError("registry_version_requires_preservation_preview")
+        if args.command == "acl-sync" and args.preserve_from_stdin:
+            if args.execute or args.allow_enable or args.provider_error_file is not None:
+                raise ACLPreviewError("preservation_preview_only")
+            if args.output_format != "summary":
+                raise ACLPreviewError("preservation_requires_summary")
         if args.command == "region-policy":
             if args.region_policy_action == "generate":
                 emit_region_policy_generate(args)
@@ -1008,6 +1064,16 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("firewall-sync failed\n")
             return 1
         parser.error(str(exc))
+    except ACLReconcileError as exc:
+        sys.stdout.write(serialize_manifest({
+            "outcome_version": 1, "command": "acl-sync", "status": exc.status,
+            "execution_mode": "execute" if args.execute else "dry-run", "failure": str(exc),
+        }))
+        return 1
+    except ACLPreviewError as exc:
+        serialized = serialize_manifest(acl_routine_outcome(None, execute=False, failed=True, preview_failure=str(exc)))
+        sys.stdout.write(serialized)
+        return 1
     except ACLSyncError as exc:
         if args.output_format == "summary":
             serialized = serialize_manifest(acl_routine_outcome(exc.manifest, execute=args.execute, failed=True))
@@ -1036,7 +1102,10 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"{args.command} failed\n")
             return 1
         parser.error(str(exc))
-    emit_manifest(args, manifest)
+    if guarded_acl:
+        sys.stdout.write(serialize_manifest(manifest))
+    else:
+        emit_manifest(args, manifest)
     return 0
 
 

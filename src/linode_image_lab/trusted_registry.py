@@ -57,6 +57,7 @@ def fetch_registry_from_object_storage(
     environ: Mapping[str, str] | None = None,
     timeout_seconds: float = 30,
     exact_version_id: str | None = None,
+    expected_current_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Fetch registry JSON from Linode Object Storage using S3 SigV4."""
 
@@ -64,12 +65,15 @@ def fetch_registry_from_object_storage(
     access_key = _required_env_value(values, ACCESS_KEY_ENV)
     secret_key = _required_env_value(values, SECRET_KEY_ENV)
     endpoint = _parse_endpoint(endpoint_url)
-    if exact_version_id is not None and (
-        not isinstance(exact_version_id, str)
-        or not exact_version_id
-        or exact_version_id == "null"
-        or len(exact_version_id.encode("utf-8")) > 1024
-        or any(ord(char) < 33 or ord(char) == 127 for char in exact_version_id)
+    if exact_version_id is not None and expected_current_version_id is not None:
+        raise RegistryFetchError("exact and current registry version checks are mutually exclusive")
+    expected_version = exact_version_id if exact_version_id is not None else expected_current_version_id
+    if expected_version is not None and (
+        not isinstance(expected_version, str)
+        or not expected_version
+        or expected_version == "null"
+        or len(expected_version.encode("utf-8")) > 1024
+        or any(ord(char) < 33 or ord(char) == 127 for char in expected_version)
     ):
         raise RegistryFetchError("exact registry version is invalid")
     signing_region = region or _region_from_endpoint(endpoint.hostname or "")
@@ -92,7 +96,7 @@ def fetch_registry_from_object_storage(
     request = Request(request_url, method="GET", headers=headers)
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
-            if exact_version_id is not None and response.headers.get("x-amz-version-id") != exact_version_id:
+            if expected_version is not None and response.headers.get("x-amz-version-id") != expected_version:
                 raise RegistryFetchError("exact registry version response mismatch")
             body = response.read()
     except HTTPError as exc:
