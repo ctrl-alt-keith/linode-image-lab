@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .cleanup import CleanupError, cleanup_plan
-from .acl_sync import ACLSyncError, acl_sync_plan, routine_outcome as acl_routine_outcome
+from .acl_sync import ACLPreviewError, ACLSyncError, acl_sync_plan, read_preservation_baseline
+from .acl_sync import routine_outcome as acl_routine_outcome
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
 from .capture_replicate_deploy import CaptureReplicateDeployError, capture_replicate_deploy_plan
@@ -383,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_cluster_args(acl_sync)
     acl_sync.add_argument("--provider-error-file",
                           help="Fresh private JSON path for this execute attempt's provider error details.")
+    acl_sync.add_argument("--preserve-from-stdin", action="store_true",
+                          help="Preview with a protected ACL ownership baseline from stdin. Requires summary output.")
     add_registry_source_args(acl_sync)
 
     service_sync = subparsers.add_parser(
@@ -815,6 +818,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.command == "acl-sync":
+        baseline = read_preservation_baseline(sys.stdin) if args.preserve_from_stdin else None
         return acl_sync_plan(
             cluster_id=args.cluster_id,
             cluster_label=args.cluster_label,
@@ -823,6 +827,7 @@ def command_manifest(args: argparse.Namespace) -> dict[str, Any]:
             registry_object_key=args.registry_object_key,
             registry_region=args.registry_region,
             provider_error_file=args.provider_error_file,
+            preservation_baseline=baseline,
             allow_enable=args.allow_enable,
             execute=args.execute,
             plan_reporter=sys.stderr.write,
@@ -942,6 +947,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "acl-sync" and args.preserve_from_stdin:
+            if args.execute or args.allow_enable or args.provider_error_file is not None:
+                raise ACLPreviewError("preservation_preview_only")
+            if args.output_format != "summary":
+                raise ACLPreviewError("preservation_requires_summary")
         if args.command == "region-policy":
             if args.region_policy_action == "generate":
                 emit_region_policy_generate(args)
@@ -1008,6 +1018,10 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("firewall-sync failed\n")
             return 1
         parser.error(str(exc))
+    except ACLPreviewError as exc:
+        serialized = serialize_manifest(acl_routine_outcome(None, execute=False, failed=True, preview_failure=str(exc)))
+        sys.stdout.write(serialized)
+        return 1
     except ACLSyncError as exc:
         if args.output_format == "summary":
             serialized = serialize_manifest(acl_routine_outcome(exc.manifest, execute=args.execute, failed=True))

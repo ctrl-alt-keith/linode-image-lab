@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from linode_image_lab.acl_sync import (
-    ACLSyncError, acl_sync_plan, finish_private_error_file, open_private_error_file, routine_outcome,
+    ACLPreviewError, ACLSyncError, acl_sync_plan, finish_private_error_file, open_private_error_file, routine_outcome,
 )
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
@@ -63,6 +63,118 @@ def run_sync(client: FakeACLClient, *, execute: bool = False) -> dict:
         allow_enable=execute,
         execute=execute,
     )
+
+
+class ACLPreservationPreviewTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = FakeACLClient()
+        self.retained = ["192.0.2.1/32", "203.0.113.0/24"]
+        self.previous = "198.51.100.1/32"
+        self.baseline = {
+            "schema_version": 1,
+            "cluster_id": 12345,
+            "cluster_label": "example-lke",
+            "acl": {
+                "enabled": True,
+                "addresses": {"ipv4": [*self.retained, self.previous], "ipv6": ["2001:db8::1/128"]},
+                "revision-id": "baseline",
+            },
+            "managed_ipv4": [self.previous],
+            "max_managed_ipv4": 1,
+        }
+        self.client.acl = {"acl": json.loads(json.dumps(self.baseline["acl"]))}
+
+    def preview(self, *cidrs: str, payload: dict | None = None, execute: bool = False) -> dict:
+        with patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload(cidrs=cidrs) if payload is None else payload):
+            result = acl_sync_plan(
+                cluster_id=12345, cluster_label="example-lke", registry_endpoint_url="https://us-east-1.linodeobjects.com",
+                registry_bucket="example-bucket", registry_object_key="registry.json",
+                preservation_baseline=self.baseline, client=self.client, execute=execute,
+            )
+        return result
+
+    def test_repeated_host_changes_preserve_other_routes_without_accumulation(self) -> None:
+        for index, source in enumerate(("198.51.100.2/32", "198.51.100.3/32")):
+            plan = self.preview(source, "203.0.113.2/32")
+            self.assertEqual(plan["diff"]["additions"], {"ipv4": [source], "ipv6": []})
+            self.assertEqual(plan["diff"]["removals"], {"ipv4": [self.previous], "ipv6": []})
+            self.assertEqual(plan["provider_payload"], {
+                "enabled": True,
+                "addresses": {"ipv4": sorted([*self.retained, source]), "ipv6": ["2001:db8::1/128"]},
+            })
+            # Model promotion only after a new revision has independently been observed.
+            new_acl = {**plan["provider_payload"], "revision-id": f"enforced-{index}"}
+            self.baseline.update(acl=new_acl, managed_ipv4=[source])
+            self.client.acl = {"acl": {**new_acl}}
+            self.previous = source
+        self.assertEqual(self.preview(self.previous)["planned_action"], "keep_acl")
+        self.assertEqual(self.client.writes, [])
+
+    def test_readback_requires_both_revision_and_full_policy(self) -> None:
+        for changed in (
+            {"revision-id": "other"},
+            {"addresses": {"ipv4": self.retained, "ipv6": ["2001:db8::1/128"]}},
+            {"enabled": False},
+        ):
+            with self.subTest(changed=changed):
+                self.client.acl = {"acl": {**self.baseline["acl"], **changed}}
+                with self.assertRaisesRegex(ACLPreviewError, "baseline_drift"):
+                    self.preview("198.51.100.2/32")
+        self.assertEqual(self.client.writes, [])
+
+    def test_unclassified_current_route_stays_retained(self) -> None:
+        self.baseline["managed_ipv4"] = []
+        plan = self.preview("198.51.100.2/32")
+        self.assertEqual(plan["diff"]["removals"], {"ipv4": [], "ipv6": []})
+        self.assertIn(self.previous, plan["provider_payload"]["addresses"]["ipv4"])
+
+    def test_refuses_ambiguous_ownership_and_bad_registry(self) -> None:
+        for cidrs, reason in (
+            ((), "registry_requires_ipv4_hosts"),
+            (("198.51.100.0/24",), "registry_requires_ipv4_hosts"),
+            (("198.51.100.2/32", "198.51.100.3/32"), "managed_route_limit_exceeded"),
+            (("0.0.0.0/0",), "registry_invalid_or_unavailable"),
+        ):
+            with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ACLPreviewError, reason):
+                self.preview(*cidrs)
+        stale = registry_payload(cidrs=("198.51.100.2/32",))
+        stale["registry"].update(generated_at="2000-01-01T00:00:00Z", valid_until="2000-01-02T00:00:00Z")
+        with self.assertRaisesRegex(ACLPreviewError, "registry_invalid_or_unavailable"):
+            self.preview(payload=stale)
+        self.baseline["managed_ipv4"] = ["198.51.100.20/32"]
+        with self.assertRaisesRegex(ACLPreviewError, "invalid_managed_routes"):
+            self.preview("198.51.100.2/32")
+        self.assertEqual(self.client.writes, [])
+
+    def test_cli_preview_blocks_execute_and_emits_only_summary(self) -> None:
+        args = [
+            "acl-sync", "--cluster-id", "12345", "--cluster-label", "example-lke",
+            "--registry-endpoint-url", "https://us-east-1.linodeobjects.com",
+            "--registry-bucket", "example-bucket", "--registry-object-key", "registry.json",
+            "--output-format", "summary", "--preserve-from-stdin",
+        ]
+        output = StringIO()
+        with patch("linode_image_lab.acl_sync.LinodeClient.from_env", return_value=self.client) as factory, \
+             patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload(cidrs=("198.51.100.2/32",))), \
+             patch("sys.stdin", StringIO(json.dumps(self.baseline))), redirect_stdout(output):
+            self.assertEqual(main([*args, "--execute"]), 1)
+            factory.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue())["preview_failure"], "preservation_preview_only")
+        output = StringIO()
+        with patch("linode_image_lab.acl_sync.LinodeClient.from_env", return_value=self.client), \
+             patch("linode_image_lab.acl_sync.fetch_registry_from_object_storage",
+                   return_value=registry_payload(cidrs=("198.51.100.2/32",))), \
+             patch("sys.stdin", StringIO(json.dumps(self.baseline))), redirect_stdout(output):
+            self.assertEqual(main(args), 0)
+        summary = json.loads(output.getvalue())
+        self.assertEqual(summary["preview_mode"], "preserve_routes")
+        self.assertTrue(summary["baseline_verified"])
+        self.assertEqual(summary["change_counts"]["removals"]["ipv4"], 1)
+        self.assertNotIn("198.51.100.", output.getvalue())
+        self.assertNotIn("12345", output.getvalue())
+        self.assertEqual(self.client.writes, [])
 
 
 class ACLSyncTests(unittest.TestCase):
