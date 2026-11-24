@@ -9,6 +9,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
@@ -153,15 +154,10 @@ def corroborate_observations(slots: dict, observed: Any, registry: dict, now: da
     return corroborated
 
 
-def bind_wan_observations(
-    *,
+def _match_wan_observations(
     approved_slots: dict[str, WanSource],
     observations: list[WanObservation],
-    max_age: timedelta,
-    selection: RegistryVersionSelection,
-    registry_args: dict[str, Any],
-) -> dict[str, Any]:
-    """Prepare guarded input fields from independently collected WAN observations."""
+) -> tuple[dict[str, str], dict[WanSource, WanObservation]]:
     slots = {slot: source.interface for slot, source in approved_slots.items()}
     validate_slots(slots)
     by_source = {observation.source: observation for observation in observations}
@@ -171,6 +167,19 @@ def bind_wan_observations(
         or any(not source.device_id or source.device_id != source.device_id.strip() for source in expected_sources)
     ):
         raise ACLReconcileError("incomplete_or_unapproved_sources")
+    return slots, by_source
+
+
+def bind_wan_observations(
+    *,
+    approved_slots: dict[str, WanSource],
+    observations: list[WanObservation],
+    max_age: timedelta,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+) -> dict[str, Any]:
+    """Prepare guarded input fields from independently collected WAN observations."""
+    slots, by_source = _match_wan_observations(approved_slots, observations)
     if max_age <= timedelta(0):
         raise ACLReconcileError("invalid_source_observation_age")
     if not selection.version_id:
@@ -428,3 +437,36 @@ def reconcile_acl(
         "change_counts": {"additions": added, "removals": removed},
         **({"version_proof": selection.proof()} if selection is not None else {}),
     }
+
+
+def preview_dashboard_wans(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    baseline: dict[str, Any],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol | None = None,
+) -> dict[str, Any]:
+    """Compare one direct dashboard read to the selected registry and retained ACL."""
+    if not selection.version_id:
+        raise ACLReconcileError("invalid_registry_version_selection")
+    before = policy(baseline)
+    observations = read_dashboard()
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    slots, by_source = _match_wan_observations(approved_slots, observations)
+    document = {
+        "schema_version": 1, "cluster_id": cluster_id, "cluster_label": cluster_label,
+        "acl": before, "retained": before["addresses"], "checkpoint": None,
+        "slots": slots,
+        "observed": {slot: {"ipv4": by_source[source].ipv4} for slot, source in approved_slots.items()},
+        "registry_version_proof": selection.proof(),
+    }
+    summary = reconcile_acl(
+        document=document, cluster_id=cluster_id, cluster_label=cluster_label,
+        rollback=False, execute=False, receipt_dir=None, selection=selection,
+        registry_args=registry_args, client=client,
+    )
+    return {**summary, "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at}

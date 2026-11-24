@@ -109,10 +109,22 @@ For a summary-only preview in a qualified in-memory caller, use
 Use the same reader authority, exact-version verification, and all-retained
 baseline checks as the CLI.
 
-The operation refuses incomplete or ambiguous observations, unsupported host
-addresses, invalid ownership, stale inputs, and drift. When explicitly approved,
-add `--execute --acl-receipt-dir /protected/acl-receipts`. Use one owner-only
-directory shared by the sole writer and recovery operator. The command requires
+To preview the Meraki dashboard view when source sample times are unavailable,
+use `acl_reconcile.preview_dashboard_wans` in a qualified in-memory caller.
+Supply the independently approved device/interface-to-slot mapping, protected
+ACL baseline, and independently selected exact registry version. The callback
+must issue a fresh, authorized Meraki addresses GET for this invocation and
+return both approved readings with `observed_at=None` when sample times are
+unavailable. All baseline routes are retained. The sanitized summary reports
+`observation_basis=dashboard_at_retrieval` and `dashboard_fetched_at` for the
+retrieval. Forward execution still requires verified source observation times
+and an unexpired deadline.
+
+Guarded execution refuses incomplete or ambiguous observations, unsupported host
+addresses, invalid ownership, stale inputs, and drift. For an explicitly
+approved guarded CLI run, add `--execute --acl-receipt-dir /protected/acl-receipts`.
+Use one owner-only directory shared by the sole writer and recovery operator.
+The command requires
 the same version to still be current, durably creates an exclusive receipt for
 the baseline revision, and rechecks the full ACL and observation deadline
 immediately before one PUT. If the deadline passes after intent is recorded,

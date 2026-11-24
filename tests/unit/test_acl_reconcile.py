@@ -11,10 +11,11 @@ from pathlib import Path
 from contextlib import redirect_stdout
 import tempfile
 import unittest
-from unittest.mock import PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from linode_image_lab.acl_reconcile import (
-    ACLReconcileError, WanObservation, WanSource, bind_wan_observations, host_route, reconcile_acl,
+    ACLReconcileError, WanObservation, WanSource, bind_wan_observations, host_route,
+    preview_dashboard_wans, reconcile_acl,
 )
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
@@ -481,6 +482,83 @@ class WanObservationBindingTest(unittest.TestCase):
         for private in (SELECTION.version_id, "synthetic-device", "198.51.100", "2001:db8", '"baseline"'):
             self.assertNotIn(private, summary)
         self.assertEqual(client.acl, baseline)
+
+    def test_dashboard_preview_uses_retrieval_time_and_cannot_execute(self) -> None:
+        observations = [replace(observation, observed_at=None) for observation in self.observations]
+        retained = {**RETAINED, "ipv4": [*RETAINED["ipv4"], *(entry["ipv4"] for entry in OBSERVED.values())]}
+        baseline = {**BASELINE, "addresses": retained}
+        client = FakeACL(Path.cwd())
+        client.acl = deepcopy(baseline)
+        retrieved = self.now + timedelta(seconds=1)
+
+        def read_dashboard() -> list[WanObservation]:
+            clock.now.return_value = retrieved
+            return observations
+
+        with patch("linode_image_lab.acl_reconcile.datetime", wraps=datetime) as clock, patch(
+            "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry),
+        ) as storage, patch.object(client, "update_lke_control_plane_acl") as put, patch(
+            "linode_image_lab.acl_reconcile.open_private_error_file",
+        ) as receipt, patch("linode_image_lab.registry_version_selection.os.open") as selection_file, patch(
+            "linode_image_lab.acl_reconcile.reconcile_acl", wraps=reconcile_acl,
+        ) as reconcile:
+            clock.now.return_value = self.now
+            dashboard = Mock(side_effect=read_dashboard)
+            preview = preview_dashboard_wans(
+                approved_slots=self.approved, read_dashboard=dashboard, baseline=baseline,
+                cluster_id=12345, cluster_label="synthetic-cluster", selection=SELECTION,
+                registry_args=REGISTRY_ARGS, client=client,
+            )
+            dashboard.assert_called_once_with()
+            document = reconcile.call_args.kwargs["document"]
+            self.assertNotIn("source_observations_valid_until", document)
+            with self.assertRaisesRegex(ACLReconcileError, "^source_observation_deadline_required$"):
+                reconcile_acl(
+                    document=document, cluster_id=12345, cluster_label="synthetic-cluster",
+                    rollback=False, execute=True, receipt_dir="unused", selection=SELECTION,
+                    registry_args=REGISTRY_ARGS, client=client,
+                )
+            with self.assertRaisesRegex(ACLReconcileError, "^source_observation_time_unverified$"):
+                self.bind(observations=observations)
+            put.assert_not_called()
+            receipt.assert_not_called()
+            selection_file.assert_not_called()
+            storage.assert_called_once()
+            request = storage.call_args.args[0]
+            self.assertEqual(request.get_method(), "GET")
+            self.assertTrue(request.full_url.endswith(f"?versionId={SELECTION.version_id}"))
+
+        self.assertEqual(client.reads, 1)
+        self.assertEqual(preview["status"], "unchanged")
+        self.assertEqual(preview["execution_mode"], "dry-run")
+        self.assertEqual(preview["observation_basis"], "dashboard_at_retrieval")
+        self.assertEqual(preview["dashboard_fetched_at"], retrieved.isoformat())
+        self.assertEqual(preview["version_proof"], SELECTION.proof())
+        summary = json.dumps(preview)
+        for private in (SELECTION.version_id, "synthetic-device", "198.51.100", "2001:db8", '"baseline"'):
+            self.assertNotIn(private, summary)
+        self.assertEqual(client.acl, baseline)
+
+    def test_dashboard_preview_needs_the_approved_device_and_exact_version(self) -> None:
+        first, second = (replace(observation, observed_at=None) for observation in self.observations)
+        wrong_device = replace(second, source=WanSource("other-device", second.source.interface))
+        for observed, version, error, expected_reads in (
+            ([first, wrong_device], SELECTION.version_id, "incomplete_or_unapproved_sources", 0),
+            ([first, second], "other-version", "registry_invalid_or_unavailable", 1),
+        ):
+            client = FakeACL(Path.cwd())
+            with self.subTest(error=error), patch(
+                "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry, version),
+            ) as storage:
+                with self.assertRaisesRegex(ACLReconcileError, f"^{error}$"):
+                    preview_dashboard_wans(
+                        approved_slots=self.approved, read_dashboard=lambda: observed, baseline=BASELINE,
+                        cluster_id=12345, cluster_label="synthetic-cluster", selection=SELECTION,
+                        registry_args=REGISTRY_ARGS, client=client,
+                    )
+                self.assertEqual(storage.call_count, expected_reads)
+                self.assertEqual(client.reads, 0)
+                self.assertEqual(client.requests, [])
 
     def test_expired_binding_cannot_reach_provider_write(self) -> None:
         first, second = self.observations
