@@ -81,6 +81,9 @@ jobs:
           for flag in reconcile-from-stdin rollback-from-stdin registry-version-file acl-receipt-dir; do
             grep -Eq -- "^[[:space:]]*--${flag}([[:space:]]|$)" <<< "$acl_help"
           done
+          wan_help="$(docker run --rm --pull never --platform linux/amd64 --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges "$IMAGE:$TAG" acl-reconcile-wans --help)"
+          grep -Eq -- '^[[:space:]]*--execute-after-verified-cutover([[:space:]]|$)' <<< "$wan_help"
 
       - name: Log in with repository-scoped GitHub token
         shell: bash

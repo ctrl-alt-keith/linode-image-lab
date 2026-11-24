@@ -203,10 +203,9 @@ docker build --platform linux/amd64 --tag linode-image-lab:local .
 The source-owned `Publish firewall consumer image` workflow pins an exact
 source commit and source-derived tag. Manual dispatch from `main` offers
 `publish`, `verify-public`, and `verify-private` modes. The publish job checks
-out the pinned source, runs `make check`, builds Linux amd64, smoke-tests
-`firewall-sync` and `service-acl-sync`, and records source, workflow, builder,
-run, and digest.
-Only that job receives a repository token with package write permission.
+out the pinned source, runs `make check`, and builds Linux amd64. It smoke-tests
+`firewall-sync`, `service-acl-sync`, `acl-sync`, and `acl-reconcile-wans` before
+push. Only that job receives package write permission.
 
 Before push, require an existing private package and a readable tag inventory.
 The workflow refuses an existing tag or manifest and accepts only a
@@ -214,12 +213,13 @@ missing-manifest registry response. It checks the digest manifest and tag
 readback, then confirms the package is still private. A new source requires a
 reviewed pin update.
 
-Require the same run's `verify-published` job to pass before using the digest.
-It uses `packages: read` on a fresh runner, pulls the publish job's exact digest,
-and checks the source labels, Linux amd64 platform, and WAN ACL command help
-with networking disabled and no credentials passed to the container. The
-standalone `verify-public` and `verify-private` modes check their fixed
-historical source. Use the same-run verifier for a new publication.
+Use the digest from the `verify-published` summary after that job succeeds.
+It uses `packages: read` on a fresh runner, pulls the exact digest, and checks
+source labels and Linux amd64. It verifies the `--execute-after-verified-cutover`
+help flag with networking disabled and no container credentials. If the run
+fails after pushing, treat the tag as unverified and inspect the publication
+evidence before taking further action. The standalone `verify-public` and
+`verify-private` modes check their fixed historical source.
 
 For a private package, the LKE workload needs a namespace-scoped pull Secret
 with package-read access. Keep the pull credential and runtime configuration
