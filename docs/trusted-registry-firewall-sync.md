@@ -208,18 +208,18 @@ out the pinned source, runs `make check`, builds Linux amd64, smoke-tests
 run, and digest.
 Only that job receives a repository token with package write permission.
 
-Before push, the workflow requires readable package metadata and tag inventory,
-refuses an existing tag or manifest, and accepts only a missing-manifest
-registry response. After push, it checks the digest manifest, pulls the tag
-back to confirm the same digest, and verifies that package visibility did not
-change. A new source requires a reviewed pin update. The optional
-`verify-public` job has no package permission; with an empty Docker auth config,
-it checks an anonymous pull against a supplied digest, source-revision label,
-and Linux amd64 platform. `verify-private` uses only job-scoped `packages: read`
-to pull the fixed published digest, then checks Linux amd64, source revision,
-and the `--registry-version-file` help option with networking disabled and no
-credentials passed to the container. Neither verification mode changes package
-visibility.
+Before push, require an existing private package and a readable tag inventory.
+The workflow refuses an existing tag or manifest and accepts only a
+missing-manifest registry response. It checks the digest manifest and tag
+readback, then confirms the package is still private. A new source requires a
+reviewed pin update.
+
+Require the same run's `verify-published` job to pass before using the digest.
+It uses `packages: read` on a fresh runner, pulls the publish job's exact digest,
+and checks the source labels, Linux amd64 platform, and WAN ACL command help
+with networking disabled and no credentials passed to the container. The
+standalone `verify-public` and `verify-private` modes check their fixed
+historical source. Use the same-run verifier for a new publication.
 
 For a private package, the LKE workload needs a namespace-scoped pull Secret
 with package-read access. Keep the pull credential and runtime configuration
