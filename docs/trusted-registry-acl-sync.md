@@ -168,7 +168,8 @@ linode-image-lab --config /protected/acl-sync.toml acl-reconcile-wans --execute-
 
 The required flag attests to the operator's verification. The command cannot
 establish that the supervised cutover occurred. Add the flag to the scheduled
-invocation only after verifying first-cutover enforcement.
+invocation only after readback confirms the cutover revision and the exact two
+validated WAN IPv4 hosts with no live IPv6 entries.
 
 Use the existing `[acl-sync]` cluster and registry settings and the S3 and
 Linode credentials above. Supply the approved appliance through

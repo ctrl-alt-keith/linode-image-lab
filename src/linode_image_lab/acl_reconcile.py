@@ -692,7 +692,7 @@ def _apply_exact_wan_acl(
             if error.failure_kind == "http_response" and error.status_code in {400, 401, 403, 404}:
                 raise ACLReconcileError("provider_rejected_exact_wan_acl", status="rejected") from None
             raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
-        except (OSError, ValueError, KeyError, TypeError):
+        except OSError:
             raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
 
         desired = {ip_network(route) for route in plan.ipv4}

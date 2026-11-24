@@ -615,6 +615,17 @@ class WanObservationBindingTest(unittest.TestCase):
         self.assertEqual(failure.exception.status, "rejected")
         self.assertEqual(client.reads, 2)
 
+    def test_recurring_exact_apply_does_not_mask_client_programming_errors(self) -> None:
+        client = self.exact_writer_client()
+        with (
+            patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(self.registry), registry_response(self.registry),
+            ]),
+            patch.object(client, "update_lke_control_plane_acl", side_effect=TypeError("synthetic programmer error")),
+            self.assertRaisesRegex(TypeError, "^synthetic programmer error$"),
+        ):
+            reconcile_exact_wan_acl(**self.exact_args(client))
+
     def test_recurring_exact_apply_needs_enforced_revision_within_readback_bound(self) -> None:
         client = self.exact_writer_client()
 
@@ -737,21 +748,22 @@ class WanObservationBindingTest(unittest.TestCase):
         actual["addresses"]["ipv6"] = []
         writes = []
 
-        def management(client, method, path, payload=None, **options):
+        def management(request, *, timeout):
             nonlocal actual
-            if path == "/lke/clusters/12345":
+            path = urlsplit(request.full_url).path
+            method = request.get_method()
+            if path == "/v4/lke/clusters/12345":
                 self.assertEqual(method, "GET")
-                return {"id": 12345, "label": "synthetic-cluster"}
-            self.assertEqual(path, "/lke/clusters/12345/control_plane_acl")
+                return BytesIO(b'{"id":12345,"label":"synthetic-cluster"}')
+            self.assertEqual(path, "/v4/lke/clusters/12345/control_plane_acl")
             if method == "GET":
-                return {"acl": deepcopy(actual)}
+                return BytesIO(json.dumps({"acl": actual}).encode())
             self.assertEqual(method, "PUT")
-            self.assertFalse(options["retry"])
-            actual = deepcopy(payload["acl"])
+            actual = json.loads(request.data)["acl"]
             writes.append(actual)
             if len(writes) == 1:
                 raise OSError("synthetic response lost")
-            return {}
+            return BytesIO(b"{}")
 
         def dashboard(observed):
             response = BytesIO(json.dumps([{"serial": serial, "uplinks": [
@@ -783,8 +795,8 @@ class WanObservationBindingTest(unittest.TestCase):
                     self.assertNotIn(private, output.getvalue())
                 return status.exception.code, json.loads(output.getvalue())
 
-            with patch.dict(os.environ, environment, clear=True), patch.object(
-                LinodeClient, "_request", autospec=True, side_effect=management,
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "linode_image_lab.linode_api.urlopen", side_effect=management,
             ), patch("linode_image_lab.acl_wan_command.open_without_redirect", side_effect=[
                 dashboard(OBSERVED), dashboard(OBSERVED), dashboard(current_observations),
             ]) as meraki, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
@@ -842,7 +854,7 @@ class WanObservationBindingTest(unittest.TestCase):
             self.assertEqual((code, result["failure"]), (1, "conflicting_wan_acl_config_options"))
 
     def test_container_recurring_command_requires_the_full_cutover_attestation(self) -> None:
-        for options in ([], ["--execute"]):
+        for options in ([], ["--execute"], ["--execute-after"]):
             with self.subTest(options=options), patch.object(
                 sys, "argv", ["linode-image-lab", "acl-reconcile-wans", *options],
             ), redirect_stderr(StringIO()), patch("linode_image_lab.cli.reconcile_configured_wans") as runner:
