@@ -169,7 +169,16 @@ A changed plan, stale evidence, baseline drift or live IPv6 stops before PUT.
 An exact no-op uses zero PUTs. A change uses one full PUT after a fresh current
 registry check and final ACL GET, then bounded enforcement readback.
 
-The candidate has no production session binding or scheduled entry point.
-Qualify recurring authorization and a pause that survives uncertain exits and
-restarts. After independent reconciliation, re-read current desired and
-effective state before replanning.
+For a supervised off-cluster run, load
+`acl_reconcile.run_supervised_exact_wan_cutover` from the reviewed checkout and
+use the same protected inputs. Use one designated durable, owner-only directory
+for the target across invocations. The callable creates an exclusive, empty hold
+before planning. A present or unavailable hold stops the run. Retain it until
+the operator confirms the runner exited and independently settles any possible
+write. Then obtain fresh approval before another run.
+
+`SUPERVISED_WAN_CUTOVER_WINDOW` is the elapsed submission deadline. It starts
+when the dashboard response arrives, uses a monotonic check immediately before
+PUT, and bounds response age. An uncertain submission keeps the hold after the
+deadline. Qualify the off-cluster host, its credential custody and recovery
+authority separately. This callable has no scheduled entry point.

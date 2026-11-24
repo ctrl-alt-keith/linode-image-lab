@@ -14,8 +14,9 @@ import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
 from linode_image_lab.acl_reconcile import (
-    ACLReconcileError, WanObservation, WanSource, apply_reviewed_exact_wan_acl, bind_wan_observations, host_route,
-    preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl,
+    SUPERVISED_WAN_CUTOVER_WINDOW, ACLReconcileError, WanObservation, WanSource,
+    apply_reviewed_exact_wan_acl, bind_wan_observations, host_route,
+    preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl, run_supervised_exact_wan_cutover,
 )
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
@@ -401,6 +402,9 @@ class WanObservationBindingTest(unittest.TestCase):
             "reviewed_proof": proof, "max_dashboard_age": timedelta(minutes=1), "writer_session": nullcontext(),
         } | overrides))
 
+    def run_supervised(self, client, proof, hold_dir):
+        return run_supervised_exact_wan_cutover(**self.exact_args(client), reviewed_proof=proof, hold_dir=hold_dir)
+
     def test_exact_preview_reports_replacement_and_ipv6_disposition_without_a_write(self) -> None:
         client = LinodeClient()
         actual = {**BASELINE, "addresses": {
@@ -586,15 +590,14 @@ class WanObservationBindingTest(unittest.TestCase):
         def final_read(cluster_id):
             value = read_acl(cluster_id)
             if client.reads == 3:
-                clock.now.return_value = self.now + timedelta(minutes=1)
+                monotonic.return_value = 160.0
             return value
 
         with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
             registry_response(self.registry), registry_response(self.registry),
-        ]), patch("linode_image_lab.acl_reconcile.datetime", wraps=datetime) as clock, patch.object(
+        ]), patch("linode_image_lab.acl_reconcile.time.monotonic", return_value=100.0) as monotonic, patch.object(
             client, "get_lke_control_plane_acl", side_effect=final_read,
         ), patch.object(client, "update_lke_control_plane_acl") as put:
-            clock.now.return_value = self.now
             with self.assertRaisesRegex(ACLReconcileError, "^dashboard_retrieval_expired$"):
                 self.apply_exact(client, proof)
         put.assert_not_called()
@@ -657,6 +660,75 @@ class WanObservationBindingTest(unittest.TestCase):
         self.assertEqual(result["status"], "unchanged")
         self.assertEqual(storage.call_count, 4)
         put.assert_called_once()
+
+    def test_supervised_one_shot_writes_once_and_leaves_an_empty_hold(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        with tempfile.TemporaryDirectory() as directory:
+            hold_dir = Path(directory).resolve()
+
+            def enforce(cluster_id, requested):
+                markers = list(hold_dir.iterdir())
+                self.assertEqual(len(markers), 1)
+                self.assertEqual(markers[0].read_bytes(), b"")
+                self.assertEqual(markers[0].stat().st_mode & 0o777, 0o600)
+                client.acl = deepcopy(requested)
+
+            with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(self.registry), registry_response(self.registry),
+            ]) as storage, patch.object(client, "update_lke_control_plane_acl", side_effect=enforce) as put:
+                result = self.run_supervised(client, proof, str(hold_dir))
+                self.assertEqual(result["status"], "enforced")
+                with self.assertRaisesRegex(ACLReconcileError, "^supervised_cutover_hold_present_or_unavailable$"):
+                    self.run_supervised(client, proof, str(hold_dir))
+                put.assert_called_once()
+                self.assertEqual([c.args[0].get_method() for c in storage.call_args_list], ["GET", "GET"])
+            self.assertEqual([p.read_bytes() for p in hold_dir.iterdir()], [b""])
+
+    def test_supervised_one_shot_no_op_sends_no_put(self) -> None:
+        client = self.exact_writer_client()
+        client.acl["addresses"]["ipv4"] = [route["ipv4"] for route in OBSERVED.values()]
+        proof = self.reviewed_proof(client)
+        with tempfile.TemporaryDirectory() as directory, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch.object(client, "update_lke_control_plane_acl") as put:
+            result = self.run_supervised(client, proof, str(Path(directory).resolve()))
+        self.assertEqual(result["status"], "unchanged")
+        put.assert_not_called()
+
+    def test_supervised_one_shot_expiry_blocks_dispatch(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        with tempfile.TemporaryDirectory() as directory, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch("linode_image_lab.acl_reconcile.time.monotonic", side_effect=[
+            100.0, 100.0 + SUPERVISED_WAN_CUTOVER_WINDOW.total_seconds(),
+        ]), patch.object(client, "update_lke_control_plane_acl") as put:
+            with self.assertRaisesRegex(ACLReconcileError, "^dashboard_retrieval_expired$"):
+                self.run_supervised(client, proof, str(Path(directory).resolve()))
+        put.assert_not_called()
+
+    def test_supervised_one_shot_blocks_new_process_after_uncertain_exit(self) -> None:
+        for failure, reason in ((OSError("lost response"), ACLReconcileError), (KeyboardInterrupt(), KeyboardInterrupt)):
+            client = self.exact_writer_client()
+            proof = self.reviewed_proof(client)
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory, patch(
+                "linode_image_lab.trusted_registry.urlopen", side_effect=[
+                    registry_response(self.registry), registry_response(self.registry),
+                ],
+            ) as storage, patch.object(client, "update_lke_control_plane_acl", side_effect=failure) as put:
+                hold_dir = str(Path(directory).resolve())
+                with self.assertRaises(reason) as error:
+                    self.run_supervised(client, proof, hold_dir)
+                if reason is ACLReconcileError:
+                    self.assertEqual(error.exception.status, "uncertain")
+                # The next invocation uses a fresh client while the old revision is still visible.
+                next_client = self.exact_writer_client()
+                with self.assertRaisesRegex(ACLReconcileError, "^supervised_cutover_hold_present_or_unavailable$"):
+                    self.run_supervised(next_client, proof, hold_dir)
+                put.assert_called_once()
+                self.assertEqual(next_client.reads, 0)
+                self.assertEqual(storage.call_count, 2)
 
     def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
         with tempfile.TemporaryDirectory() as root:

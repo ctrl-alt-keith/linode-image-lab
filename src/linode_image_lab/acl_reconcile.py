@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
@@ -25,6 +25,7 @@ from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import fetch_registry_from_object_storage, validate_registry
 
 FAMILIES = ("ipv4", "ipv6")
+SUPERVISED_WAN_CUTOVER_WINDOW = timedelta(minutes=5)
 IDENTITY_FIELDS = {"schema_version", "cluster_id", "cluster_label"}
 RECEIPT_FIELDS = IDENTITY_FIELDS | {
     "operation", "before", "after", "retained", "slots", "managed_before", "managed_after",
@@ -478,6 +479,7 @@ class _ExactWanACLPlan:
     baseline: dict[str, Any]
     ipv4: tuple[str, ...]
     dashboard_fetched_at: datetime
+    dashboard_fetched_monotonic: float
     registry_expires_at: datetime
     review_proof: str
     excluded_registry_ipv4: int
@@ -500,6 +502,7 @@ def _read_exact_wan_acl_plan(
     if not selection.version_id or not isinstance(selection.proof_key, bytes) or len(selection.proof_key) != 32:
         raise ACLReconcileError("invalid_registry_version_selection")
     observations = read_dashboard()
+    fetched_monotonic = time.monotonic()
     fetched_at = datetime.now(timezone.utc)
     slots, by_source = _match_wan_observations(approved_slots, observations)
     try:
@@ -557,6 +560,7 @@ def _read_exact_wan_acl_plan(
     registry_expires_at = min(datetime.fromisoformat(entry["expires_at"]) for entry in selected)
     return _ExactWanACLPlan(
         baseline=baseline, ipv4=ipv4, dashboard_fetched_at=fetched_at,
+        dashboard_fetched_monotonic=fetched_monotonic,
         registry_expires_at=min(registry_expires_at, datetime.fromisoformat(metadata.valid_until)),
         review_proof=proof,
         excluded_registry_ipv4=sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
@@ -657,13 +661,15 @@ def apply_reviewed_exact_wan_acl(
             raise
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             raise ACLReconcileError("final_preflight_failed") from None
+        after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
         now = datetime.now(timezone.utc)
-        if now < plan.dashboard_fetched_at or now - plan.dashboard_fetched_at >= max_dashboard_age:
-            raise ACLReconcileError("dashboard_retrieval_expired")
         if now >= plan.registry_expires_at:
             raise ACLReconcileError("registry_wan_observation_not_fresh")
-
-        after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
+        if (
+            now < plan.dashboard_fetched_at
+            or time.monotonic() - plan.dashboard_fetched_monotonic >= max_dashboard_age.total_seconds()
+        ):
+            raise ACLReconcileError("dashboard_retrieval_expired")
         try:
             client.update_lke_control_plane_acl(cluster_id, after)
         except LinodeApiError as error:
@@ -689,3 +695,38 @@ def apply_reviewed_exact_wan_acl(
             if attempt < 11:
                 time.sleep(2)
         raise ACLReconcileError("enforcement_timeout", status="uncertain")
+
+
+def run_supervised_exact_wan_cutover(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str,
+    hold_dir: str,
+) -> dict[str, Any]:
+    """Run once in the caller's designated off-cluster hold directory."""
+    if type(cluster_id) is not int or cluster_id < 1:
+        raise ACLReconcileError("invalid_attempt_identity")
+    target = hashlib.sha256(str(cluster_id).encode("ascii")).hexdigest()
+    hold = Path(hold_dir) / f"exact-wan-cutover-{target}.hold"
+
+    @contextmanager
+    def writer_session():
+        try:
+            descriptor = open_private_error_file(str(hold), sync_parent=True)
+            with os.fdopen(descriptor, "wb") as marker:
+                os.fsync(marker.fileno())
+        except (ACLSyncError, OSError):
+            raise ACLReconcileError("supervised_cutover_hold_present_or_unavailable") from None
+        yield
+
+    return apply_reviewed_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=SUPERVISED_WAN_CUTOVER_WINDOW,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=reviewed_proof, writer_session=writer_session(),
+    )
