@@ -203,23 +203,24 @@ docker build --platform linux/amd64 --tag linode-image-lab:local .
 The source-owned `Publish firewall consumer image` workflow pins an exact
 source commit and source-derived tag. Manual dispatch from `main` offers
 `publish`, `verify-public`, and `verify-private` modes. The publish job checks
-out the pinned source, runs `make check`, builds Linux amd64, smoke-tests
-`firewall-sync` and `service-acl-sync`, and records source, workflow, builder,
-run, and digest.
-Only that job receives a repository token with package write permission.
+out the pinned source, runs `make check`, and builds Linux amd64. It smoke-tests
+`firewall-sync`, `service-acl-sync`, `acl-sync`, and `acl-reconcile-wans` before
+push. Only that job receives package write permission.
 
-Before push, the workflow requires readable package metadata and tag inventory,
-refuses an existing tag or manifest, and accepts only a missing-manifest
-registry response. After push, it checks the digest manifest, pulls the tag
-back to confirm the same digest, and verifies that package visibility did not
-change. A new source requires a reviewed pin update. The optional
-`verify-public` job has no package permission; with an empty Docker auth config,
-it checks an anonymous pull against a supplied digest, source-revision label,
-and Linux amd64 platform. `verify-private` uses only job-scoped `packages: read`
-to pull the fixed published digest, then checks Linux amd64, source revision,
-and the `--registry-version-file` help option with networking disabled and no
-credentials passed to the container. Neither verification mode changes package
-visibility.
+Before push, require an existing private package and a readable tag inventory.
+The workflow refuses an existing tag or manifest and accepts only a
+missing-manifest registry response. It checks the digest manifest and tag
+readback, then confirms the package is still private. A new source requires a
+reviewed pin update.
+
+Use the digest from the `verify-published` summary after that job succeeds.
+It uses `packages: read` on a fresh runner, pulls the exact digest, and checks
+source labels and Linux amd64. It verifies the `--execute-after-verified-cutover`
+help flag with networking disabled and no container credentials. If the run
+fails after pushing, stop image promotion. Compare the publish job summary's
+source and digest with a read-only GHCR check, then obtain owner approval for
+recovery. The publish job refuses reruns and existing tags. The standalone
+`verify-public` and `verify-private` modes check their fixed historical source.
 
 For a private package, the LKE workload needs a namespace-scoped pull Secret
 with package-read access. Keep the pull credential and runtime configuration

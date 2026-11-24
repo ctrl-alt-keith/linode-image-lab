@@ -36,11 +36,14 @@ jobs:
       inputs.mode == 'publish'
     runs-on: ubuntu-24.04
     env:
-      SOURCE_SHA: c7d741542971db27bfcb557a9d83933cc343f6f2
-      TAG: sha-c7d741542971db27bfcb557a9d83933cc343f6f2
+      SOURCE_SHA: e8922349349e0236301f4a3ea115d66ce6dbbce4
+      TAG: sha-e8922349349e0236301f4a3ea115d66ce6dbbce4
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.publish_image.outputs.digest }}
+      source_sha: ${{ steps.publish_image.outputs.source_sha }}
     steps:
       - name: Check out approved source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -56,6 +59,7 @@ jobs:
           test "$GITHUB_RUN_ATTEMPT" = 1
           test "$(uname -m)" = x86_64
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$TAG" = "sha-$SOURCE_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           make check
 
@@ -77,6 +81,9 @@ jobs:
           for flag in reconcile-from-stdin rollback-from-stdin registry-version-file acl-receipt-dir; do
             grep -Eq -- "^[[:space:]]*--${flag}([[:space:]]|$)" <<< "$acl_help"
           done
+          wan_help="$(docker run --rm --pull never --platform linux/amd64 --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges "$IMAGE:$TAG" acl-reconcile-wans --help)"
+          grep -Eq -- '^[[:space:]]*--execute-after-verified-cutover([[:space:]]|$)' <<< "$wan_help"
 
       - name: Log in with repository-scoped GitHub token
         shell: bash
@@ -108,11 +115,10 @@ jobs:
           visibility="$(gh api \
             'orgs/ctrl-alt-keith/packages/container/linode-image-lab%2Ffirewall-consumer' \
             --jq .visibility)"
-          case "$visibility" in
-            public|private|internal) ;;
-            *) echo 'Cannot verify existing package visibility.' >&2; exit 1 ;;
-          esac
-          echo "PACKAGE_VISIBILITY_BEFORE=$visibility" >> "$GITHUB_ENV"
+          if [[ "$visibility" != private ]]; then
+            echo 'The existing package must be private.' >&2
+            exit 1
+          fi
           if grep -Fxq "$TAG" <<< "$tags"; then
             echo "Refusing to overwrite existing $IMAGE:$TAG" >&2
             exit 1
@@ -134,15 +140,15 @@ jobs:
           echo "Package API HTTP $status; registry lookup: $lookup_error"
 
       - name: Push and record immutable source and workflow identities
+        id: publish_image
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           docker push "$IMAGE:$TAG" | tee push.log
-          digest="$(sed -nE 's/^.*digest: (sha256:[[:xdigit:]]{64}).*$/\1/p' push.log | tail -n 1)"
-          test -n "$digest"
-          echo "PUSHED_DIGEST=$digest" >> "$GITHUB_ENV"
+          digest="$(sed -nE 's/^.*digest: (sha256:[0-9a-f]{64}).*$/\1/p' push.log | tail -n 1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           {
             echo '### Firewall consumer image'
             echo "- Source commit: \`$SOURCE_SHA\`"
@@ -158,16 +164,59 @@ jobs:
           pulled_digest="$(sed -nE 's/^Digest: (sha256:[0-9a-f]{64})$/\1/p' pull.log | tail -n 1)"
           test "$pulled_digest" = "$digest"
           echo '- Pushed digest is readable and the tag resolves to it.' >> "$GITHUB_STEP_SUMMARY"
-          if [[ -n "${PACKAGE_VISIBILITY_BEFORE:-}" ]]; then
-            visibility_after="$(gh api \
-              'orgs/ctrl-alt-keith/packages/container/linode-image-lab%2Ffirewall-consumer' \
-              --jq .visibility)"
-            if [[ "$visibility_after" != "$PACKAGE_VISIBILITY_BEFORE" ]]; then
-              echo 'Package visibility changed during publication.' >&2
-              exit 1
-            fi
-            echo "- Package visibility preserved: \`$visibility_after\`" >> "$GITHUB_STEP_SUMMARY"
+          visibility_after="$(gh api \
+            'orgs/ctrl-alt-keith/packages/container/linode-image-lab%2Ffirewall-consumer' \
+            --jq .visibility)"
+          if [[ "$visibility_after" != private ]]; then
+            echo 'Package is no longer private after publication.' >&2
+            exit 1
           fi
+          echo "- Package visibility preserved: \`private\`" >> "$GITHUB_STEP_SUMMARY"
+          printf 'digest=%s\nsource_sha=%s\n' "$digest" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+  verify-published:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: read
+    env:
+      PUBLISHED_DIGEST: ${{ needs.publish.outputs.digest }}
+      SOURCE_SHA: ${{ needs.publish.outputs.source_sha }}
+    steps:
+      - name: Pull and verify this run's private image
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ctrl-alt-keith/linode-image-lab
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(uname -m)" = x86_64
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          reference="$IMAGE@$PUBLISHED_DIGEST"
+          if docker image inspect "$reference" >/dev/null 2>&1; then
+            echo 'Refusing verification with a locally cached image.' >&2
+            exit 1
+          fi
+          auth_config="$(mktemp -d "$RUNNER_TEMP/ghcr-consumer-published.XXXXXX")"
+          trap 'rm -rf "$auth_config"' EXIT
+          printf '%s' "$GHCR_TOKEN" | DOCKER_CONFIG="$auth_config" docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin >/dev/null
+          pull_output="$(DOCKER_CONFIG="$auth_config" docker pull --platform linux/amd64 "$reference")"
+          pulled_digest="$(sed -nE 's/^Digest: (sha256:[0-9a-f]{64})$/\1/p' <<< "$pull_output" | tail -n 1)"
+          test "$pulled_digest" = "$PUBLISHED_DIGEST"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$reference")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$reference")" = "$SOURCE_SHA"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$reference")" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          help_output="$(docker run --rm --pull never --platform linux/amd64 --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges "$reference" acl-reconcile-wans --help)"
+          grep -Eq -- '^[[:space:]]*--execute-after-verified-cutover([[:space:]]|$)' <<< "$help_output"
+          {
+            echo '### Published WAN ACL image verification'
+            echo "- Digest: \`$reference\`"
+            echo "- Source revision: \`$SOURCE_SHA\`"
+            echo '- Linux amd64 entry-point help verified offline without container credentials.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify-public:
     if: >-
@@ -251,7 +300,7 @@ jobs:
             echo '### Private firewall consumer image verification'
             echo "- Digest: \`$IMAGE@$EXPECTED_DIGEST\`"
             echo "- Source revision: \`$SOURCE_SHA\`"
-            echo '- Platform: `linux/amd64`'
-            echo '- `firewall-sync --help` exposes `--registry-version-file`.'
+            echo "- Platform: \`linux/amd64\`"
+            echo "- \`firewall-sync --help\` exposes \`--registry-version-file\`."
             echo '- Help ran with networking disabled and no credentials passed to the container.'
           } >> "$GITHUB_STEP_SUMMARY"
