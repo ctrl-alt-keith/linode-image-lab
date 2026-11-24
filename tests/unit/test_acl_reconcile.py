@@ -617,7 +617,7 @@ class WanObservationBindingTest(unittest.TestCase):
         proof = self.reviewed_proof(client)
 
         def stage(cluster_id, after):
-            # The desired addresses can be visible while the old revision remains effective.
+            # Matching addresses without the new revision must time out.
             client.acl["addresses"] = deepcopy(after["addresses"])
 
         with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[

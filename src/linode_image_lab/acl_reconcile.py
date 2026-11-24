@@ -1,4 +1,4 @@
-"""One guarded ACL update or restoration from operator-owned evidence."""
+"""Guarded ACL operations and reviewed WAN cutover."""
 
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def bind_wan_observations(
     selection: RegistryVersionSelection,
     registry_args: dict[str, Any],
 ) -> dict[str, Any]:
-    """Prepare guarded input fields from independently collected WAN observations."""
+    """Bind measured WAN observations and their expiry to the selected registry version."""
     slots, by_source = _match_wan_observations(approved_slots, observations)
     if max_age <= timedelta(0):
         raise ACLReconcileError("invalid_source_observation_age")
@@ -451,7 +451,7 @@ def preview_dashboard_wans(
     registry_args: dict[str, Any],
     client: ACLClientProtocol | None = None,
 ) -> dict[str, Any]:
-    """Compare one direct dashboard read to the selected registry and retained ACL."""
+    """Corroborate the registry at retrieval time while retaining the baseline ACL."""
     if not selection.version_id:
         raise ACLReconcileError("invalid_registry_version_selection")
     before = policy(baseline)
@@ -606,7 +606,7 @@ def preview_exact_wan_acl(
     registry_args: dict[str, Any],
     client: ACLClientProtocol,
 ) -> dict[str, Any]:
-    """Report the delta from the effective ACL to the current approved WAN IPv4 set."""
+    """Preview full replacement with the two approved WAN IPv4 hosts."""
     return _exact_wan_summary(_read_exact_wan_acl_plan(
         approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
         cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
@@ -626,11 +626,10 @@ def apply_reviewed_exact_wan_acl(
     reviewed_proof: str,
     writer_session: AbstractContextManager[None],
 ) -> dict[str, Any]:
-    """Apply one reviewed cutover through a caller-owned exclusive writer session.
+    """Hold the caller's exclusive writer session from planning through readback.
 
-    Entry must prove any previous request is settled and hold exclusive writer
-    ownership through readback. No scheduler or production session is supplied.
-    An uncertain exit requires reconciliation before another write session.
+    Entry requires prior requests to be settled. Reconcile an uncertain exit
+    before admitting another write session.
     """
     if max_dashboard_age <= timedelta(0):
         raise ACLReconcileError("invalid_dashboard_age")
