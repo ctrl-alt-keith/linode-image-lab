@@ -217,9 +217,10 @@ Use the digest from the `verify-published` summary after that job succeeds.
 It uses `packages: read` on a fresh runner, pulls the exact digest, and checks
 source labels and Linux amd64. It verifies the `--execute-after-verified-cutover`
 help flag with networking disabled and no container credentials. If the run
-fails after pushing, treat the tag as unverified and inspect the publication
-evidence before taking further action. The standalone `verify-public` and
-`verify-private` modes check their fixed historical source.
+fails after pushing, stop image promotion. Compare the publish job summary's
+source and digest with a read-only GHCR check, then obtain owner approval for
+recovery. The publish job refuses reruns and existing tags. The standalone
+`verify-public` and `verify-private` modes check their fixed historical source.
 
 For a private package, the LKE workload needs a namespace-scoped pull Secret
 with package-read access. Keep the pull credential and runtime configuration
