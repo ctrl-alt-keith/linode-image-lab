@@ -115,7 +115,7 @@ from a retained route independently.
 
 ## Guarded writer qualification
 
-Keep the staged Job suspended. Start with all routes retained for the guarded
+Keep the staged CronJob suspended. Start with all routes retained for the guarded
 writer. Review source ownership and caps, then observe a real registry
 transition in preview. Verify each proposed removal against the reviewed
 managed set. Journal the baseline, planned policy and distinct forward
@@ -150,18 +150,21 @@ selection, key and `review_proof` in the protected session.
 
 Keep the CronJob suspended and exclude other writers. Confirm independent
 provider-management recovery authority without Kubernetes or the registry.
-Preview just after a confirmed publish, privately approve the exact removals,
-and check that the approved version is still current before invoking
+Preview just after a confirmed publish. Compare the protected live ACL and
+validated WAN set for that preview to approve the exact removals. Check that
+the approved version is still current before invoking
 `acl_reconcile.run_supervised_exact_wan_cutover` from the reviewed checkout.
 Pass the protected selection and `review_proof` from that preview. A new
 version or changed policy requires a fresh preview and approval before writing.
 
 ### Recurring reconciliation
 
-Qualify the deployment and scoped credentials before scheduling
-`acl_reconcile.reconcile_exact_wan_acl`. Require non-overlapping runs and no
-other writer. Supply a fresh selection of the current registry version on each
-invocation. The staged CronJob does not invoke this callable yet.
+Schedule `acl_reconcile.reconcile_exact_wan_acl` only after verifying enforcement
+of the supervised cutover and qualifying the deployment and scoped credentials.
+Require non-overlapping runs and no other writer. Supply a fresh selection of
+the current registry version each run. The exact set removes every extra IPv4
+route, including manual recovery routes. Suspend scheduling before manual
+recovery. Apply [scheduled monitoring](#scheduled-monitoring).
 
 Both callables read fresh Meraki and Linode data, validate the current registry
 version, and block on live IPv6. A matching policy sends no PUT. Otherwise

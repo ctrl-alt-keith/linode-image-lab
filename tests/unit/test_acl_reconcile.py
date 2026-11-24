@@ -546,9 +546,8 @@ class WanObservationBindingTest(unittest.TestCase):
         self.assertEqual(result["status"], "enforced")
         self.assertFalse(session_held)
 
-    def test_reviewed_exact_apply_stops_on_unreviewed_change_and_final_drift(self) -> None:
+    def test_exact_writers_stop_on_unreviewed_change_or_final_drift(self) -> None:
         client = self.exact_writer_client()
-        proof = self.reviewed_proof(client)
         with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
             registry_response(self.registry) for _ in range(4)
         ]), patch.object(client, "update_lke_control_plane_acl") as put:
@@ -556,12 +555,11 @@ class WanObservationBindingTest(unittest.TestCase):
                 self.apply_exact(client, "f" * 64)
             client.drift_at_read = client.reads + 2
             with self.assertRaisesRegex(ACLReconcileError, "^baseline_drift$"):
-                self.apply_exact(client, proof)
+                reconcile_exact_wan_acl(**self.exact_args(client))
         put.assert_not_called()
 
-    def test_reviewed_exact_apply_stops_for_partial_registry_and_out_of_scope_ipv6(self) -> None:
+    def test_recurring_exact_apply_stops_for_partial_registry_and_out_of_scope_ipv6(self) -> None:
         client = self.exact_writer_client()
-        proof = self.reviewed_proof(client)
         partial = {**self.registry, "entries": self.registry["entries"][:1]}
         expired = deepcopy(self.registry)
         expired["entries"][0]["expires_at"] = (self.now - timedelta(seconds=1)).isoformat()
@@ -577,7 +575,7 @@ class WanObservationBindingTest(unittest.TestCase):
             ]), patch.object(client, "update_lke_control_plane_acl") as put, self.assertRaisesRegex(
                 ACLReconcileError, f"^{failure}$",
             ):
-                self.apply_exact(client, proof)
+                reconcile_exact_wan_acl(**self.exact_args(client))
             put.assert_not_called()
 
     def test_reviewed_exact_apply_checks_dashboard_age_after_final_get(self) -> None:
@@ -600,22 +598,20 @@ class WanObservationBindingTest(unittest.TestCase):
                 self.apply_exact(client, proof)
         put.assert_not_called()
 
-    def test_reviewed_exact_apply_does_not_retry_a_rejected_request(self) -> None:
+    def test_recurring_exact_apply_does_not_retry_a_rejected_request(self) -> None:
         client = self.exact_writer_client()
-        proof = self.reviewed_proof(client)
         rejected = LinodeApiError("synthetic rejection", status_code=403, failure_kind="http_response")
         with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
             registry_response(self.registry), registry_response(self.registry),
         ]), patch.object(client, "update_lke_control_plane_acl", side_effect=rejected) as put:
             with self.assertRaisesRegex(ACLReconcileError, "^provider_rejected_exact_wan_acl$") as failure:
-                self.apply_exact(client, proof)
+                reconcile_exact_wan_acl(**self.exact_args(client))
         put.assert_called_once()
         self.assertEqual(failure.exception.status, "rejected")
-        self.assertEqual(client.reads, 3)
+        self.assertEqual(client.reads, 2)
 
-    def test_reviewed_exact_apply_needs_enforced_revision_within_readback_bound(self) -> None:
+    def test_recurring_exact_apply_needs_enforced_revision_within_readback_bound(self) -> None:
         client = self.exact_writer_client()
-        proof = self.reviewed_proof(client)
 
         def stage(cluster_id, after):
             # Matching addresses without the new revision must time out.
@@ -626,7 +622,7 @@ class WanObservationBindingTest(unittest.TestCase):
         ]), patch.object(client, "update_lke_control_plane_acl", side_effect=stage) as put, patch(
             "linode_image_lab.acl_reconcile.time.sleep",
         ) as sleep, self.assertRaisesRegex(ACLReconcileError, "^enforcement_timeout$") as failure:
-            self.apply_exact(client, proof)
+            reconcile_exact_wan_acl(**self.exact_args(client))
         self.assertEqual(failure.exception.status, "uncertain")
         self.assertEqual(sleep.call_count, 11)
         put.assert_called_once()
@@ -649,16 +645,15 @@ class WanObservationBindingTest(unittest.TestCase):
         put.assert_called_once()
         self.assertEqual(result["status"], "enforced")
 
-    def test_supervised_one_shot_expiry_blocks_dispatch(self) -> None:
+    def test_recurring_exact_apply_expiry_blocks_dispatch(self) -> None:
         client = self.exact_writer_client()
-        proof = self.reviewed_proof(client)
         with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
             registry_response(self.registry), registry_response(self.registry),
         ]), patch("linode_image_lab.acl_reconcile.time.monotonic", side_effect=[
             100.0, 100.0 + EXACT_WAN_WRITE_WINDOW.total_seconds(),
         ]), patch.object(client, "update_lke_control_plane_acl") as put:
             with self.assertRaisesRegex(ACLReconcileError, "^dashboard_retrieval_expired$"):
-                run_supervised_exact_wan_cutover(**self.exact_args(client), reviewed_proof=proof)
+                reconcile_exact_wan_acl(**self.exact_args(client))
         put.assert_not_called()
 
     def test_supervised_one_shot_expiry_counts_host_suspend(self) -> None:
@@ -685,8 +680,8 @@ class WanObservationBindingTest(unittest.TestCase):
         put.assert_not_called()
 
     def test_recurring_run_recomputes_after_an_uncertain_write(self) -> None:
-        for changed in (False, True):
-            with self.subTest(wan_changed=changed):
+        for applied, changed in ((True, False), (True, True), (False, False)):
+            with self.subTest(first_write_applied=applied, wan_changed=changed):
                 client = self.exact_writer_client()
                 next_route = "198.51.100.7/32" if changed else OBSERVED["synthetic-a"]["ipv4"]
                 next_registry = registry_payload({**OBSERVED, "synthetic-a": {"ipv4": next_route}})
@@ -698,9 +693,11 @@ class WanObservationBindingTest(unittest.TestCase):
                 args = self.exact_args(client) | {"read_dashboard": dashboard}
 
                 def accept(cluster_id, requested):
-                    client.acl = deepcopy(requested)
                     if put.call_count == 1:
+                        if applied:
+                            client.acl = deepcopy(requested)
                         raise OSError("lost response")
+                    client.acl = deepcopy(requested)
 
                 with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
                     registry_response(self.registry), registry_response(self.registry),
@@ -712,11 +709,15 @@ class WanObservationBindingTest(unittest.TestCase):
                     self.assertEqual(error.exception.status, "uncertain")
                     put.assert_called_once()
                     result = reconcile_exact_wan_acl(**(args | {"selection": next_selection}))
+                needs_write = changed or not applied
                 self.assertEqual(dashboard.call_count, 2)
                 self.assertEqual(storage.call_count, 4)
-                self.assertEqual(put.call_count, 2 if changed else 1)
-                self.assertEqual(result["status"], "enforced" if changed else "unchanged")
+                self.assertEqual(put.call_count, 2 if needs_write else 1)
+                self.assertEqual(result["status"], "enforced" if needs_write else "unchanged")
                 self.assertTrue(result["enforcement_verified"])
+                if needs_write:
+                    first, second = (call.args[1] for call in put.call_args_list)
+                    self.assertNotEqual(first["revision-id"], second["revision-id"])
                 self.assertEqual(client.acl["addresses"], {
                     "ipv4": sorted([next_route, OBSERVED["synthetic-b"]["ipv4"]]), "ipv6": [],
                 })
