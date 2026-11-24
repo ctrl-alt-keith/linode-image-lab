@@ -708,6 +708,29 @@ class WanObservationBindingTest(unittest.TestCase):
                 self.run_supervised(client, proof, str(Path(directory).resolve()))
         put.assert_not_called()
 
+    def test_supervised_one_shot_expiry_counts_host_suspend(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        read_acl = client.get_lke_control_plane_acl
+
+        def final_read(cluster_id):
+            value = read_acl(cluster_id)
+            if client.reads == 3:
+                wall_clock.now.return_value = self.now + SUPERVISED_WAN_CUTOVER_WINDOW
+            return value
+
+        with tempfile.TemporaryDirectory() as directory, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch("linode_image_lab.acl_reconcile.time.monotonic", return_value=100.0), patch(
+            "linode_image_lab.acl_reconcile.datetime", wraps=datetime,
+        ) as wall_clock, patch.object(client, "get_lke_control_plane_acl", side_effect=final_read), patch.object(
+            client, "update_lke_control_plane_acl",
+        ) as put:
+            wall_clock.now.return_value = self.now
+            with self.assertRaisesRegex(ACLReconcileError, "^dashboard_retrieval_expired$"):
+                self.run_supervised(client, proof, str(Path(directory).resolve()))
+        put.assert_not_called()
+
     def test_supervised_one_shot_blocks_new_process_after_uncertain_exit(self) -> None:
         for failure, reason in ((OSError("lost response"), ACLReconcileError), (KeyboardInterrupt(), KeyboardInterrupt)):
             client = self.exact_writer_client()

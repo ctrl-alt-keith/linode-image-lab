@@ -177,8 +177,8 @@ before planning. A present or unavailable hold stops the run. Retain it until
 the operator confirms the runner exited and independently settles any possible
 write. Then obtain fresh approval before another run.
 
-`SUPERVISED_WAN_CUTOVER_WINDOW` is the elapsed submission deadline. It starts
-when the dashboard response arrives, uses a monotonic check immediately before
-PUT, and bounds response age. An uncertain submission keeps the hold after the
-deadline. Qualify the off-cluster host, its credential custody and recovery
-authority separately. This callable has no scheduled entry point.
+`SUPERVISED_WAN_CUTOVER_WINDOW` bounds response age from when the dashboard read
+returns. Immediately before PUT, apply the same cutoff to elapsed monotonic
+and wall-clock time to cover host suspension. An uncertain submission keeps
+the hold after expiry. Qualify the off-cluster host, its credential custody and
+recovery authority separately. This callable has no scheduled entry point.

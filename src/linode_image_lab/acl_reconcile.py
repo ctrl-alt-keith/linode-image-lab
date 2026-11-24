@@ -663,13 +663,12 @@ def apply_reviewed_exact_wan_acl(
             raise ACLReconcileError("final_preflight_failed") from None
         after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
         now = datetime.now(timezone.utc)
+        wall_age = (now - plan.dashboard_fetched_at).total_seconds()
+        elapsed = max(wall_age, time.monotonic() - plan.dashboard_fetched_monotonic)
+        if wall_age < 0 or elapsed >= max_dashboard_age.total_seconds():
+            raise ACLReconcileError("dashboard_retrieval_expired")
         if now >= plan.registry_expires_at:
             raise ACLReconcileError("registry_wan_observation_not_fresh")
-        if (
-            now < plan.dashboard_fetched_at
-            or time.monotonic() - plan.dashboard_fetched_monotonic >= max_dashboard_age.total_seconds()
-        ):
-            raise ACLReconcileError("dashboard_retrieval_expired")
         try:
             client.update_lke_control_plane_acl(cluster_id, after)
         except LinodeApiError as error:
@@ -719,8 +718,10 @@ def run_supervised_exact_wan_cutover(
     def writer_session():
         try:
             descriptor = open_private_error_file(str(hold), sync_parent=True)
-            with os.fdopen(descriptor, "wb") as marker:
-                os.fsync(marker.fileno())
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
         except (ACLSyncError, OSError):
             raise ACLReconcileError("supervised_cutover_hold_present_or_unavailable") from None
         yield
