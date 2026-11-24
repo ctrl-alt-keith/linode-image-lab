@@ -56,7 +56,7 @@ The proof identifies the read version and does not establish that it is current.
 ## Guarded IPv4 reconciliation
 
 Use `--reconcile-from-stdin` for a separate summary-only operation on two explicit
-WAN slots. It requires the exact-version selection file. Start with a preview:
+WAN slots. The CLI requires the exact-version selection file. Start with a preview:
 
 ```sh
 linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summary \
@@ -87,18 +87,27 @@ The owner prepares the input in protected storage:
   be retired. A current observation covered by retained access stays retained.
 
 In a protected caller, use `acl_reconcile.bind_wan_observations` to prepare
-the observation fields, version proof, and deadline for one attempt. Supply the
-approved slot-to-device and interface mapping separately from the fresh
-observations. Use the device identity, interface, and public IPv4 from the
-[Meraki uplink read](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/)
-with a qualified observation timestamp. Collection time bounds time since
-retrieval. Qualify the underlying device telemetry before scheduling writes.
-Pass the owner-approved age limit, registry destination, and independently
-selected version. The binder checks both observations after reading the exact
-registry version. The deadline is the older observation time plus that age limit.
+the observation fields, version proof, and deadline for one attempt. Use the
+independently approved device/interface-to-slot mapping and age limit from the
+owner's protected policy. The [Meraki address response](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/)
+identifies the device, interface, and public IP but gives no per-address sample
+timestamp. The [MX uplink status response](https://developer.cisco.com/meraki/api-v1/get-organization-appliance-uplink-statuses/)
+reports `lastReportedAt` at device level. Registry publication and HTTP
+collection times describe those operations. Supply the time evidenced for each
+underlying observation, or pass `None` to fail closed if that time is unverified.
+
+The binder checks both observations after reading the independently selected
+exact registry version. The deadline is the older observation time plus the
+approved age limit.
 Pass the fields unchanged with the same selection and collect new observations
 when the deadline expires. Keep the observations and binding private. Use a
 fixture transport for offline tests.
+
+For a summary-only preview in a qualified in-memory caller, use
+`acl_reconcile.reconcile_acl` with `rollback=False`, `execute=False`,
+`receipt_dir=None`, and the protected `RegistryVersionSelection` instance.
+Use the same reader authority, exact-version verification, and all-retained
+baseline checks as the CLI.
 
 The operation refuses incomplete or ambiguous observations, unsupported host
 addresses, invalid ownership, stale inputs, and drift. When explicitly approved,

@@ -45,7 +45,7 @@ class WanSource:
 class WanObservation:
     source: WanSource
     ipv4: str
-    observed_at: datetime
+    observed_at: datetime | None
 
 
 def policy(acl: Any) -> dict[str, Any]:
@@ -176,6 +176,22 @@ def bind_wan_observations(
     if not selection.version_id:
         raise ACLReconcileError("invalid_registry_version_selection")
 
+    observed = {}
+    observation_times = []
+    try:
+        for slot, source in approved_slots.items():
+            observation = by_source[source]
+            timestamp = observation.observed_at
+            if timestamp is None:
+                raise ACLReconcileError("source_observation_time_unverified")
+            if timestamp.utcoffset() is None:
+                raise ACLReconcileError("source_observation_not_fresh")
+            observation_times.append(timestamp.astimezone(timezone.utc))
+            observed[slot] = {"ipv4": observation.ipv4}
+        valid_until = min(observation_times) + max_age
+    except OverflowError:
+        raise ACLReconcileError("invalid_source_observation_age") from None
+
     try:
         registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
         now = datetime.now(timezone.utc)
@@ -183,19 +199,9 @@ def bind_wan_observations(
     except ValueError:
         raise ACLReconcileError("registry_invalid_or_unavailable") from None
 
-    observed = {}
-    for slot, source in approved_slots.items():
-        observation = by_source[source]
-        timestamp = observation.observed_at
-        if timestamp.utcoffset() is None or not timedelta(0) <= now - timestamp < max_age:
-            raise ACLReconcileError("source_observation_not_fresh")
-        observed[slot] = {"ipv4": observation.ipv4}
+    if max(observation_times) > now or now >= valid_until:
+        raise ACLReconcileError("source_observation_not_fresh")
     corroborate_observations(slots, observed, registry, now)
-    try:
-        oldest = min(observation.observed_at.astimezone(timezone.utc) for observation in observations)
-        valid_until = oldest + max_age
-    except OverflowError:
-        raise ACLReconcileError("invalid_source_observation_age") from None
     return {
         "slots": slots, "observed": observed, "registry_version_proof": selection.proof(),
         "source_observations_valid_until": valid_until.isoformat(),

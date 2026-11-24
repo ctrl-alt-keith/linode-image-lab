@@ -443,6 +443,45 @@ class WanObservationBindingTest(unittest.TestCase):
             ), self.assertRaisesRegex(ACLReconcileError, "^source_observation_not_fresh$"):
                 self.bind(observations=[replace(first, observed_at=timestamp), second])
 
+    def test_fresh_matching_registry_cannot_supply_unverified_source_time(self) -> None:
+        first, second = self.observations
+        with patch("linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry)) as read:
+            with self.assertRaisesRegex(ACLReconcileError, "^source_observation_time_unverified$"):
+                self.bind(observations=[first, replace(second, observed_at=None)])
+            read.assert_not_called()
+
+    def test_in_memory_preview_matches_retained_routes_without_writes_or_files(self) -> None:
+        retained = {**RETAINED, "ipv4": [*RETAINED["ipv4"], *(entry["ipv4"] for entry in OBSERVED.values())]}
+        baseline = {**BASELINE, "addresses": retained}
+        client = FakeACL(Path.cwd())
+        client.acl = deepcopy(baseline)
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]) as storage, patch.object(client, "update_lke_control_plane_acl") as put, patch(
+            "linode_image_lab.acl_reconcile.open_private_error_file",
+        ) as receipt, patch("linode_image_lab.registry_version_selection.os.open") as selection_file:
+            document = {
+                "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
+                "acl": baseline, "retained": retained, "checkpoint": None, **self.bind(),
+            }
+            result = reconcile_acl(
+                document=document, cluster_id=12345, cluster_label="synthetic-cluster",
+                rollback=False, execute=False, receipt_dir=None, selection=SELECTION,
+                registry_args=REGISTRY_ARGS, client=client,
+            )
+            put.assert_not_called()
+            receipt.assert_not_called()
+            selection_file.assert_not_called()
+        self.assertEqual([call.args[0].get_method() for call in storage.call_args_list], ["GET", "GET"])
+        self.assertEqual(client.reads, 1)
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(result["execution_mode"], "dry-run")
+        self.assertEqual(result["version_proof"], SELECTION.proof())
+        summary = json.dumps(result)
+        for private in (SELECTION.version_id, "synthetic-device", "198.51.100", "2001:db8", '"baseline"'):
+            self.assertNotIn(private, summary)
+        self.assertEqual(client.acl, baseline)
+
     def test_expired_binding_cannot_reach_provider_write(self) -> None:
         first, second = self.observations
         observations = [first, replace(second, observed_at=self.now - timedelta(minutes=1))]
