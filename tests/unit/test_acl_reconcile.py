@@ -8,13 +8,13 @@ from ipaddress import IPv4Address
 import json
 import os
 from pathlib import Path
-from contextlib import redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 import tempfile
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
 from linode_image_lab.acl_reconcile import (
-    ACLReconcileError, WanObservation, WanSource, bind_wan_observations, host_route,
+    ACLReconcileError, WanObservation, WanSource, apply_reviewed_exact_wan_acl, bind_wan_observations, host_route,
     preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl,
 )
 from linode_image_lab.cli import main
@@ -380,14 +380,26 @@ class WanObservationBindingTest(unittest.TestCase):
         }
         return bind_wan_observations(**(args | overrides))
 
-    def exact_preview(self, client, **overrides):
-        arguments = {
+    def exact_args(self, client):
+        return {
             "approved_slots": self.approved,
             "read_dashboard": lambda: [replace(observation, observed_at=None) for observation in self.observations],
             "cluster_id": 12345, "cluster_label": "synthetic-cluster", "selection": SELECTION,
             "registry_args": REGISTRY_ARGS, "client": client,
         }
-        return preview_exact_wan_acl(**(arguments | overrides))
+    def exact_preview(self, client, **overrides):
+        return preview_exact_wan_acl(**(self.exact_args(client) | overrides))
+
+    def reviewed_proof(self, client):
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]):
+            return self.exact_preview(client)["review_proof"]
+
+    def apply_exact(self, client, proof, **overrides):
+        return apply_reviewed_exact_wan_acl(**(self.exact_args(client) | {
+            "reviewed_proof": proof, "max_dashboard_age": timedelta(minutes=1), "writer_session": nullcontext(),
+        } | overrides))
 
     def test_exact_preview_reports_replacement_and_ipv6_disposition_without_a_write(self) -> None:
         client = LinodeClient()
@@ -488,6 +500,163 @@ class WanObservationBindingTest(unittest.TestCase):
             storage.assert_called_once()
         self.assertEqual(client.reads, 2)
         self.assertEqual(client.requests, [])
+
+    def exact_writer_client(self):
+        client = FakeACL(Path.cwd())
+        client.acl["addresses"]["ipv6"] = []
+        return client
+
+    def test_reviewed_exact_apply_writes_once_inside_session_and_verifies_enforcement(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        session_held = False
+
+        @contextmanager
+        def session():
+            nonlocal session_held
+            session_held = True
+            try:
+                yield
+            finally:
+                session_held = False
+
+        def accept(cluster_id, after):
+            self.assertTrue(session_held)
+            self.assertEqual(cluster_id, 12345)
+            client.stale = deepcopy(client.acl)
+            client.acl = deepcopy(after)
+            client.acl["addresses"]["ipv4"].reverse()
+
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]) as storage, patch.object(client, "update_lke_control_plane_acl", side_effect=accept) as put, patch(
+            "linode_image_lab.acl_reconcile.time.sleep",
+        ), patch("linode_image_lab.acl_reconcile.open_private_error_file") as receipt:
+            result = self.apply_exact(client, proof, writer_session=session())
+            receipt.assert_not_called()
+        put.assert_called_once()
+        after = put.call_args.args[1]
+        self.assertEqual(after["addresses"], {"ipv4": sorted(entry["ipv4"] for entry in OBSERVED.values()), "ipv6": []})
+        self.assertTrue(after["enabled"])
+        self.assertNotEqual(after["revision-id"], BASELINE["revision-id"])
+        self.assertEqual(client.reads, 5)
+        self.assertEqual([call.args[0].get_method() for call in storage.call_args_list], ["GET", "GET"])
+        self.assertEqual(result["status"], "enforced")
+        self.assertFalse(session_held)
+
+    def test_reviewed_exact_apply_stops_on_unreviewed_change_and_final_drift(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry) for _ in range(4)
+        ]), patch.object(client, "update_lke_control_plane_acl") as put:
+            with self.assertRaisesRegex(ACLReconcileError, "^exact_wan_review_changed$"):
+                self.apply_exact(client, "f" * 64)
+            client.drift_at_read = client.reads + 2
+            with self.assertRaisesRegex(ACLReconcileError, "^baseline_drift$"):
+                self.apply_exact(client, proof)
+        put.assert_not_called()
+
+    def test_reviewed_exact_apply_stops_for_partial_registry_and_out_of_scope_ipv6(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        partial = {**self.registry, "entries": self.registry["entries"][:1]}
+        expired = deepcopy(self.registry)
+        expired["entries"][0]["expires_at"] = (self.now - timedelta(seconds=1)).isoformat()
+        for payload, failure in (
+            (partial, "incomplete_or_ambiguous_registry_wan_slots"),
+            (expired, "registry_wan_observation_not_fresh"),
+            (self.registry, "live_ipv6_requires_disposition"),
+        ):
+            if payload is self.registry:
+                client.acl["addresses"]["ipv6"] = list(RETAINED["ipv6"])
+            with self.subTest(failure=failure), patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(payload), registry_response(payload),
+            ]), patch.object(client, "update_lke_control_plane_acl") as put, self.assertRaisesRegex(
+                ACLReconcileError, f"^{failure}$",
+            ):
+                self.apply_exact(client, proof)
+            put.assert_not_called()
+
+    def test_reviewed_exact_apply_checks_dashboard_age_after_final_get(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        read_acl = client.get_lke_control_plane_acl
+
+        def final_read(cluster_id):
+            value = read_acl(cluster_id)
+            if client.reads == 3:
+                clock.now.return_value = self.now + timedelta(minutes=1)
+            return value
+
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch("linode_image_lab.acl_reconcile.datetime", wraps=datetime) as clock, patch.object(
+            client, "get_lke_control_plane_acl", side_effect=final_read,
+        ), patch.object(client, "update_lke_control_plane_acl") as put:
+            clock.now.return_value = self.now
+            with self.assertRaisesRegex(ACLReconcileError, "^dashboard_retrieval_expired$"):
+                self.apply_exact(client, proof)
+        put.assert_not_called()
+
+    def test_reviewed_exact_apply_does_not_retry_a_rejected_request(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+        rejected = LinodeApiError("synthetic rejection", status_code=403, failure_kind="http_response")
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch.object(client, "update_lke_control_plane_acl", side_effect=rejected) as put:
+            with self.assertRaisesRegex(ACLReconcileError, "^provider_rejected_exact_wan_acl$") as failure:
+                self.apply_exact(client, proof)
+        put.assert_called_once()
+        self.assertEqual(failure.exception.status, "rejected")
+        self.assertEqual(client.reads, 3)
+
+    def test_reviewed_exact_apply_needs_enforced_revision_within_readback_bound(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+
+        def stage(cluster_id, after):
+            # The desired addresses can be visible while the old revision remains effective.
+            client.acl["addresses"] = deepcopy(after["addresses"])
+
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]), patch.object(client, "update_lke_control_plane_acl", side_effect=stage) as put, patch(
+            "linode_image_lab.acl_reconcile.time.sleep",
+        ) as sleep, self.assertRaisesRegex(ACLReconcileError, "^enforcement_timeout$") as failure:
+            self.apply_exact(client, proof)
+        self.assertEqual(failure.exception.status, "uncertain")
+        self.assertEqual(sleep.call_count, 11)
+        put.assert_called_once()
+
+    def test_lost_response_waits_for_session_clearance_then_replans_to_no_op(self) -> None:
+        client = self.exact_writer_client()
+        proof = self.reviewed_proof(client)
+
+        def accept_then_lose_response(cluster_id, after):
+            client.acl = deepcopy(after)
+            raise OSError("synthetic response lost")
+
+        @contextmanager
+        def recovery_session(previous_request_settled):
+            if not previous_request_settled:
+                raise ACLReconcileError("previous_write_unsettled")
+            yield
+
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry) for _ in range(4)
+        ]) as storage, patch.object(client, "update_lke_control_plane_acl", side_effect=accept_then_lose_response) as put:
+            with self.assertRaisesRegex(ACLReconcileError, "^provider_result_unverified$") as failure:
+                self.apply_exact(client, proof)
+            self.assertEqual(failure.exception.status, "uncertain")
+            with self.assertRaisesRegex(ACLReconcileError, "^previous_write_unsettled$"):
+                self.apply_exact(client, proof, writer_session=recovery_session(False))
+            self.assertEqual(storage.call_count, 2)
+            result = self.apply_exact(client, proof, writer_session=recovery_session(True))
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(storage.call_count, 4)
+        put.assert_called_once()
 
     def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
         with tempfile.TemporaryDirectory() as root:

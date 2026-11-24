@@ -204,8 +204,9 @@ outside the proposed set as a removal, including broader networks that cover
 a desired host. It excludes all registry IPv6 entries and IPv4 entries outside
 the two approved discovery slots. The summary counts hypothetical IPv6 removals
 from full replacement separately and flags existing IPv6 for owner disposition
-before cutover. Counts and fixed categories are safe to share. Keep raw inputs
-private. This entry point performs reads only and creates no receipts.
+before cutover. Counts and fixed categories are safe to share. Keep raw inputs,
+the per-review key and the keyed `review_proof` in the protected operator session.
+This entry point performs reads only and creates no receipts.
 
 Before any separately approved deployment, review the exact initial removals
 and confirm independent break-glass access to the provider management API and
@@ -217,3 +218,24 @@ ACL immediately before one PUT, and verify the exact replacement and new
 revision by GET. On an interrupted attempt, read current desired and effective
 state before replanning. Hold if an earlier write may still be enforcing or
 exclusive ownership is uncertain. [Linode ACL operations](https://github.com/linode/linode-api-openapi/blob/main/openapi.json)
+
+`acl_reconcile.apply_reviewed_exact_wan_acl` prepares one operator-reviewed
+cutover. The caller must obtain the owner's approval for the fresh preview and
+carry its proof and selection into the same protected session. The proof binds
+the target, registry version and inputs, exact baseline and proposed WAN set.
+It does not confer approval or provider access. The caller must also supply an
+approved maximum age for the dashboard retrieval and a qualified writer session
+that establishes exclusive ownership and resolves any prior request before
+entering. Dashboard retrieval time describes when the response arrived. Review
+this freshness basis before using it for writes.
+
+The candidate rebuilds the plan, rechecks the registry's current version and
+contents, and re-reads the effective ACL immediately before submitting. It
+refuses changed review inputs, expired evidence and live IPv6. An exact no-op
+uses zero PUTs. A change uses one full PUT and bounded GET readback. The library
+has no production writer-session binding or scheduled entry point. A scheduler
+must keep writes paused across restarts after an uncertain request, including a
+process exit before any outcome is reported. An old effective revision alone
+does not establish that a previous update is settled. Resume after independent
+reconciliation and replan from current registry and provider state. Qualify the
+session boundary and recurring authorization separately before scheduling.

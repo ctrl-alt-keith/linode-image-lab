@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
@@ -19,7 +20,7 @@ from typing import Any
 from .acl_sync import (
     MAX_PROTECTED_ACL_INPUT, ACLClientProtocol, ACLSyncError, expected_cluster, normalize_acl, open_private_error_file,
 )
-from .linode_api import LinodeClient
+from .linode_api import LinodeApiError, LinodeClient
 from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import fetch_registry_from_object_storage, validate_registry
 
@@ -472,7 +473,18 @@ def preview_dashboard_wans(
     return {**summary, "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at}
 
 
-def preview_exact_wan_acl(
+@dataclass(frozen=True)
+class _ExactWanACLPlan:
+    baseline: dict[str, Any]
+    ipv4: tuple[str, ...]
+    dashboard_fetched_at: datetime
+    registry_expires_at: datetime
+    review_proof: str
+    excluded_registry_ipv4: int
+    excluded_registry_ipv6: int
+
+
+def _read_exact_wan_acl_plan(
     *,
     approved_slots: dict[str, WanSource],
     read_dashboard: Callable[[], list[WanObservation]],
@@ -481,15 +493,14 @@ def preview_exact_wan_acl(
     selection: RegistryVersionSelection,
     registry_args: dict[str, Any],
     client: ACLClientProtocol,
-) -> dict[str, Any]:
-    """Report the delta from the effective ACL to the current approved WAN IPv4 set."""
+) -> _ExactWanACLPlan:
     if (type(cluster_id) is not int or cluster_id < 1 or not isinstance(cluster_label, str)
             or not cluster_label or cluster_label != cluster_label.strip()):
         raise ACLReconcileError("invalid_attempt_identity")
-    if not selection.version_id:
+    if not selection.version_id or not isinstance(selection.proof_key, bytes) or len(selection.proof_key) != 32:
         raise ACLReconcileError("invalid_registry_version_selection")
     observations = read_dashboard()
-    fetched_at = datetime.now(timezone.utc).isoformat()
+    fetched_at = datetime.now(timezone.utc)
     slots, by_source = _match_wan_observations(approved_slots, observations)
     try:
         registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
@@ -499,7 +510,7 @@ def preview_exact_wan_acl(
 
     try:
         expected_cluster(client, cluster_id, cluster_label)
-        actual = read_acl(client, cluster_id)["addresses"]
+        baseline = read_acl(client, cluster_id)
     except ACLReconcileError:
         raise
     except (ValueError, KeyError, TypeError, AttributeError):
@@ -532,8 +543,31 @@ def preview_exact_wan_acl(
         if host_route(by_source[source].ipv4) != desired[source.interface]:
             raise ACLReconcileError("source_observation_does_not_match_registry")
 
+    ipv4 = tuple(sorted(desired.values()))
+    proof_input = {
+        "cluster_id": cluster_id, "cluster_label": cluster_label,
+        "registry": {key: registry_args.get(key) for key in ("endpoint_url", "region", "bucket", "object_key")},
+        "registry_version": selection.version_id,
+        "sources": {slot: [source.device_id, source.interface] for slot, source in approved_slots.items()},
+        "baseline": baseline, "desired_by_interface": desired,
+    }
+    proof = hmac.new(selection.proof_key, b"exact-wan-acl-review\0" + json.dumps(
+        proof_input, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8"), hashlib.sha256).hexdigest()
+    registry_expires_at = min(datetime.fromisoformat(entry["expires_at"]) for entry in selected)
+    return _ExactWanACLPlan(
+        baseline=baseline, ipv4=ipv4, dashboard_fetched_at=fetched_at,
+        registry_expires_at=min(registry_expires_at, datetime.fromisoformat(metadata.valid_until)),
+        review_proof=proof,
+        excluded_registry_ipv4=sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
+        excluded_registry_ipv6=sum(entry["address_family"] == "ipv6" for entry in current["entries"]),
+    )
+
+
+def _exact_wan_summary(plan: _ExactWanACLPlan) -> dict[str, Any]:
+    actual = plan.baseline["addresses"]
     live_ipv4 = {ip_network(route) for route in actual["ipv4"]}
-    wan_ipv4 = {ip_network(route) for route in desired.values()}
+    wan_ipv4 = {ip_network(route) for route in plan.ipv4}
     additions, removals = wan_ipv4 - live_ipv4, live_ipv4 - wan_ipv4
     live_ipv6_count = len(actual["ipv6"])
     removed_hosts = sum(network.prefixlen == network.max_prefixlen for network in removals)
@@ -546,16 +580,113 @@ def preview_exact_wan_acl(
         "outcome_version": 1, "command": "acl-sync", "operation": "preview_exact_wan_acl",
         "status": "planned" if additions or removals or live_ipv6_count else "unchanged",
         "execution_mode": "dry-run", "registry_current_verified": True,
-        "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at,
+        "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": plan.dashboard_fetched_at.isoformat(),
+        "review_proof": plan.review_proof,
         "change_counts": {
             "additions": {"ipv4": len(additions), "ipv6": 0},
             "removals": {"ipv4": len(removals), "ipv6": live_ipv6_count},
         },
         "ipv4_removal_groups": {"hosts": removed_hosts, "networks": len(removals) - removed_hosts},
         "out_of_scope": {
-            "registry_ipv4_entries": sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
-            "registry_ipv6_entries": sum(entry["address_family"] == "ipv6" for entry in current["entries"]),
+            "registry_ipv4_entries": plan.excluded_registry_ipv4,
+            "registry_ipv6_entries": plan.excluded_registry_ipv6,
             "live_ipv6_entries": live_ipv6_count,
         },
         "cutover_blockers": blockers,
     }
+
+
+def preview_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> dict[str, Any]:
+    """Report the delta from the effective ACL to the current approved WAN IPv4 set."""
+    return _exact_wan_summary(_read_exact_wan_acl_plan(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
+        cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
+    ))
+
+
+def apply_reviewed_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    max_dashboard_age: timedelta,
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str,
+    writer_session: AbstractContextManager[None],
+) -> dict[str, Any]:
+    """Apply one reviewed cutover through a caller-owned exclusive writer session.
+
+    Entry must prove any previous request is settled and hold exclusive writer
+    ownership through readback. No scheduler or production session is supplied.
+    An uncertain exit requires reconciliation before another write session.
+    """
+    if max_dashboard_age <= timedelta(0):
+        raise ACLReconcileError("invalid_dashboard_age")
+    if not isinstance(reviewed_proof, str) or not re.fullmatch(r"[0-9a-f]{64}", reviewed_proof):
+        raise ACLReconcileError("exact_wan_review_required")
+    with writer_session:
+        plan = _read_exact_wan_acl_plan(
+            approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
+            cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
+        )
+        summary = _exact_wan_summary(plan)
+        del summary["review_proof"]
+        summary.update(operation="apply_reviewed_exact_wan_acl", execution_mode="execute")
+        if summary["status"] == "unchanged":
+            return {**summary, "enforcement_verified": True}
+        if plan.baseline["addresses"]["ipv6"]:
+            raise ACLReconcileError("live_ipv6_requires_disposition")
+        if not hmac.compare_digest(reviewed_proof, plan.review_proof):
+            raise ACLReconcileError("exact_wan_review_changed")
+
+        try:
+            if read_acl(client, cluster_id) != plan.baseline:
+                raise ACLReconcileError("baseline_drift")
+        except ACLReconcileError:
+            raise
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise ACLReconcileError("final_preflight_failed") from None
+        now = datetime.now(timezone.utc)
+        if now < plan.dashboard_fetched_at or now - plan.dashboard_fetched_at >= max_dashboard_age:
+            raise ACLReconcileError("dashboard_retrieval_expired")
+        if now >= plan.registry_expires_at:
+            raise ACLReconcileError("registry_wan_observation_not_fresh")
+
+        after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
+        try:
+            client.update_lke_control_plane_acl(cluster_id, after)
+        except LinodeApiError as error:
+            if error.failure_kind == "http_response" and error.status_code in {400, 401, 403, 404}:
+                raise ACLReconcileError("provider_rejected_exact_wan_acl", status="rejected") from None
+            raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+        except (OSError, ValueError, KeyError, TypeError):
+            raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+
+        desired = {ip_network(route) for route in plan.ipv4}
+        for attempt in range(12):
+            try:
+                observed = read_acl(client, cluster_id)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+            matches = not observed["addresses"]["ipv6"] and {
+                ip_network(route) for route in observed["addresses"]["ipv4"]
+            } == desired
+            if observed["revision-id"] == after["revision-id"] and matches:
+                return {**summary, "status": "enforced", "enforcement_verified": True, "cutover_blockers": []}
+            if observed["revision-id"] != plan.baseline["revision-id"] or (observed != plan.baseline and not matches):
+                raise ACLReconcileError("unexpected_readback", status="uncertain")
+            if attempt < 11:
+                time.sleep(2)
+        raise ACLReconcileError("enforcement_timeout", status="uncertain")
