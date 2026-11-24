@@ -77,6 +77,9 @@ The owner prepares the input in protected storage:
   Registry v1 cannot identify a physical device by interface name or address.
 - `registry_version_proof` is the keyed proof of the exact version associated
   with these independent observations, using the protected selection.
+- `source_observations_valid_until` is the earliest observation expiry as a
+  timezone-aware ISO 8601 timestamp. It is required for forward execution.
+  Older protected inputs without it can only preview.
 - `retained` contains the two address lists for manual, recovery, and unresolved
   routes. Initially copy both lists from the baseline and set `checkpoint`
   to JSON `null`. For later runs, `checkpoint` contains `intent` and `outcome`
@@ -84,23 +87,27 @@ The owner prepares the input in protected storage:
   be retired. A current observation covered by retained access stays retained.
 
 In a protected caller, use `acl_reconcile.bind_wan_observations` to prepare
-`slots`, `observed`, and `registry_version_proof` for one attempt. Supply the
+the observation fields, version proof, and deadline for one attempt. Supply the
 approved slot-to-device and interface mapping separately from the fresh
 observations. Use the device identity, interface, and public IPv4 from the
-[Meraki uplink read](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/),
-and timestamp each reading at collection. Pass the owner-approved age limit,
-registry destination, and independently selected version. The binder uses
-the exact-version registry reader and checks both observations after
-the read. Use the returned fields and the same selection in the guarded
-preview within that observation window. Keep the observations and binding
-private. Use a fixture transport for offline tests.
+[Meraki uplink read](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/)
+with a qualified observation timestamp. Collection time bounds time since
+retrieval. Qualify the underlying device telemetry before scheduling writes.
+Pass the owner-approved age limit, registry destination, and independently
+selected version. The binder checks both observations after reading the exact
+registry version. The deadline is the older observation time plus that age limit.
+Pass the fields unchanged with the same selection and collect new observations
+when the deadline expires. Keep the observations and binding private. Use a
+fixture transport for offline tests.
 
 The operation refuses incomplete or ambiguous observations, unsupported host
 addresses, invalid ownership, stale inputs, and drift. When explicitly approved,
 add `--execute --acl-receipt-dir /protected/acl-receipts`. Use one owner-only
 directory shared by the sole writer and recovery operator. The command requires
 the same version to still be current, durably creates an exclusive receipt for
-the baseline revision, and rechecks the full ACL immediately before one PUT.
+the baseline revision, and rechecks the full ACL and observation deadline
+immediately before one PUT. If the deadline passes after intent is recorded,
+execution stops before PUT and retains the intent for reconciliation.
 It reports enforcement only after provider GET returns the exact policy and new
 revision. The receipt's first JSON line records intent and its second records
 enforcement. An interrupted or uncertain attempt leaves the intent available.

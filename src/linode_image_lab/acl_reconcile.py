@@ -191,7 +191,30 @@ def bind_wan_observations(
             raise ACLReconcileError("source_observation_not_fresh")
         observed[slot] = {"ipv4": observation.ipv4}
     corroborate_observations(slots, observed, registry, now)
-    return {"slots": slots, "observed": observed, "registry_version_proof": selection.proof()}
+    try:
+        oldest = min(observation.observed_at.astimezone(timezone.utc) for observation in observations)
+        valid_until = oldest + max_age
+    except OverflowError:
+        raise ACLReconcileError("invalid_source_observation_age") from None
+    return {
+        "slots": slots, "observed": observed, "registry_version_proof": selection.proof(),
+        "source_observations_valid_until": valid_until.isoformat(),
+    }
+
+
+def source_observation_deadline(value: Any) -> datetime:
+    try:
+        deadline = datetime.fromisoformat(value)
+        if deadline.utcoffset() is None:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ACLReconcileError("invalid_source_observation_deadline") from None
+    return deadline
+
+
+def require_fresh_observations(deadline: datetime | None) -> None:
+    if deadline is not None and datetime.now(timezone.utc) >= deadline:
+        raise ACLReconcileError("source_observation_not_fresh")
 
 
 def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
@@ -246,8 +269,12 @@ def receipt_path(directory: str, cluster_id: int, revision: str) -> Path:
     return Path(directory) / f"acl-{key}.jsonl"
 
 
-def apply_attempt(client: ACLClientProtocol, receipt: dict[str, Any], directory: str) -> None:
+def apply_attempt(
+    client: ACLClientProtocol, receipt: dict[str, Any], directory: str, *,
+    observation_deadline: datetime | None = None,
+) -> None:
     cluster_id, before, after = (receipt[key] for key in ("cluster_id", "before", "after"))
+    require_fresh_observations(observation_deadline)
     try:
         descriptor = open_private_error_file(
             str(receipt_path(directory, cluster_id, before["revision-id"])), sync_parent=True,
@@ -260,6 +287,7 @@ def apply_attempt(client: ACLClientProtocol, receipt: dict[str, Any], directory:
             record_line(stream, receipt)
             if read_acl(client, cluster_id) != before:
                 raise ACLReconcileError("baseline_drift")
+            require_fresh_observations(observation_deadline)
         except ACLReconcileError:
             raise
         except (OSError, ValueError, KeyError, TypeError):
@@ -296,6 +324,7 @@ def reconcile_acl(
     if rollback == (selection is not None):
         raise ACLReconcileError("forward_requires_exact_version_and_rollback_uses_receipt")
 
+    observation_deadline = None
     if rollback:
         original, before = receipt_policies(document, cluster_id, cluster_label)
         if document["operation"] != "reconcile":
@@ -303,10 +332,17 @@ def reconcile_acl(
         addresses = original["addresses"]
         managed_before, managed_after = document["managed_after"], document["managed_before"]
     else:
-        if set(document) != IDENTITY_FIELDS | {
+        fields = IDENTITY_FIELDS | {
             "acl", "retained", "slots", "checkpoint", "observed", "registry_version_proof",
-        }:
+        }
+        deadline_field = "source_observations_valid_until"
+        if not fields <= document.keys() <= fields | {deadline_field}:
             raise ACLReconcileError("invalid_reconciliation_input")
+        if deadline_field in document:
+            observation_deadline = source_observation_deadline(document[deadline_field])
+            require_fresh_observations(observation_deadline)
+        elif execute:
+            raise ACLReconcileError("source_observation_deadline_required")
         before = policy(document["acl"])
         slots = document["slots"]
         validate_slots(slots)
@@ -347,6 +383,7 @@ def reconcile_acl(
     except (ValueError, KeyError, TypeError):
         raise ACLReconcileError("target_read_failed") from None
 
+    require_fresh_observations(observation_deadline)
     operation = "rollback" if rollback else "reconcile"
     added = {family: len(set(addresses[family]) - set(before["addresses"][family])) for family in FAMILIES}
     removed = {family: len(set(before["addresses"][family]) - set(addresses[family])) for family in FAMILIES}
@@ -376,7 +413,7 @@ def reconcile_acl(
             "managed_before": managed_before, "managed_after": managed_after,
         }
         assert receipt_dir is not None
-        apply_attempt(client, receipt, receipt_dir)
+        apply_attempt(client, receipt, receipt_dir, observation_deadline=observation_deadline)
         status = "enforced"
     return {
         "outcome_version": 1, "command": "acl-sync", "operation": operation, "status": status,

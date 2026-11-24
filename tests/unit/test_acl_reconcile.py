@@ -121,6 +121,7 @@ class GuardedACLTest(unittest.TestCase):
             "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
             "acl": deepcopy(BASELINE), "retained": deepcopy(RETAINED), "slots": SLOTS, "checkpoint": None,
             "observed": deepcopy(OBSERVED), "registry_version_proof": SELECTION.proof(),
+            "source_observations_valid_until": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
         }
 
     def run_acl(self, *, document=None, execute=True, rollback=False, effect=None):
@@ -139,6 +140,21 @@ class GuardedACLTest(unittest.TestCase):
     def receipts(self) -> list:
         return [[json.loads(line) for line in path.read_text().splitlines()]
                 for path in self.directory.glob("*.jsonl")]
+
+    def test_forward_execute_requires_observation_deadline_but_legacy_preview_can_plan(self) -> None:
+        legacy = self.document.copy()
+        legacy.pop("source_observations_valid_until")
+        with self.assertRaisesRegex(ACLReconcileError, "^source_observation_deadline_required$"):
+            self.run_acl(document=legacy)
+        for invalid in (None, "2030-01-01", "bad-deadline"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ACLReconcileError, "^invalid_source_observation_deadline$",
+            ):
+                self.run_acl(document={**legacy, "source_observations_valid_until": invalid})
+        self.assertEqual(self.client.reads, 0)
+        self.assertEqual(self.run_acl(document=legacy, execute=False)["status"], "planned")
+        self.assertEqual(self.client.requests, [])
+        self.assertEqual(self.receipts(), [])
 
     def test_guarded_preview_and_successive_ipv4_updates_without_ipv6_observations(self) -> None:
         plan = self.run_acl(execute=False)
@@ -380,6 +396,7 @@ class WanObservationBindingTest(unittest.TestCase):
                 binding = self.bind(observations=self.observations[::-1])
                 self.assertEqual(binding, {
                     "slots": SLOTS, "observed": OBSERVED, "registry_version_proof": SELECTION.proof(),
+                    "source_observations_valid_until": (self.now + timedelta(minutes=5)).isoformat(),
                 })
                 protected = {
                     "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
@@ -425,6 +442,73 @@ class WanObservationBindingTest(unittest.TestCase):
                 "linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry),
             ), self.assertRaisesRegex(ACLReconcileError, "^source_observation_not_fresh$"):
                 self.bind(observations=[replace(first, observed_at=timestamp), second])
+
+    def test_expired_binding_cannot_reach_provider_write(self) -> None:
+        first, second = self.observations
+        observations = [first, replace(second, observed_at=self.now - timedelta(minutes=1))]
+        deadline = self.now + timedelta(minutes=4)
+        for entry in self.registry["entries"]:
+            self.assertLess(datetime.fromisoformat(entry["observed_at"]), deadline)
+            self.assertGreater(datetime.fromisoformat(entry["expires_at"]), deadline)
+
+        for during_final_read in (False, True):
+            with self.subTest(during_final_read=during_final_read), tempfile.TemporaryDirectory() as root, patch(
+                "linode_image_lab.acl_reconcile.datetime", wraps=datetime,
+            ) as clock, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(self.registry) for _ in range(3)
+            ]) as storage:
+                instant = self.now
+                clock.now.side_effect = lambda zone: instant.astimezone(zone)
+                directory = Path(root).resolve()
+                client = FakeACL(directory)
+                get_acl = client.get_lke_control_plane_acl
+
+                def read_acl_at_boundary(cluster_id):
+                    nonlocal instant
+                    value = get_acl(cluster_id)
+                    if during_final_read and client.reads == 2:
+                        instant = deadline
+                    return value
+
+                document = {
+                    "schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
+                    "acl": BASELINE, "retained": RETAINED, "checkpoint": None,
+                    **self.bind(observations=observations),
+                }
+                self.assertEqual(document["source_observations_valid_until"], deadline.isoformat())
+                if not during_final_read:
+                    instant = deadline
+
+                failure = None
+                with patch.object(client, "get_lke_control_plane_acl", side_effect=read_acl_at_boundary):
+                    try:
+                        reconcile_acl(
+                            document=document, cluster_id=12345, cluster_label="synthetic-cluster",
+                            rollback=False, execute=True, receipt_dir=str(directory), selection=SELECTION,
+                            registry_args=REGISTRY_ARGS, client=client,
+                        )
+                    except ACLReconcileError as error:
+                        failure = error
+
+                self.assertEqual(len(client.requests), 0, "expired observations reached the provider PUT")
+                self.assertEqual(client.acl, BASELINE)
+                self.assertIsNotNone(failure)
+                self.assertEqual((failure.status, str(failure)), ("failed", "source_observation_not_fresh"))
+                receipts = list(directory.glob("*.jsonl"))
+                if during_final_read:
+                    self.assertEqual(client.reads, 2)
+                    exact_key = (
+                        f'{REGISTRY_ARGS["endpoint_url"]}/{REGISTRY_ARGS["bucket"]}/{REGISTRY_ARGS["object_key"]}'
+                    )
+                    exact_version = f"{exact_key}?versionId={SELECTION.version_id}"
+                    self.assertEqual([call.args[0].full_url for call in storage.call_args_list],
+                                     [exact_version, exact_version, exact_key])
+                    receipt, = receipts
+                    intent, = receipt.read_text().splitlines()
+                    self.assertEqual(json.loads(intent)["before"], BASELINE)
+                else:
+                    self.assertEqual(client.reads, 0)
+                    self.assertEqual(receipts, [])
 
     def test_missing_or_wrong_registry_response_version_does_not_fall_back_to_latest(self) -> None:
         for version in (None, "other-version"):
