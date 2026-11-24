@@ -25,7 +25,8 @@ For an approved plain write, use `--execute`. Add `--allow-enable` only for
 approved first enablement. The command rechecks cluster, registry and ACL before
 PUT and stops on drift or invalid, stale, empty, or universal-allow input. It
 reports HTTP 400, 401, 403 and 404 as `rejected`. Treat `submitted` as awaiting
-readback.
+readback. For `uncertain`, inspect the provider ACL before considering another
+write.
 
 ```sh
 linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summary
