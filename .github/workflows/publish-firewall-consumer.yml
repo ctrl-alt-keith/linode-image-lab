@@ -168,7 +168,7 @@ jobs:
             echo 'Package is no longer private after publication.' >&2
             exit 1
           fi
-          echo '- Package visibility preserved: `private`' >> "$GITHUB_STEP_SUMMARY"
+          echo "- Package visibility preserved: \`private\`" >> "$GITHUB_STEP_SUMMARY"
           printf 'digest=%s\nsource_sha=%s\n' "$digest" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
   verify-published:
@@ -297,7 +297,7 @@ jobs:
             echo '### Private firewall consumer image verification'
             echo "- Digest: \`$IMAGE@$EXPECTED_DIGEST\`"
             echo "- Source revision: \`$SOURCE_SHA\`"
-            echo '- Platform: `linux/amd64`'
-            echo '- `firewall-sync --help` exposes `--registry-version-file`.'
+            echo "- Platform: \`linux/amd64\`"
+            echo "- \`firewall-sync --help\` exposes \`--registry-version-file\`."
             echo '- Help ran with networking disabled and no credentials passed to the container.'
           } >> "$GITHUB_STEP_SUMMARY"
