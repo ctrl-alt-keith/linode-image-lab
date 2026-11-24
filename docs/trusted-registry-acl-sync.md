@@ -159,12 +159,26 @@ version or changed policy requires a fresh preview and approval before writing.
 
 ### Recurring reconciliation
 
-Schedule `acl_reconcile.reconcile_exact_wan_acl` only after verifying enforcement
-of the supervised cutover and qualifying the deployment and scoped credentials.
-Require non-overlapping runs and no other writer. Supply a fresh selection of
-the current registry version each run. The exact set removes every extra IPv4
-route, including manual recovery routes. Suspend scheduling before manual
-recovery. Apply [scheduled monitoring](#scheduled-monitoring).
+Run the recurring command only after verifying enforcement of the supervised
+cutover and qualifying the deployment and scoped credentials. Require
+non-overlapping runs and no other writer.
+
+```sh
+linode-image-lab --config /protected/acl-sync.toml acl-reconcile-wans --execute
+```
+
+Use the existing `[acl-sync]` cluster and registry settings and the S3 and
+Linode credentials above. Supply the approved appliance through
+`MERAKI_ORGANIZATION_ID` and `MERAKI_DEVICE_SERIAL` and the existing read key
+through `MERAKI_DASHBOARD_API_KEY`. Keep these inputs protected. The command
+checks `wan1` and `wan2` for that appliance and selects the current immutable
+S3 version in memory on every run. Output is one sanitized JSON summary. Exit
+zero means an enforced change or verified no-op. A failed, rejected or
+uncertain attempt exits nonzero.
+
+The exact set removes every extra IPv4 route, including manual recovery
+routes. Suspend scheduling before manual recovery. Apply
+[scheduled monitoring](#scheduled-monitoring).
 
 Both callables read fresh Meraki and Linode data, validate the current registry
 version, and block on live IPv6. A matching policy sends no PUT. Otherwise

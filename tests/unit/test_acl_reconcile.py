@@ -9,9 +9,12 @@ import json
 import os
 from pathlib import Path
 from contextlib import contextmanager, nullcontext, redirect_stdout
+import runpy
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from linode_image_lab.acl_reconcile import (
     EXACT_WAN_WRITE_WINDOW, ACLReconcileError, WanObservation, WanSource,
@@ -42,6 +45,7 @@ REGISTRY_ARGS = {
     "object_key": "registry.json",
 }
 REGISTRY_ENV = {"LINODE_OBJ_ACCESS_KEY": "synthetic-access", "LINODE_OBJ_SECRET_KEY": "synthetic-secret"}
+CONTAINER_ENTRYPOINT = Path(__file__).resolve().parents[2] / "src/linode_image_lab/container_entrypoint.py"
 
 
 def registry_payload(observed: dict) -> dict:
@@ -721,6 +725,111 @@ class WanObservationBindingTest(unittest.TestCase):
                 self.assertEqual(client.acl["addresses"], {
                     "ipv4": sorted([next_route, OBSERVED["synthetic-b"]["ipv4"]]), "ipv6": [],
                 })
+
+    def test_container_recurring_command_reads_fresh_inputs_after_lost_response(self) -> None:
+        first_version, next_version = "synthetic-v1", "synthetic-v2"
+        current_observations = deepcopy(OBSERVED)
+        current_observations["synthetic-a"]["ipv4"] = "198.51.100.7/32"
+        registry = registry_payload(current_observations)
+        serial = "synthetic-serial"
+        actual = deepcopy(BASELINE)
+        actual["addresses"]["ipv6"] = []
+        writes = []
+
+        def management(client, method, path, payload=None, **options):
+            nonlocal actual
+            if path == "/lke/clusters/12345":
+                self.assertEqual(method, "GET")
+                return {"id": 12345, "label": "synthetic-cluster"}
+            self.assertEqual(path, "/lke/clusters/12345/control_plane_acl")
+            if method == "GET":
+                return {"acl": deepcopy(actual)}
+            self.assertEqual(method, "PUT")
+            self.assertFalse(options["retry"])
+            actual = deepcopy(payload["acl"])
+            writes.append(actual)
+            if len(writes) == 1:
+                raise OSError("synthetic response lost")
+            return {}
+
+        def dashboard(observed):
+            response = BytesIO(json.dumps([{"serial": serial, "uplinks": [
+                {"interface": SLOTS[slot], "addresses": [
+                    {"protocol": "ipv6", "public": {"address": None}},
+                    {"protocol": "ipv4", "public": {"address": route["ipv4"].split("/")[0]}},
+                ]} for slot, route in observed.items()
+            ]}]).encode())
+            response.headers = {}
+            return response
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "acl-sync.toml"
+            config.write_text('schema_version = 1\n[acl-sync]\ncluster_id = 12345\n'
+                              'cluster_label = "synthetic-cluster"\n'
+                              'registry_endpoint_url = "https://us-east-1.linodeobjects.com"\n'
+                              'registry_bucket = "example-bucket"\nregistry_object_key = "registry.json"\n')
+            environment = REGISTRY_ENV | {"LINODE_TOKEN": "synthetic-linode",
+                "MERAKI_DASHBOARD_API_KEY": "synthetic-dashboard", "MERAKI_ORGANIZATION_ID": "123456",
+                "MERAKI_DEVICE_SERIAL": serial}
+
+            def invoke():
+                output = StringIO()
+                with patch.object(sys, "argv", ["linode-image-lab", "--config", str(config),
+                                                "acl-reconcile-wans", "--execute"]), redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as status:
+                        runpy.run_path(str(CONTAINER_ENTRYPOINT), run_name="__main__")
+                for private in (first_version, next_version, serial, "synthetic-cluster", "198.51.100"):
+                    self.assertNotIn(private, output.getvalue())
+                return status.exception.code, json.loads(output.getvalue())
+
+            with patch.dict(os.environ, environment, clear=True), patch.object(
+                LinodeClient, "_request", autospec=True, side_effect=management,
+            ), patch("linode_image_lab.acl_wan_command.open_without_redirect", side_effect=[
+                dashboard(OBSERVED), dashboard(current_observations),
+            ]) as meraki, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                *[registry_response(self.registry, first_version) for _ in range(3)],
+                *[registry_response(registry, next_version) for _ in range(3)],
+            ]) as storage, patch("socket.socket.connect", side_effect=AssertionError("unexpected live network")):
+                code, first = invoke()
+                self.assertEqual((code, first["status"], first["failure"]), (1, "uncertain", "provider_result_unverified"))
+                self.assertEqual(len(writes), 1)
+                code, second = invoke()
+                self.assertEqual((code, second["status"], second["enforcement_verified"]), (0, "enforced", True))
+
+            self.assertEqual(meraki.call_count, 2)
+            for call in meraki.call_args_list:
+                request = call.args[0]
+                self.assertEqual((request.get_method(), urlsplit(request.full_url).netloc), ("GET", "api.meraki.com"))
+                self.assertEqual(parse_qs(urlsplit(request.full_url).query), {"serials[]": [serial]})
+            requests = [call.args[0] for call in storage.call_args_list]
+            self.assertEqual([request.get_method() for request in requests], ["GET"] * 6)
+            self.assertEqual([urlsplit(request.full_url).query for request in requests],
+                             ["", f"versionId={first_version}", "", "", f"versionId={next_version}", ""])
+            self.assertEqual(len(writes), 2)
+            self.assertNotEqual(writes[0]["revision-id"], writes[1]["revision-id"])
+            self.assertEqual(writes[1]["addresses"], {
+                "ipv4": sorted(host["ipv4"] for host in current_observations.values()), "ipv6": [],
+            })
+
+            wrong_device = BytesIO(b'[{"serial":"unapproved-device","uplinks":[]}]')
+            wrong_device.headers = {}
+            paginated = dashboard(OBSERVED)
+            paginated.headers = {"Link": '<https://example.test/page>; rel="next"'}
+            for version, response, failure in (
+                (None, None, "registry_version_unavailable"),
+                (first_version, wrong_device, "invalid_meraki_wan_observation"),
+                (first_version, paginated, "meraki_response_incomplete"),
+            ):
+                with self.subTest(failure=failure), patch.dict(os.environ, environment, clear=True), patch.object(
+                    LinodeClient, "_request",
+                ) as provider, patch("linode_image_lab.acl_wan_command.open_without_redirect", return_value=response
+                ) as reader, patch("linode_image_lab.trusted_registry.urlopen",
+                     return_value=registry_response(self.registry, version)) as registry_read:
+                    code, result = invoke()
+                    self.assertEqual((code, result["status"], result["failure"]), (1, "failed", failure))
+                    self.assertEqual(reader.call_count, int(response is not None))
+                    registry_read.assert_called_once()
+                    provider.assert_not_called()
 
     def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
         with tempfile.TemporaryDirectory() as root:
