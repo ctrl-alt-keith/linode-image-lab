@@ -18,6 +18,7 @@ from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import read_current_registry_version
 
 COMMAND = "acl-reconcile-wans"
+EXECUTE_FLAG = "--execute-after-verified-cutover"
 MAX_WAN_RESPONSE = 64 * 1024
 WAN_INTERFACES = ("wan1", "wan2")
 
@@ -40,7 +41,7 @@ def reconcile_configured_wans(config_path: str | None) -> dict:
     if not api_key or any(ord(char) < 33 or ord(char) > 126 for char in api_key):
         raise ACLReconcileError("missing_or_invalid_meraki_credential")
     try:
-        client = LinodeClient.from_env(command=COMMAND)
+        client = LinodeClient.from_env(command=COMMAND, option=EXECUTE_FLAG)
     except LinodeTokenError:
         raise ACLReconcileError("missing_linode_credential") from None
 
@@ -63,7 +64,8 @@ def _read_dashboard_wans(organization: str, serial: str, api_key: str) -> list[W
     request = Request(url, method="GET", headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"})
     try:
         with open_without_redirect(request, timeout=30) as response:
-            if re.search(r'\brel\s*=\s*(?:"[^"]*\bnext\b[^"]*"|next\b)', response.headers.get("Link", ""), re.I):
+            links = response.headers.get_all("Link", [])
+            if any(re.search(r'\brel\s*=\s*(?:"[^"]*\bnext\b[^"]*"|next\b)', link, re.I) for link in links):
                 raise ACLReconcileError("meraki_response_incomplete")
             raw = response.read(MAX_WAN_RESPONSE + 1)
             if len(raw) > MAX_WAN_RESPONSE:
@@ -71,7 +73,7 @@ def _read_dashboard_wans(organization: str, serial: str, api_key: str) -> list[W
             devices = json.loads(raw)
     except ACLReconcileError:
         raise
-    except (OSError, HTTPException, ValueError):
+    except (OSError, HTTPException, ValueError, RecursionError):
         raise ACLReconcileError("meraki_read_failed") from None
 
     try:

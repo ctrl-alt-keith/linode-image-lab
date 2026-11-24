@@ -15,7 +15,7 @@ from .cleanup import CleanupError, cleanup_plan
 from .acl_reconcile import ACLReconcileError, reconcile_acl
 from .acl_sync import ACLPreviewError, ACLSyncError, acl_sync_plan, read_preservation_baseline
 from .acl_sync import routine_outcome as acl_routine_outcome
-from .acl_wan_command import COMMAND as ACL_WAN_COMMAND, reconcile_configured_wans
+from .acl_wan_command import COMMAND as ACL_WAN_COMMAND, EXECUTE_FLAG as ACL_WAN_EXECUTE_FLAG, reconcile_configured_wans
 from .capture import CaptureError, capture_plan
 from .capture_deploy import CaptureDeployError, capture_deploy_plan
 from .capture_replicate_deploy import CaptureReplicateDeployError, capture_replicate_deploy_plan
@@ -399,10 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Owner-only directory for guarded ACL execute receipts.")
     add_registry_source_args(acl_sync)
 
-    acl_wans = subparsers.add_parser(ACL_WAN_COMMAND, help="Reconcile the LKE ACL to the two trusted WAN IPv4 hosts.")
+    acl_wans = subparsers.add_parser(ACL_WAN_COMMAND, allow_abbrev=False,
+                                     help="Reconcile the LKE ACL to the two trusted WAN IPv4 hosts.")
     add_version_arg(acl_wans, version_text)
     add_config_arg(acl_wans, dest="command_config")
-    acl_wans.add_argument("--execute", action="store_true", required=True, help="Opt into one recurring ACL attempt.")
+    acl_wans.add_argument(ACL_WAN_EXECUTE_FLAG, action="store_true", required=True,
+                          help="Attest that supervised cutover was verified and run one recurring ACL attempt.")
 
     service_sync = subparsers.add_parser(
         "service-acl-sync", help="Refresh one CCM-owned Service firewall ACL annotation.",
@@ -985,7 +987,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == ACL_WAN_COMMAND:
         try:
-            result = reconcile_configured_wans(args.command_config or args.global_config)
+            try:
+                settings_path = config_path(args)
+            except ValueError:
+                raise ACLReconcileError("conflicting_wan_acl_config_options") from None
+            result = reconcile_configured_wans(settings_path)
         except ACLReconcileError as exc:
             result = {
                 "outcome_version": 1, "operation": "reconcile_exact_wan_acl", "execution_mode": "execute",

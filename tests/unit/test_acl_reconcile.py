@@ -3,12 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from email.message import Message
 from io import BytesIO, StringIO
 from ipaddress import IPv4Address
 import json
 import os
 from pathlib import Path
-from contextlib import contextmanager, nullcontext, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 import runpy
 import sys
 import tempfile
@@ -759,7 +760,7 @@ class WanObservationBindingTest(unittest.TestCase):
                     {"protocol": "ipv4", "public": {"address": route["ipv4"].split("/")[0]}},
                 ]} for slot, route in observed.items()
             ]}]).encode())
-            response.headers = {}
+            response.headers = Message()
             return response
 
         with tempfile.TemporaryDirectory() as directory:
@@ -772,10 +773,10 @@ class WanObservationBindingTest(unittest.TestCase):
                 "MERAKI_DASHBOARD_API_KEY": "synthetic-dashboard", "MERAKI_ORGANIZATION_ID": "123456",
                 "MERAKI_DEVICE_SERIAL": serial}
 
-            def invoke():
+            def invoke(*options):
                 output = StringIO()
                 with patch.object(sys, "argv", ["linode-image-lab", "--config", str(config),
-                                                "acl-reconcile-wans", "--execute"]), redirect_stdout(output):
+                                                "acl-reconcile-wans", "--execute-after-verified-cutover", *options]), redirect_stdout(output):
                     with self.assertRaises(SystemExit) as status:
                         runpy.run_path(str(CONTAINER_ENTRYPOINT), run_name="__main__")
                 for private in (first_version, next_version, serial, "synthetic-cluster", "198.51.100"):
@@ -785,26 +786,29 @@ class WanObservationBindingTest(unittest.TestCase):
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 LinodeClient, "_request", autospec=True, side_effect=management,
             ), patch("linode_image_lab.acl_wan_command.open_without_redirect", side_effect=[
-                dashboard(OBSERVED), dashboard(current_observations),
+                dashboard(OBSERVED), dashboard(OBSERVED), dashboard(current_observations),
             ]) as meraki, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
-                *[registry_response(self.registry, first_version) for _ in range(3)],
+                *[registry_response(self.registry, first_version) for _ in range(6)],
                 *[registry_response(registry, next_version) for _ in range(3)],
             ]) as storage, patch("socket.socket.connect", side_effect=AssertionError("unexpected live network")):
                 code, first = invoke()
                 self.assertEqual((code, first["status"], first["failure"]), (1, "uncertain", "provider_result_unverified"))
                 self.assertEqual(len(writes), 1)
                 code, second = invoke()
-                self.assertEqual((code, second["status"], second["enforcement_verified"]), (0, "enforced", True))
+                self.assertEqual((code, second["status"], second["enforcement_verified"]), (0, "unchanged", True))
+                self.assertEqual(len(writes), 1)
+                code, third = invoke()
+                self.assertEqual((code, third["status"], third["enforcement_verified"]), (0, "enforced", True))
 
-            self.assertEqual(meraki.call_count, 2)
+            self.assertEqual(meraki.call_count, 3)
             for call in meraki.call_args_list:
                 request = call.args[0]
                 self.assertEqual((request.get_method(), urlsplit(request.full_url).netloc), ("GET", "api.meraki.com"))
                 self.assertEqual(parse_qs(urlsplit(request.full_url).query), {"serials[]": [serial]})
             requests = [call.args[0] for call in storage.call_args_list]
-            self.assertEqual([request.get_method() for request in requests], ["GET"] * 6)
+            self.assertEqual([request.get_method() for request in requests], ["GET"] * 9)
             self.assertEqual([urlsplit(request.full_url).query for request in requests],
-                             ["", f"versionId={first_version}", "", "", f"versionId={next_version}", ""])
+                             ["", f"versionId={first_version}", ""] * 2 + ["", f"versionId={next_version}", ""])
             self.assertEqual(len(writes), 2)
             self.assertNotEqual(writes[0]["revision-id"], writes[1]["revision-id"])
             self.assertEqual(writes[1]["addresses"], {
@@ -812,9 +816,10 @@ class WanObservationBindingTest(unittest.TestCase):
             })
 
             wrong_device = BytesIO(b'[{"serial":"unapproved-device","uplinks":[]}]')
-            wrong_device.headers = {}
+            wrong_device.headers = Message()
             paginated = dashboard(OBSERVED)
-            paginated.headers = {"Link": '<https://example.test/page>; rel="next"'}
+            paginated.headers.add_header("Link", '<https://example.test/page>; rel="first"')
+            paginated.headers.add_header("Link", '<https://example.test/page>; rel="next"')
             for version, response, failure in (
                 (None, None, "registry_version_unavailable"),
                 (first_version, wrong_device, "invalid_meraki_wan_observation"),
@@ -830,6 +835,21 @@ class WanObservationBindingTest(unittest.TestCase):
                     self.assertEqual(reader.call_count, int(response is not None))
                     registry_read.assert_called_once()
                     provider.assert_not_called()
+
+            with patch("linode_image_lab.cli.reconcile_configured_wans") as runner:
+                code, result = invoke("--config", str(config))
+            runner.assert_not_called()
+            self.assertEqual((code, result["failure"]), (1, "conflicting_wan_acl_config_options"))
+
+    def test_container_recurring_command_requires_the_full_cutover_attestation(self) -> None:
+        for options in ([], ["--execute"]):
+            with self.subTest(options=options), patch.object(
+                sys, "argv", ["linode-image-lab", "acl-reconcile-wans", *options],
+            ), redirect_stderr(StringIO()), patch("linode_image_lab.cli.reconcile_configured_wans") as runner:
+                with self.assertRaises(SystemExit) as status:
+                    runpy.run_path(str(CONTAINER_ENTRYPOINT), run_name="__main__")
+                self.assertEqual(status.exception.code, 2)
+                runner.assert_not_called()
 
     def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
         with tempfile.TemporaryDirectory() as root:

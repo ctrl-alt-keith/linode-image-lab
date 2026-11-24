@@ -159,13 +159,16 @@ version or changed policy requires a fresh preview and approval before writing.
 
 ### Recurring reconciliation
 
-Run the recurring command only after verifying enforcement of the supervised
-cutover and qualifying the deployment and scoped credentials. Require
-non-overlapping runs and no other writer.
+Qualify the deployment and scoped credentials. Require non-overlapping runs
+and no other writer.
 
 ```sh
-linode-image-lab --config /protected/acl-sync.toml acl-reconcile-wans --execute
+linode-image-lab --config /protected/acl-sync.toml acl-reconcile-wans --execute-after-verified-cutover
 ```
+
+The required flag attests to the operator's verification. The command cannot
+establish that the supervised cutover occurred. Add the flag to the scheduled
+invocation only after verifying first-cutover enforcement.
 
 Use the existing `[acl-sync]` cluster and registry settings and the S3 and
 Linode credentials above. Supply the approved appliance through
@@ -180,10 +183,11 @@ The exact set removes every extra IPv4 route, including manual recovery
 routes. Suspend scheduling before manual recovery. Apply
 [scheduled monitoring](#scheduled-monitoring).
 
-Both callables read fresh Meraki and Linode data, validate the current registry
-version, and block on live IPv6. A matching policy sends no PUT. Otherwise
-check the live ACL again and start at most one PUT within five minutes of
-receiving the Meraki response. Read back the enforced policy and revision.
+The recurring command and supervised cutover read fresh Meraki and Linode data,
+validate the current registry version, and block on live IPv6. A matching
+policy sends no PUT. Otherwise reread the live ACL and start at most one PUT
+within five minutes of receiving the Meraki response. Read back the enforced
+policy and revision.
 Report rejected or uncertain writes and let the next run recompute from fresh
 inputs. Never retry the previous payload.
 
