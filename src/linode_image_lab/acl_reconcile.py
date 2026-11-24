@@ -1,4 +1,4 @@
-"""Guarded ACL operations and reviewed WAN cutover."""
+"""Guarded ACL operations and exact WAN reconciliation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
@@ -25,7 +25,7 @@ from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import fetch_registry_from_object_storage, validate_registry
 
 FAMILIES = ("ipv4", "ipv6")
-SUPERVISED_WAN_CUTOVER_WINDOW = timedelta(minutes=5)
+EXACT_WAN_WRITE_WINDOW = timedelta(minutes=5)
 IDENTITY_FIELDS = {"schema_version", "cluster_id", "cluster_label"}
 RECEIPT_FIELDS = IDENTITY_FIELDS | {
     "operation", "before", "after", "retained", "slots", "managed_before", "managed_after",
@@ -630,15 +630,31 @@ def apply_reviewed_exact_wan_acl(
     reviewed_proof: str,
     writer_session: AbstractContextManager[None],
 ) -> dict[str, Any]:
-    """Hold the caller's exclusive writer session from planning through readback.
-
-    The caller must establish that prior requests have settled before entry.
-    Reconcile an uncertain exit before admitting another write session.
-    """
-    if max_dashboard_age <= timedelta(0):
-        raise ACLReconcileError("invalid_dashboard_age")
+    """Apply a reviewed cutover inside the caller's exclusive writer session."""
     if not isinstance(reviewed_proof, str) or not re.fullmatch(r"[0-9a-f]{64}", reviewed_proof):
         raise ACLReconcileError("exact_wan_review_required")
+    return _apply_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=max_dashboard_age,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=reviewed_proof, writer_session=writer_session,
+    )
+
+
+def _apply_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    max_dashboard_age: timedelta,
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str | None,
+    writer_session: AbstractContextManager[None],
+) -> dict[str, Any]:
+    if max_dashboard_age <= timedelta(0):
+        raise ACLReconcileError("invalid_dashboard_age")
     with writer_session:
         plan = _read_exact_wan_acl_plan(
             approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
@@ -646,12 +662,13 @@ def apply_reviewed_exact_wan_acl(
         )
         summary = _exact_wan_summary(plan)
         del summary["review_proof"]
-        summary.update(operation="apply_reviewed_exact_wan_acl", execution_mode="execute")
+        operation = "reconcile_exact_wan_acl" if reviewed_proof is None else "apply_reviewed_exact_wan_acl"
+        summary.update(operation=operation, execution_mode="execute")
         if summary["status"] == "unchanged":
             return {**summary, "enforcement_verified": True}
         if plan.baseline["addresses"]["ipv6"]:
             raise ACLReconcileError("live_ipv6_requires_disposition")
-        if not hmac.compare_digest(reviewed_proof, plan.review_proof):
+        if reviewed_proof is not None and not hmac.compare_digest(reviewed_proof, plan.review_proof):
             raise ACLReconcileError("exact_wan_review_changed")
 
         try:
@@ -706,28 +723,28 @@ def run_supervised_exact_wan_cutover(
     registry_args: dict[str, Any],
     client: ACLClientProtocol,
     reviewed_proof: str,
-    hold_dir: str,
 ) -> dict[str, Any]:
-    """Run once in the caller's designated off-cluster hold directory."""
-    if type(cluster_id) is not int or cluster_id < 1:
-        raise ACLReconcileError("invalid_attempt_identity")
-    target = hashlib.sha256(str(cluster_id).encode("ascii")).hexdigest()
-    hold = Path(hold_dir) / f"exact-wan-cutover-{target}.hold"
-
-    @contextmanager
-    def writer_session():
-        try:
-            descriptor = open_private_error_file(str(hold), sync_parent=True)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        except (ACLSyncError, OSError):
-            raise ACLReconcileError("supervised_cutover_hold_present_or_unavailable") from None
-        yield
-
+    """Perform the reviewed first cutover while scheduled writes are off."""
     return apply_reviewed_exact_wan_acl(
-        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=SUPERVISED_WAN_CUTOVER_WINDOW,
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=EXACT_WAN_WRITE_WINDOW,
         cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
-        client=client, reviewed_proof=reviewed_proof, writer_session=writer_session(),
+        client=client, reviewed_proof=reviewed_proof, writer_session=nullcontext(),
+    )
+
+
+def reconcile_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> dict[str, Any]:
+    """Recompute one run from a fresh registry selection under a non-overlapping scheduler."""
+    return _apply_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=EXACT_WAN_WRITE_WINDOW,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=None, writer_session=nullcontext(),
     )

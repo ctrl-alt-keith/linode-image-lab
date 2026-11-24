@@ -11,11 +11,8 @@ evidence. Use `--output-format summary` for routine logs.
 
 Linode's ACL PUT takes the enabled state and complete address lists. Establish
 one writer because the API supplies no documented compare-and-swap. Confirm
-enforcement by GET with both the expected policy and the new revision. Hold
-further writes after an interruption, timeout, transport error, malformed
-response, unexpected HTTP status, or contradictory readback until the outcome
-is reconciled. Require separate evidence that a previous request has settled
-when GET still shows the old revision.
+enforcement by GET with both the expected policy and the new revision. Follow
+the recovery procedure for the writer that made the request.
 [Linode ACL operations](https://github.com/linode/linode-api-openapi/blob/main/openapi.json)
 
 The plain CLI plans by default. It replaces both ACL lists with registry
@@ -25,8 +22,8 @@ For an approved plain write, use `--execute`. Add `--allow-enable` only for
 approved first enablement. The command rechecks cluster, registry and ACL before
 PUT and stops on drift or invalid, stale, empty, or universal-allow input. It
 reports HTTP 400, 401, 403 and 404 as `rejected`. Treat `submitted` as awaiting
-readback. For `uncertain`, inspect the provider ACL before considering another
-write.
+readback. If the outcome is uncertain, inspect the ACL and confirm the previous
+request settled before writing again.
 
 ```sh
 linode-image-lab --config /protected/acl-sync.toml acl-sync --output-format summary
@@ -116,7 +113,7 @@ and the registry. Verify the prior policy with a new revision and use the
 enforced recovery receipt as the next checkpoint. Check Kubernetes reachability
 from a retained route independently.
 
-## Qualification before scheduling writes
+## Guarded writer qualification
 
 Keep the staged Job suspended. Start with all routes retained for the guarded
 writer. Review source ownership and caps, then observe a real registry
@@ -127,12 +124,9 @@ enforcement. Verify both WANs provide the intended access. Qualify off-cluster
 provider recovery authority and custody. Rehearse on a synthetic or approved
 target.
 
-Before either writer is scheduled, review recurring removals and qualify the
-deployment, scoped access and exclusive writer session. Monitor registry
-validity, last successful preview and verified
-enforcement, drift, failed or missed runs, and unresolved requests outside LKE.
-Separate telemetry silence from planned suspension. Emit counts and fixed
-categories. Hold writes on drift or unresolved enforcement.
+Before scheduling the guarded writer, review recurring removals and qualify the
+deployment, scoped access and exclusive writer session. Hold writes on drift or
+unresolved enforcement. Apply [scheduled monitoring](#scheduled-monitoring).
 
 ## Exact-set WAN preview
 
@@ -154,31 +148,29 @@ selection, key and `review_proof` in the protected session.
 
 ### Reviewed single cutover
 
-Use `acl_reconcile.apply_reviewed_exact_wan_acl` for one approved cutover.
-Privately review the exact removals and carry the owner's approval, selection
-and `review_proof` from the fresh preview into the protected writer session.
-The proof binds the target, registry, exact baseline and desired WAN set.
-Approval and provider access require separate evidence.
-Confirm independent authority to repair the ACL through provider management
-without Kubernetes or the registry. Supply an approved maximum dashboard
-retrieval age. It bounds the age of the response at use. Meraki supplies no
-per-uplink sample time. Establish that prior requests have settled and hold the
-exclusive writer session through verified readback.
+Keep the CronJob suspended and exclude other writers. Confirm independent
+provider-management recovery authority without Kubernetes or the registry.
+Preview just after a confirmed publish, privately approve the exact removals,
+and check that the approved version is still current before invoking
+`acl_reconcile.run_supervised_exact_wan_cutover` from the reviewed checkout.
+Pass the protected selection and `review_proof` from that preview. A new
+version or changed policy requires a fresh preview and approval before writing.
 
-A changed plan, stale evidence, baseline drift or live IPv6 stops before PUT.
-An exact no-op uses zero PUTs. A change uses one full PUT after a fresh current
-registry check and final ACL GET, then bounded enforcement readback.
+### Recurring reconciliation
 
-For a supervised off-cluster run, load
-`acl_reconcile.run_supervised_exact_wan_cutover` from the reviewed checkout and
-use the same protected inputs. Use one designated durable, owner-only directory
-for the target across invocations. The callable creates an exclusive, empty hold
-before planning. A present or unavailable hold stops the run. Retain it until
-the operator confirms the runner exited and independently settles any possible
-write. Then obtain fresh approval before another run.
+Qualify the deployment and scoped credentials before scheduling
+`acl_reconcile.reconcile_exact_wan_acl`. Require non-overlapping runs and no
+other writer. Supply a fresh selection of the current registry version on each
+invocation. The staged CronJob does not invoke this callable yet.
 
-`SUPERVISED_WAN_CUTOVER_WINDOW` bounds response age from when the dashboard read
-returns. Immediately before PUT, apply the same cutoff to elapsed monotonic
-and wall-clock time to cover host suspension. An uncertain submission keeps
-the hold after expiry. Qualify the off-cluster host, its credential custody and
-recovery authority separately. This callable has no scheduled entry point.
+Both callables read fresh Meraki and Linode data, validate the current registry
+version, and block on live IPv6. A matching policy sends no PUT. Otherwise
+check the live ACL again and start at most one PUT within five minutes of
+receiving the Meraki response. Read back the enforced policy and revision.
+Report rejected or uncertain writes and let the next run recompute from fresh
+inputs. Never retry the previous payload.
+
+### Scheduled monitoring
+
+Monitor verified enforcement, drift, and failed or missed runs outside LKE.
+Distinguish silence from planned suspension. Emit counts and fixed categories.
