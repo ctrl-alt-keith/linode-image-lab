@@ -9,8 +9,8 @@ import ipaddress
 import json
 import os
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import Any, Mapping
-from urllib.error import HTTPError
 from urllib.parse import ParseResult, quote, urlparse
 from urllib.request import Request
 
@@ -61,21 +61,57 @@ def fetch_registry_from_object_storage(
 ) -> dict[str, Any]:
     """Fetch registry JSON from Linode Object Storage using S3 SigV4."""
 
+    if exact_version_id is not None and expected_current_version_id is not None:
+        raise RegistryFetchError("exact and current registry version checks are mutually exclusive")
+    expected_version = exact_version_id if exact_version_id is not None else expected_current_version_id
+    if expected_version is not None:
+        _require_registry_version(expected_version)
+    request = _registry_get_request(endpoint_url, bucket, object_key, region, environ, exact_version_id)
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            if expected_version is not None and response.headers.get("x-amz-version-id") != expected_version:
+                raise RegistryFetchError("exact registry version response mismatch")
+            body = response.read()
+    except (OSError, HTTPException) as exc:
+        raise RegistryFetchError("trusted registry fetch failed") from exc
+
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegistryValidationError("trusted registry JSON could not be parsed") from exc
+    if not isinstance(parsed, dict):
+        raise RegistryValidationError("trusted registry JSON must be an object")
+    return parsed
+
+
+def read_current_registry_version(
+    *, endpoint_url: str, bucket: str, object_key: str, region: str | None = None,
+    environ: Mapping[str, str] | None = None, timeout_seconds: float = 30,
+) -> str:
+    """Select the current immutable version using the existing object-reader GET."""
+    request = _registry_get_request(endpoint_url, bucket, object_key, region, environ, None)
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            return _require_registry_version(response.headers.get("x-amz-version-id"))
+    except (OSError, HTTPException) as exc:
+        raise RegistryFetchError("trusted registry fetch failed") from exc
+
+
+def _require_registry_version(value: Any) -> str:
+    if (not isinstance(value, str) or not value or value == "null" or len(value.encode("utf-8")) > 1024
+            or any(ord(char) < 33 or ord(char) == 127 for char in value)):
+        raise RegistryFetchError("exact registry version is invalid")
+    return value
+
+
+def _registry_get_request(
+    endpoint_url: str, bucket: str, object_key: str, region: str | None,
+    environ: Mapping[str, str] | None, exact_version_id: str | None,
+) -> Request:
     values = environ if environ is not None else os.environ
     access_key = _required_env_value(values, ACCESS_KEY_ENV)
     secret_key = _required_env_value(values, SECRET_KEY_ENV)
     endpoint = _parse_endpoint(endpoint_url)
-    if exact_version_id is not None and expected_current_version_id is not None:
-        raise RegistryFetchError("exact and current registry version checks are mutually exclusive")
-    expected_version = exact_version_id if exact_version_id is not None else expected_current_version_id
-    if expected_version is not None and (
-        not isinstance(expected_version, str)
-        or not expected_version
-        or expected_version == "null"
-        or len(expected_version.encode("utf-8")) > 1024
-        or any(ord(char) < 33 or ord(char) == 127 for char in expected_version)
-    ):
-        raise RegistryFetchError("exact registry version is invalid")
     signing_region = region or _region_from_endpoint(endpoint.hostname or "")
     if not signing_region:
         raise RegistryFetchError("registry Object Storage region is required")
@@ -93,24 +129,7 @@ def fetch_registry_from_object_storage(
         now=now,
         query=query,
     )
-    request = Request(request_url, method="GET", headers=headers)
-    try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            if expected_version is not None and response.headers.get("x-amz-version-id") != expected_version:
-                raise RegistryFetchError("exact registry version response mismatch")
-            body = response.read()
-    except HTTPError as exc:
-        raise RegistryFetchError("trusted registry fetch failed") from exc
-    except OSError as exc:
-        raise RegistryFetchError("trusted registry fetch failed") from exc
-
-    try:
-        parsed = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RegistryValidationError("trusted registry JSON could not be parsed") from exc
-    if not isinstance(parsed, dict):
-        raise RegistryValidationError("trusted registry JSON must be an object")
-    return parsed
+    return Request(request_url, method="GET", headers=headers)
 
 
 def validate_registry(payload: dict[str, Any], *, now: dt.datetime | None = None) -> TrustedRegistry:

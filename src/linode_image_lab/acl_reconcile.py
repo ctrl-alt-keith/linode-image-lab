@@ -1,4 +1,4 @@
-"""One guarded ACL update or restoration from operator-owned evidence."""
+"""Guarded ACL operations and exact WAN reconciliation."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import os
 import re
 import time
 import uuid
-from dataclasses import replace
-from datetime import datetime, timezone
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Any
@@ -18,11 +20,12 @@ from typing import Any
 from .acl_sync import (
     MAX_PROTECTED_ACL_INPUT, ACLClientProtocol, ACLSyncError, expected_cluster, normalize_acl, open_private_error_file,
 )
-from .linode_api import LinodeClient
+from .linode_api import LinodeApiError, LinodeClient
 from .registry_version_selection import RegistryVersionSelection
 from .trusted_registry import fetch_registry_from_object_storage, validate_registry
 
 FAMILIES = ("ipv4", "ipv6")
+EXACT_WAN_WRITE_WINDOW = timedelta(minutes=5)
 IDENTITY_FIELDS = {"schema_version", "cluster_id", "cluster_label"}
 RECEIPT_FIELDS = IDENTITY_FIELDS | {
     "operation", "before", "after", "retained", "slots", "managed_before", "managed_after",
@@ -33,6 +36,19 @@ class ACLReconcileError(ACLSyncError):
     def __init__(self, reason: str, *, status: str = "failed") -> None:
         super().__init__(reason)
         self.status = status
+
+
+@dataclass(frozen=True)
+class WanSource:
+    device_id: str
+    interface: str
+
+
+@dataclass(frozen=True)
+class WanObservation:
+    source: WanSource
+    ipv4: str
+    observed_at: datetime | None
 
 
 def policy(acl: Any) -> dict[str, Any]:
@@ -110,14 +126,12 @@ def observed_entry_is_fresh(entry: dict, now: datetime) -> bool:
         return False
 
 
-def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
-    slots, observed = document["slots"], document["observed"]
+def corroborate_observations(slots: dict, observed: Any, registry: dict, now: datetime) -> dict[str, str]:
     if not isinstance(observed, dict) or observed.keys() != slots.keys():
         raise ACLReconcileError("incomplete_or_unapproved_sources")
 
     # The protected observation binds the intended device and slot. Registry v1
     # supplies corroboration by interface and IPv4 host, but omits device IDs.
-    now = datetime.now(timezone.utc)
     discovered = {
         (entry["source_ref"], entry["cidr"])
         for entry in registry["entries"]
@@ -126,9 +140,8 @@ def planned_addresses(document: dict, before: dict, retained: dict, registry: di
         and isinstance(entry.get("source_ref"), str)
         and observed_entry_is_fresh(entry, now)
     }
-    coverage = [ip_network(route) for route in retained["ipv4"]]
     seen = set()
-    next_managed = {}
+    corroborated = {}
     for slot, interface in slots.items():
         routes = observed[slot]
         if not isinstance(routes, dict) or routes.keys() != {"ipv4"}:
@@ -139,8 +152,98 @@ def planned_addresses(document: dict, before: dict, retained: dict, registry: di
         seen.add(route)
         if (interface, route) not in discovered:
             raise ACLReconcileError("source_observation_does_not_match_registry")
-        if not any(ip_network(route).subnet_of(network) for network in coverage):
-            next_managed[slot] = {"ipv4": route}
+        corroborated[slot] = route
+    return corroborated
+
+
+def _match_wan_observations(
+    approved_slots: dict[str, WanSource],
+    observations: list[WanObservation],
+) -> tuple[dict[str, str], dict[WanSource, WanObservation]]:
+    slots = {slot: source.interface for slot, source in approved_slots.items()}
+    validate_slots(slots)
+    by_source = {observation.source: observation for observation in observations}
+    expected_sources = set(approved_slots.values())
+    if (
+        len(observations) != len(expected_sources) or by_source.keys() != expected_sources
+        or any(not source.device_id or source.device_id != source.device_id.strip() for source in expected_sources)
+    ):
+        raise ACLReconcileError("incomplete_or_unapproved_sources")
+    return slots, by_source
+
+
+def bind_wan_observations(
+    *,
+    approved_slots: dict[str, WanSource],
+    observations: list[WanObservation],
+    max_age: timedelta,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind measured WAN observations and their expiry to the selected registry version."""
+    slots, by_source = _match_wan_observations(approved_slots, observations)
+    if max_age <= timedelta(0):
+        raise ACLReconcileError("invalid_source_observation_age")
+    if not selection.version_id:
+        raise ACLReconcileError("invalid_registry_version_selection")
+
+    observed = {}
+    observation_times = []
+    try:
+        for slot, source in approved_slots.items():
+            observation = by_source[source]
+            timestamp = observation.observed_at
+            if timestamp is None:
+                raise ACLReconcileError("source_observation_time_unverified")
+            if timestamp.utcoffset() is None:
+                raise ACLReconcileError("source_observation_not_fresh")
+            observation_times.append(timestamp.astimezone(timezone.utc))
+            observed[slot] = {"ipv4": observation.ipv4}
+        valid_until = min(observation_times) + max_age
+    except OverflowError:
+        raise ACLReconcileError("invalid_source_observation_age") from None
+
+    try:
+        registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
+        now = datetime.now(timezone.utc)
+        validate_registry(registry, now=now)
+    except ValueError:
+        raise ACLReconcileError("registry_invalid_or_unavailable") from None
+
+    if max(observation_times) > now or now >= valid_until:
+        raise ACLReconcileError("source_observation_not_fresh")
+    corroborate_observations(slots, observed, registry, now)
+    return {
+        "slots": slots, "observed": observed, "registry_version_proof": selection.proof(),
+        "source_observations_valid_until": valid_until.isoformat(),
+    }
+
+
+def source_observation_deadline(value: Any) -> datetime:
+    try:
+        deadline = datetime.fromisoformat(value)
+        if deadline.utcoffset() is None:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ACLReconcileError("invalid_source_observation_deadline") from None
+    return deadline
+
+
+def require_fresh_observations(deadline: datetime | None) -> None:
+    if deadline is not None and datetime.now(timezone.utc) >= deadline:
+        raise ACLReconcileError("source_observation_not_fresh")
+
+
+def planned_addresses(document: dict, before: dict, retained: dict, registry: dict) -> tuple[dict, dict]:
+    routes = corroborate_observations(
+        document["slots"], document["observed"], registry, datetime.now(timezone.utc),
+    )
+    coverage = [ip_network(route) for route in retained["ipv4"]]
+    next_managed = {
+        slot: {"ipv4": route}
+        for slot, route in routes.items()
+        if not any(ip_network(route).subnet_of(network) for network in coverage)
+    }
     current = before["addresses"]["ipv4"]
     managed = {routes["ipv4"] for routes in next_managed.values()}
     wanted = set(retained["ipv4"]) | managed
@@ -183,8 +286,12 @@ def receipt_path(directory: str, cluster_id: int, revision: str) -> Path:
     return Path(directory) / f"acl-{key}.jsonl"
 
 
-def apply_attempt(client: ACLClientProtocol, receipt: dict[str, Any], directory: str) -> None:
+def apply_attempt(
+    client: ACLClientProtocol, receipt: dict[str, Any], directory: str, *,
+    observation_deadline: datetime | None = None,
+) -> None:
     cluster_id, before, after = (receipt[key] for key in ("cluster_id", "before", "after"))
+    require_fresh_observations(observation_deadline)
     try:
         descriptor = open_private_error_file(
             str(receipt_path(directory, cluster_id, before["revision-id"])), sync_parent=True,
@@ -197,6 +304,7 @@ def apply_attempt(client: ACLClientProtocol, receipt: dict[str, Any], directory:
             record_line(stream, receipt)
             if read_acl(client, cluster_id) != before:
                 raise ACLReconcileError("baseline_drift")
+            require_fresh_observations(observation_deadline)
         except ACLReconcileError:
             raise
         except (OSError, ValueError, KeyError, TypeError):
@@ -233,6 +341,7 @@ def reconcile_acl(
     if rollback == (selection is not None):
         raise ACLReconcileError("forward_requires_exact_version_and_rollback_uses_receipt")
 
+    observation_deadline = None
     if rollback:
         original, before = receipt_policies(document, cluster_id, cluster_label)
         if document["operation"] != "reconcile":
@@ -240,10 +349,17 @@ def reconcile_acl(
         addresses = original["addresses"]
         managed_before, managed_after = document["managed_after"], document["managed_before"]
     else:
-        if set(document) != IDENTITY_FIELDS | {
+        fields = IDENTITY_FIELDS | {
             "acl", "retained", "slots", "checkpoint", "observed", "registry_version_proof",
-        }:
+        }
+        deadline_field = "source_observations_valid_until"
+        if not fields <= document.keys() <= fields | {deadline_field}:
             raise ACLReconcileError("invalid_reconciliation_input")
+        if deadline_field in document:
+            observation_deadline = source_observation_deadline(document[deadline_field])
+            require_fresh_observations(observation_deadline)
+        elif execute:
+            raise ACLReconcileError("source_observation_deadline_required")
         before = policy(document["acl"])
         slots = document["slots"]
         validate_slots(slots)
@@ -284,6 +400,7 @@ def reconcile_acl(
     except (ValueError, KeyError, TypeError):
         raise ACLReconcileError("target_read_failed") from None
 
+    require_fresh_observations(observation_deadline)
     operation = "rollback" if rollback else "reconcile"
     added = {family: len(set(addresses[family]) - set(before["addresses"][family])) for family in FAMILIES}
     removed = {family: len(set(before["addresses"][family]) - set(addresses[family])) for family in FAMILIES}
@@ -313,7 +430,7 @@ def reconcile_acl(
             "managed_before": managed_before, "managed_after": managed_after,
         }
         assert receipt_dir is not None
-        apply_attempt(client, receipt, receipt_dir)
+        apply_attempt(client, receipt, receipt_dir, observation_deadline=observation_deadline)
         status = "enforced"
     return {
         "outcome_version": 1, "command": "acl-sync", "operation": operation, "status": status,
@@ -322,3 +439,312 @@ def reconcile_acl(
         "change_counts": {"additions": added, "removals": removed},
         **({"version_proof": selection.proof()} if selection is not None else {}),
     }
+
+
+def preview_dashboard_wans(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    baseline: dict[str, Any],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol | None = None,
+) -> dict[str, Any]:
+    """Preview the retained baseline with one dashboard read and the selected registry version."""
+    if not selection.version_id:
+        raise ACLReconcileError("invalid_registry_version_selection")
+    before = policy(baseline)
+    observations = read_dashboard()
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    slots, by_source = _match_wan_observations(approved_slots, observations)
+    document = {
+        "schema_version": 1, "cluster_id": cluster_id, "cluster_label": cluster_label,
+        "acl": before, "retained": before["addresses"], "checkpoint": None,
+        "slots": slots,
+        "observed": {slot: {"ipv4": by_source[source].ipv4} for slot, source in approved_slots.items()},
+        "registry_version_proof": selection.proof(),
+    }
+    summary = reconcile_acl(
+        document=document, cluster_id=cluster_id, cluster_label=cluster_label,
+        rollback=False, execute=False, receipt_dir=None, selection=selection,
+        registry_args=registry_args, client=client,
+    )
+    return {**summary, "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at}
+
+
+@dataclass(frozen=True)
+class _ExactWanACLPlan:
+    baseline: dict[str, Any]
+    ipv4: tuple[str, ...]
+    dashboard_fetched_at: datetime
+    dashboard_fetched_monotonic: float
+    registry_expires_at: datetime
+    review_proof: str
+    excluded_registry_ipv4: int
+    excluded_registry_ipv6: int
+
+
+def _read_exact_wan_acl_plan(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> _ExactWanACLPlan:
+    if (type(cluster_id) is not int or cluster_id < 1 or not isinstance(cluster_label, str)
+            or not cluster_label or cluster_label != cluster_label.strip()):
+        raise ACLReconcileError("invalid_attempt_identity")
+    if not selection.version_id or not isinstance(selection.proof_key, bytes) or len(selection.proof_key) != 32:
+        raise ACLReconcileError("invalid_registry_version_selection")
+    observations = read_dashboard()
+    fetched_monotonic = time.monotonic()
+    fetched_at = datetime.now(timezone.utc)
+    slots, by_source = _match_wan_observations(approved_slots, observations)
+    try:
+        registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
+        validate_registry(registry)
+    except ValueError:
+        raise ACLReconcileError("registry_invalid_or_unavailable") from None
+
+    try:
+        expected_cluster(client, cluster_id, cluster_label)
+        baseline = read_acl(client, cluster_id)
+    except ACLReconcileError:
+        raise
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ACLReconcileError("target_read_failed") from None
+
+    try:
+        current = fetch_registry_from_object_storage(**registry_args, expected_current_version_id=selection.version_id)
+        now = datetime.now(timezone.utc)
+        metadata = validate_registry(current, now=now)
+        if current != registry or datetime.fromisoformat(metadata.generated_at) > now:
+            raise ValueError
+    except ValueError:
+        raise ACLReconcileError("registry_changed_or_unavailable") from None
+
+    interfaces = tuple(slots.values())
+    selected = [
+        entry for entry in current["entries"]
+        if entry.get("kind") == "discovered" and entry.get("source_type") == "meraki_uplink_addresses"
+        and entry.get("address_family") == "ipv4" and entry.get("source_ref") in interfaces
+    ]
+    by_interface = {entry["source_ref"]: entry for entry in selected}
+    if len(selected) != len(interfaces) or by_interface.keys() != set(interfaces):
+        raise ACLReconcileError("incomplete_or_ambiguous_registry_wan_slots")
+    if not all(observed_entry_is_fresh(entry, now) for entry in selected):
+        raise ACLReconcileError("registry_wan_observation_not_fresh")
+    desired = {interface: host_route(entry["cidr"]) for interface, entry in by_interface.items()}
+    if len(set(desired.values())) != len(interfaces):
+        raise ACLReconcileError("ambiguous_source_observations")
+    for source in approved_slots.values():
+        if host_route(by_source[source].ipv4) != desired[source.interface]:
+            raise ACLReconcileError("source_observation_does_not_match_registry")
+
+    ipv4 = tuple(sorted(desired.values()))
+    proof_input = {
+        "cluster_id": cluster_id, "cluster_label": cluster_label,
+        "registry": {key: registry_args.get(key) for key in ("endpoint_url", "region", "bucket", "object_key")},
+        "registry_version": selection.version_id,
+        "sources": {slot: [source.device_id, source.interface] for slot, source in approved_slots.items()},
+        "baseline": baseline, "desired_by_interface": desired,
+    }
+    proof = hmac.new(selection.proof_key, b"exact-wan-acl-review\0" + json.dumps(
+        proof_input, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8"), hashlib.sha256).hexdigest()
+    registry_expires_at = min(datetime.fromisoformat(entry["expires_at"]) for entry in selected)
+    return _ExactWanACLPlan(
+        baseline=baseline, ipv4=ipv4, dashboard_fetched_at=fetched_at,
+        dashboard_fetched_monotonic=fetched_monotonic,
+        registry_expires_at=min(registry_expires_at, datetime.fromisoformat(metadata.valid_until)),
+        review_proof=proof,
+        excluded_registry_ipv4=sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
+        excluded_registry_ipv6=sum(entry["address_family"] == "ipv6" for entry in current["entries"]),
+    )
+
+
+def _exact_wan_summary(plan: _ExactWanACLPlan) -> dict[str, Any]:
+    actual = plan.baseline["addresses"]
+    live_ipv4 = {ip_network(route) for route in actual["ipv4"]}
+    wan_ipv4 = {ip_network(route) for route in plan.ipv4}
+    additions, removals = wan_ipv4 - live_ipv4, live_ipv4 - wan_ipv4
+    live_ipv6_count = len(actual["ipv6"])
+    removed_hosts = sum(network.prefixlen == network.max_prefixlen for network in removals)
+    blockers = []
+    if removals:
+        blockers.append("live_ipv4_removals_require_approval")
+    if live_ipv6_count:
+        blockers.append("live_ipv6_requires_disposition")
+    return {
+        "outcome_version": 1, "command": "acl-sync", "operation": "preview_exact_wan_acl",
+        "status": "planned" if additions or removals or live_ipv6_count else "unchanged",
+        "execution_mode": "dry-run", "registry_current_verified": True,
+        "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": plan.dashboard_fetched_at.isoformat(),
+        "review_proof": plan.review_proof,
+        "change_counts": {
+            "additions": {"ipv4": len(additions), "ipv6": 0},
+            "removals": {"ipv4": len(removals), "ipv6": live_ipv6_count},
+        },
+        "ipv4_removal_groups": {"hosts": removed_hosts, "networks": len(removals) - removed_hosts},
+        "out_of_scope": {
+            "registry_ipv4_entries": plan.excluded_registry_ipv4,
+            "registry_ipv6_entries": plan.excluded_registry_ipv6,
+            "live_ipv6_entries": live_ipv6_count,
+        },
+        "cutover_blockers": blockers,
+    }
+
+
+def preview_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> dict[str, Any]:
+    """Preview full replacement with the two approved WAN IPv4 hosts."""
+    return _exact_wan_summary(_read_exact_wan_acl_plan(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
+        cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
+    ))
+
+
+def apply_reviewed_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    max_dashboard_age: timedelta,
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str,
+    writer_session: AbstractContextManager[None],
+) -> dict[str, Any]:
+    """Apply a reviewed cutover inside the caller's exclusive writer session."""
+    if not isinstance(reviewed_proof, str) or not re.fullmatch(r"[0-9a-f]{64}", reviewed_proof):
+        raise ACLReconcileError("exact_wan_review_required")
+    return _apply_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=max_dashboard_age,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=reviewed_proof, writer_session=writer_session,
+    )
+
+
+def _apply_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    max_dashboard_age: timedelta,
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str | None,
+    writer_session: AbstractContextManager[None],
+) -> dict[str, Any]:
+    if max_dashboard_age <= timedelta(0):
+        raise ACLReconcileError("invalid_dashboard_age")
+    with writer_session:
+        plan = _read_exact_wan_acl_plan(
+            approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
+            cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
+        )
+        summary = _exact_wan_summary(plan)
+        del summary["review_proof"]
+        operation = "reconcile_exact_wan_acl" if reviewed_proof is None else "apply_reviewed_exact_wan_acl"
+        summary.update(operation=operation, execution_mode="execute")
+        if summary["status"] == "unchanged":
+            return {**summary, "enforcement_verified": True}
+        if plan.baseline["addresses"]["ipv6"]:
+            raise ACLReconcileError("live_ipv6_requires_disposition")
+        if reviewed_proof is not None and not hmac.compare_digest(reviewed_proof, plan.review_proof):
+            raise ACLReconcileError("exact_wan_review_changed")
+
+        try:
+            if read_acl(client, cluster_id) != plan.baseline:
+                raise ACLReconcileError("baseline_drift")
+        except ACLReconcileError:
+            raise
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise ACLReconcileError("final_preflight_failed") from None
+        after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
+        now = datetime.now(timezone.utc)
+        wall_age = (now - plan.dashboard_fetched_at).total_seconds()
+        elapsed = max(wall_age, time.monotonic() - plan.dashboard_fetched_monotonic)
+        if wall_age < 0 or elapsed >= max_dashboard_age.total_seconds():
+            raise ACLReconcileError("dashboard_retrieval_expired")
+        if now >= plan.registry_expires_at:
+            raise ACLReconcileError("registry_wan_observation_not_fresh")
+        try:
+            client.update_lke_control_plane_acl(cluster_id, after)
+        except LinodeApiError as error:
+            if error.failure_kind == "http_response" and error.status_code in {400, 401, 403, 404}:
+                raise ACLReconcileError("provider_rejected_exact_wan_acl", status="rejected") from None
+            raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+        except OSError:
+            raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+
+        desired = {ip_network(route) for route in plan.ipv4}
+        for attempt in range(12):
+            try:
+                observed = read_acl(client, cluster_id)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                raise ACLReconcileError("provider_result_unverified", status="uncertain") from None
+            matches = not observed["addresses"]["ipv6"] and {
+                ip_network(route) for route in observed["addresses"]["ipv4"]
+            } == desired
+            if observed["revision-id"] == after["revision-id"] and matches:
+                return {**summary, "status": "enforced", "enforcement_verified": True, "cutover_blockers": []}
+            if observed["revision-id"] != plan.baseline["revision-id"] or (observed != plan.baseline and not matches):
+                raise ACLReconcileError("unexpected_readback", status="uncertain")
+            if attempt < 11:
+                time.sleep(2)
+        raise ACLReconcileError("enforcement_timeout", status="uncertain")
+
+
+def run_supervised_exact_wan_cutover(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+    reviewed_proof: str,
+) -> dict[str, Any]:
+    """Perform the reviewed first cutover while scheduled writes are off."""
+    return apply_reviewed_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=EXACT_WAN_WRITE_WINDOW,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=reviewed_proof, writer_session=nullcontext(),
+    )
+
+
+def reconcile_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> dict[str, Any]:
+    """Recompute one run from a fresh registry selection under a non-overlapping scheduler."""
+    return _apply_exact_wan_acl(
+        approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=EXACT_WAN_WRITE_WINDOW,
+        cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
+        client=client, reviewed_proof=None, writer_session=nullcontext(),
+    )
