@@ -451,7 +451,7 @@ def preview_dashboard_wans(
     registry_args: dict[str, Any],
     client: ACLClientProtocol | None = None,
 ) -> dict[str, Any]:
-    """Corroborate the registry at retrieval time while retaining the baseline ACL."""
+    """Preview the retained baseline with one dashboard read and the selected registry version."""
     if not selection.version_id:
         raise ACLReconcileError("invalid_registry_version_selection")
     before = policy(baseline)
@@ -628,8 +628,8 @@ def apply_reviewed_exact_wan_acl(
 ) -> dict[str, Any]:
     """Hold the caller's exclusive writer session from planning through readback.
 
-    Entry requires prior requests to be settled. Reconcile an uncertain exit
-    before admitting another write session.
+    The caller must establish that prior requests have settled before entry.
+    Reconcile an uncertain exit before admitting another write session.
     """
     if max_dashboard_age <= timedelta(0):
         raise ACLReconcileError("invalid_dashboard_age")
