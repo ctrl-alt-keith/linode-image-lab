@@ -186,3 +186,34 @@ halts recovery.
    separately on missing observations and stop scheduling writes after drift or
    unresolved enforcement. Review recurring removal, the exact deployment,
    and its access separately before enabling execution.
+
+## Exact-set WAN preview
+
+Use `acl_reconcile.preview_exact_wan_acl` in a qualified in-memory caller. Supply
+the independently approved appliance-to-slot mapping and a fresh, authorized
+Meraki addresses GET as for the dashboard preview. Supply the exact cluster ID
+and label, the protected registry reader and version selection, and a provider
+GET-only client. The preview reads the selected immutable version and checks
+that the same version and contents are still current after reading the effective
+ACL. It requires one fresh, distinct public IPv4 host route per approved WAN
+slot. The live dashboard read must corroborate both entries. The registry
+defines the desired set.
+
+The preview proposes exactly those two IPv4 hosts. It counts each live entry
+outside the proposed set as a removal, including broader networks that cover
+a desired host. It excludes all registry IPv6 entries and IPv4 entries outside
+the two approved discovery slots. The summary counts hypothetical IPv6 removals
+from full replacement separately and flags existing IPv6 for owner disposition
+before cutover. Counts and fixed categories are safe to share. Keep raw inputs
+private. This entry point performs reads only and creates no receipts.
+
+Before any separately approved deployment, review the exact initial removals
+and confirm independent break-glass access to the provider management API and
+the authority to repair the ACL without Kubernetes or the WAN registry. Linode
+requires the enabled state and complete address lists for a PUT. The revision
+marks enforcement and provides no documented compare-and-swap. A production
+writer must be exclusive, recheck the current registry and complete effective
+ACL immediately before one PUT, and verify the exact replacement and new
+revision by GET. On an interrupted attempt, read current desired and effective
+state before replanning. Hold if an earlier write may still be enforcing or
+exclusive ownership is uncertain. [Linode ACL operations](https://github.com/linode/linode-api-openapi/blob/main/openapi.json)

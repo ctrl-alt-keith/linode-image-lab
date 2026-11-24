@@ -470,3 +470,92 @@ def preview_dashboard_wans(
         registry_args=registry_args, client=client,
     )
     return {**summary, "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at}
+
+
+def preview_exact_wan_acl(
+    *,
+    approved_slots: dict[str, WanSource],
+    read_dashboard: Callable[[], list[WanObservation]],
+    cluster_id: int,
+    cluster_label: str,
+    selection: RegistryVersionSelection,
+    registry_args: dict[str, Any],
+    client: ACLClientProtocol,
+) -> dict[str, Any]:
+    """Report the delta from the effective ACL to the current approved WAN IPv4 set."""
+    if (type(cluster_id) is not int or cluster_id < 1 or not isinstance(cluster_label, str)
+            or not cluster_label or cluster_label != cluster_label.strip()):
+        raise ACLReconcileError("invalid_attempt_identity")
+    if not selection.version_id:
+        raise ACLReconcileError("invalid_registry_version_selection")
+    observations = read_dashboard()
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    slots, by_source = _match_wan_observations(approved_slots, observations)
+    try:
+        registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
+        validate_registry(registry)
+    except ValueError:
+        raise ACLReconcileError("registry_invalid_or_unavailable") from None
+
+    try:
+        expected_cluster(client, cluster_id, cluster_label)
+        actual = read_acl(client, cluster_id)["addresses"]
+    except ACLReconcileError:
+        raise
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ACLReconcileError("target_read_failed") from None
+
+    try:
+        current = fetch_registry_from_object_storage(**registry_args, expected_current_version_id=selection.version_id)
+        now = datetime.now(timezone.utc)
+        metadata = validate_registry(current, now=now)
+        if current != registry or datetime.fromisoformat(metadata.generated_at) > now:
+            raise ValueError
+    except ValueError:
+        raise ACLReconcileError("registry_changed_or_unavailable") from None
+
+    interfaces = tuple(slots.values())
+    selected = [
+        entry for entry in current["entries"]
+        if entry.get("kind") == "discovered" and entry.get("source_type") == "meraki_uplink_addresses"
+        and entry.get("address_family") == "ipv4" and entry.get("source_ref") in interfaces
+    ]
+    by_interface = {entry["source_ref"]: entry for entry in selected}
+    if len(selected) != len(interfaces) or by_interface.keys() != set(interfaces):
+        raise ACLReconcileError("incomplete_or_ambiguous_registry_wan_slots")
+    if not all(observed_entry_is_fresh(entry, now) for entry in selected):
+        raise ACLReconcileError("registry_wan_observation_not_fresh")
+    desired = {interface: host_route(entry["cidr"]) for interface, entry in by_interface.items()}
+    if len(set(desired.values())) != len(interfaces):
+        raise ACLReconcileError("ambiguous_source_observations")
+    for source in approved_slots.values():
+        if host_route(by_source[source].ipv4) != desired[source.interface]:
+            raise ACLReconcileError("source_observation_does_not_match_registry")
+
+    live_ipv4 = {ip_network(route) for route in actual["ipv4"]}
+    wan_ipv4 = {ip_network(route) for route in desired.values()}
+    additions, removals = wan_ipv4 - live_ipv4, live_ipv4 - wan_ipv4
+    live_ipv6_count = len(actual["ipv6"])
+    removed_hosts = sum(network.prefixlen == network.max_prefixlen for network in removals)
+    blockers = []
+    if removals:
+        blockers.append("live_ipv4_removals_require_approval")
+    if live_ipv6_count:
+        blockers.append("live_ipv6_requires_disposition")
+    return {
+        "outcome_version": 1, "command": "acl-sync", "operation": "preview_exact_wan_acl",
+        "status": "planned" if additions or removals or live_ipv6_count else "unchanged",
+        "execution_mode": "dry-run", "registry_current_verified": True,
+        "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": fetched_at,
+        "change_counts": {
+            "additions": {"ipv4": len(additions), "ipv6": 0},
+            "removals": {"ipv4": len(removals), "ipv6": live_ipv6_count},
+        },
+        "ipv4_removal_groups": {"hosts": removed_hosts, "networks": len(removals) - removed_hosts},
+        "out_of_scope": {
+            "registry_ipv4_entries": sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
+            "registry_ipv6_entries": sum(entry["address_family"] == "ipv6" for entry in current["entries"]),
+            "live_ipv6_entries": live_ipv6_count,
+        },
+        "cutover_blockers": blockers,
+    }

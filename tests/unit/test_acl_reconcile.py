@@ -15,7 +15,7 @@ from unittest.mock import Mock, PropertyMock, patch
 
 from linode_image_lab.acl_reconcile import (
     ACLReconcileError, WanObservation, WanSource, bind_wan_observations, host_route,
-    preview_dashboard_wans, reconcile_acl,
+    preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl,
 )
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
@@ -379,6 +379,115 @@ class WanObservationBindingTest(unittest.TestCase):
             "registry_args": REGISTRY_ARGS,
         }
         return bind_wan_observations(**(args | overrides))
+
+    def exact_preview(self, client, **overrides):
+        arguments = {
+            "approved_slots": self.approved,
+            "read_dashboard": lambda: [replace(observation, observed_at=None) for observation in self.observations],
+            "cluster_id": 12345, "cluster_label": "synthetic-cluster", "selection": SELECTION,
+            "registry_args": REGISTRY_ARGS, "client": client,
+        }
+        return preview_exact_wan_acl(**(arguments | overrides))
+
+    def test_exact_preview_reports_replacement_and_ipv6_disposition_without_a_write(self) -> None:
+        client = LinodeClient()
+        actual = {**BASELINE, "addresses": {
+            "ipv4": ["192.0.2.9", "198.51.100.0/24", "203.0.113.2"], "ipv6": RETAINED["ipv6"],
+        }}
+        self.registry["entries"].extend([
+            {**self.registry["entries"][0], "kind": "static", "cidr": "192.0.2.9/32"},
+            {**self.registry["entries"][0], "source_ref": "cellular", "cidr": "198.51.100.3/32"},
+            {**self.registry["entries"][0], "address_family": "ipv6", "cidr": "2001:db8::2/128"},
+        ])
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]) as storage, patch.object(LinodeClient, "_request", autospec=True, side_effect=[
+            {"id": 12345, "label": "synthetic-cluster"}, {"acl": actual},
+        ]) as management, patch("linode_image_lab.acl_reconcile.open_private_error_file") as receipt:
+            result = self.exact_preview(client)
+            receipt.assert_not_called()
+        self.assertEqual([call.args[1] for call in management.call_args_list], ["GET", "GET"])
+        requests = [call.args[0] for call in storage.call_args_list]
+        self.assertEqual([request.get_method() for request in requests], ["GET", "GET"])
+        self.assertEqual(requests[0].full_url, f"{requests[1].full_url}?versionId={SELECTION.version_id}")
+        self.assertEqual(result["status"], "planned")
+        self.assertEqual(result["change_counts"], {
+            "additions": {"ipv4": 1, "ipv6": 0}, "removals": {"ipv4": 2, "ipv6": 2},
+        })
+        self.assertEqual(result["ipv4_removal_groups"], {"hosts": 1, "networks": 1})
+        self.assertEqual(result["out_of_scope"], {"registry_ipv4_entries": 2, "registry_ipv6_entries": 1, "live_ipv6_entries": 2})
+        self.assertEqual(result["cutover_blockers"], ["live_ipv4_removals_require_approval", "live_ipv6_requires_disposition"])
+        self.assertNotIn("checkpoint", result)
+        summary = json.dumps(result)
+        for private in (SELECTION.version_id, "synthetic-device", "synthetic-cluster", "198.51.100", "2001:db8", '"baseline"'):
+            self.assertNotIn(private, summary)
+
+    def test_exact_preview_replans_from_current_desired_and_actual_on_each_attempt(self) -> None:
+        client = FakeACL(Path.cwd())
+        next_route = "198.51.100.7/32"
+        updated = registry_payload({**OBSERVED, "synthetic-a": {"ipv4": next_route}})
+        next_selection = replace(SELECTION, version_id="next-version")
+        def read_dashboard() -> list[WanObservation]:
+            return [replace(self.observations[0], ipv4=next_route), self.observations[1]]
+
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            *[registry_response(self.registry) for _ in range(2)],
+            *[registry_response(updated, next_selection.version_id) for _ in range(4)],
+        ]):
+            first = self.exact_preview(client)
+            client.acl = {**BASELINE, "addresses": {"ipv4": ["203.0.113.2", "198.51.100.2/32"], "ipv6": []},
+                          "revision-id": "enforced-after-interruption"}
+            second = self.exact_preview(client, selection=next_selection, read_dashboard=read_dashboard)
+            client.acl["addresses"]["ipv4"][1] = next_route
+            third = self.exact_preview(client, selection=next_selection, read_dashboard=read_dashboard)
+        self.assertEqual(first["status"], "planned")
+        self.assertEqual(second["change_counts"], {
+            "additions": {"ipv4": 1, "ipv6": 0}, "removals": {"ipv4": 1, "ipv6": 0},
+        })
+        self.assertEqual(third["status"], "unchanged")
+        self.assertEqual(client.reads, 3)
+        self.assertEqual(client.requests, [])
+
+    def test_exact_preview_requires_complete_unambiguous_fresh_registry_slots(self) -> None:
+        first, second = self.registry["entries"]
+        for entries, reason in (
+            ([], "incomplete_or_ambiguous_registry_wan_slots"),
+            ([first], "incomplete_or_ambiguous_registry_wan_slots"),
+            ([first, first, second], "incomplete_or_ambiguous_registry_wan_slots"),
+            ([first, {**second, "expires_at": (self.now - timedelta(seconds=1)).isoformat()}],
+             "registry_wan_observation_not_fresh"),
+            ([first, {**second, "cidr": first["cidr"]}], "ambiguous_source_observations"),
+            ([first, {**second, "cidr": "203.0.113.3/32"}], "source_observation_does_not_match_registry"),
+        ):
+            client = FakeACL(Path.cwd())
+            payload = {**self.registry, "entries": entries}
+            with self.subTest(reason=reason), patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(payload), registry_response(payload),
+            ]), self.assertRaisesRegex(ACLReconcileError, f"^{reason}$"):
+                self.exact_preview(client)
+            self.assertEqual(client.requests, [])
+
+    def test_exact_preview_fails_on_identity_or_registry_version_drift(self) -> None:
+        client = FakeACL(Path.cwd())
+        changed = {**self.registry, "entries": []}
+        for version, payload in (("other-version", self.registry), (SELECTION.version_id, changed)):
+            with self.subTest(version=version), patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                registry_response(self.registry), registry_response(payload, version),
+            ]), self.assertRaisesRegex(ACLReconcileError, "^registry_changed_or_unavailable$"):
+                self.exact_preview(client)
+        first, second = self.observations
+        wrong_device = replace(second, source=WanSource("other-device", second.source.interface))
+        with patch("linode_image_lab.trusted_registry.urlopen") as storage, self.assertRaisesRegex(
+            ACLReconcileError, "^incomplete_or_unapproved_sources$",
+        ):
+            self.exact_preview(client, read_dashboard=lambda: [first, wrong_device])
+        storage.assert_not_called()
+        with patch("linode_image_lab.trusted_registry.urlopen", return_value=registry_response(self.registry)) as storage:
+            with self.assertRaisesRegex(ACLReconcileError, "^target_read_failed$"):
+                self.exact_preview(client, cluster_label="other-cluster")
+            storage.assert_called_once()
+        self.assertEqual(client.reads, 2)
+        self.assertEqual(client.requests, [])
 
     def test_binding_feeds_summary_preview_using_same_exact_registry_version(self) -> None:
         with tempfile.TemporaryDirectory() as root:
