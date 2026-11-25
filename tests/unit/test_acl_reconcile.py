@@ -18,11 +18,12 @@ from unittest.mock import Mock, PropertyMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from linode_image_lab.acl_reconcile import (
-    EXACT_WAN_WRITE_WINDOW, ACLReconcileError, MerakiWanEvidence, WanObservation, WanSource,
+    EXACT_WAN_WRITE_WINDOW, ACLReconcileError, FirstWanCutover, MerakiWanEvidence, WanObservation, WanSource,
     apply_reviewed_exact_wan_acl, bind_wan_observations, host_route,
     preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl, reconcile_exact_wan_acl,
     run_supervised_exact_wan_cutover,
 )
+from linode_image_lab.acl_wan_first_run import main as first_run_main
 from linode_image_lab.cli import main
 from linode_image_lab.linode_api import LinodeApiError, LinodeClient
 from linode_image_lab.registry_version_selection import RegistryVersionSelection
@@ -527,6 +528,157 @@ class WanObservationBindingTest(unittest.TestCase):
         client = FakeACL(Path.cwd())
         client.acl["addresses"]["ipv6"] = []
         return client
+
+    def first_run_fixture(self, directory):
+        client = FakeACL(directory)
+        wanted = [row["ipv4"] for row in OBSERVED.values()]
+        client.acl["addresses"] = {"ipv4": wanted + [f"192.0.2.{n}/32" for n in range(1, 7)], "ipv6": []}
+        evidence = MerakiWanEvidence(
+            [replace(observation, observed_at=None) for observation in self.observations],
+            self.meraki_status(self.now),
+        )
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]):
+            proof = self.exact_preview(client, read_dashboard=lambda: evidence)["review_proof"]
+        permit = FirstWanCutover("1" * 32, self.now - timedelta(seconds=5),
+                                 self.now + timedelta(minutes=1), str(directory))
+        return client, evidence, proof, permit
+
+    def test_first_run_entrypoint_records_exact_revision_before_put(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client, evidence, proof, permit = self.first_run_fixture(root)
+            before = deepcopy(client.acl)
+            approval = root / "permit.json"
+            approval.write_text(json.dumps({
+                "selection": {"version_id": SELECTION.version_id, "proof_key": SELECTION.proof_key.hex()},
+                "reviewed_proof": proof, "revision": permit.revision,
+                "not_before": permit.not_before.isoformat(), "expires_at": permit.expires_at.isoformat(),
+            }))
+            approval.chmod(0o600)
+            inputs = self.exact_args(client)
+            del inputs["selection"]
+            inputs["read_dashboard"] = lambda: evidence
+            with (
+                patch("linode_image_lab.acl_wan_first_run.configured_wan_inputs", return_value=inputs),
+                patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                    registry_response(self.registry) for _ in range(3)
+                ]),
+                redirect_stdout(StringIO()) as out,
+            ):
+                code = first_run_main([
+                    "--config", "/synthetic/config", "--approval-file", str(approval), "--receipt-dir", directory,
+                    "--execute-approved-cutover",
+                ])
+            self.assertEqual(code, 0)
+            after, = client.requests
+            receipt_path, = root.glob("*.jsonl")
+            receipt = json.loads(receipt_path.read_text())
+            self.assertEqual(receipt["before"], before)
+            self.assertEqual(receipt["after"], after)
+            self.assertEqual(after["revision-id"], permit.revision)
+            self.assertEqual(set(after["addresses"]["ipv4"]), {row["ipv4"] for row in OBSERVED.values()})
+            self.assertEqual(json.loads(out.getvalue())["change_counts"]["removals"]["ipv4"], 6)
+            self.assertNotIn(permit.revision, out.getvalue())
+            self.assertNotIn(SELECTION.version_id, out.getvalue())
+
+    def test_first_run_refuses_drift_and_consumed_attempt_without_another_put(self):
+        for changed, failure, read_count in (
+            ("baseline", "exact_wan_review_changed", 2),
+            ("revision_only", "exact_wan_review_changed", 2),
+            ("registry", "registry_changed_or_unavailable", 3),
+            ("lost_response", "provider_result_unverified", 3),
+        ):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                client, evidence, proof, permit = self.first_run_fixture(root)
+                if changed == "baseline":
+                    client.acl["addresses"]["ipv4"][-1] = "192.0.2.99/32"
+                if changed == "revision_only":
+                    client.acl["revision-id"] = "same-routes-new-revision"
+                if changed == "lost_response":
+                    client.fail_put, client.accept_put = True, False
+                storage = [registry_response(self.registry) for _ in range(read_count)]
+                if changed == "registry":
+                    storage[-1] = registry_response(self.registry, version="new-version")
+                with (
+                    patch("linode_image_lab.trusted_registry.urlopen", side_effect=storage),
+                    self.assertRaisesRegex(ACLReconcileError, failure),
+                ):
+                    self.apply_exact(client, proof, first_cutover=permit, read_dashboard=lambda: evidence)
+                self.assertEqual(len(client.requests), int(changed == "lost_response"))
+                if changed in ("baseline", "revision_only"):
+                    self.assertEqual(list(root.glob("*.jsonl")), [])
+                    continue
+                with (
+                    patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                        registry_response(self.registry), registry_response(self.registry),
+                    ]),
+                    self.assertRaisesRegex(ACLReconcileError, "attempt_receipt_unavailable_or_already_exists"),
+                ):
+                    self.apply_exact(client, proof, first_cutover=permit, read_dashboard=lambda: evidence)
+                self.assertEqual(len(client.requests), int(changed == "lost_response"))
+
+    def test_first_run_window_expires_after_admission_even_if_wall_clock_stalls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client, evidence, proof, permit = self.first_run_fixture(root)
+            permit = replace(permit, expires_at=self.now + timedelta(seconds=30))
+            with (
+                patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                    registry_response(self.registry) for _ in range(3)
+                ]),
+                patch("linode_image_lab.acl_reconcile.datetime") as clock,
+                patch("linode_image_lab.acl_reconcile.time.monotonic", side_effect=[100.0, 120.0, 131.0]),
+                self.assertRaisesRegex(ACLReconcileError, "first_wan_cutover_outside_approved_window"),
+            ):
+                clock.now.return_value = self.now
+                clock.fromisoformat.side_effect = datetime.fromisoformat
+                self.apply_exact(client, proof, first_cutover=permit, read_dashboard=lambda: evidence)
+            self.assertEqual(client.requests, [])
+            receipt, = root.glob("*.jsonl")
+            self.assertEqual(json.loads(receipt.read_text())["after"]["revision-id"], permit.revision)
+
+    def test_first_run_fences_the_wan_mapping_even_when_host_set_is_equal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client, _, proof, permit = self.first_run_fixture(root)
+            routes = [observation.ipv4 for observation in self.observations][::-1]
+            self.observations = [
+                replace(observation, ipv4=route, observed_at=None)
+                for observation, route in zip(self.observations, routes, strict=True)
+            ]
+            evidence = MerakiWanEvidence(self.observations, self.meraki_status(self.now))
+            for row in self.registry["entries"]:
+                row["cidr"] = next(
+                    observation.ipv4 for observation in self.observations
+                    if observation.source.interface == row["source_ref"]
+                )
+            with (
+                patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                    registry_response(self.registry), registry_response(self.registry),
+                ]),
+                self.assertRaisesRegex(ACLReconcileError, "exact_wan_review_changed"),
+            ):
+                self.apply_exact(client, proof, first_cutover=permit, read_dashboard=lambda: evidence)
+            self.assertEqual(client.requests, [])
+            self.assertEqual(list(root.glob("*.jsonl")), [])
+
+    def test_first_run_starts_no_reads_outside_the_approved_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client, _, proof, permit = self.first_run_fixture(root)
+            read_dashboard = Mock()
+            original_reads = client.reads
+            later = replace(permit, not_before=self.now + timedelta(minutes=1),
+                            expires_at=self.now + timedelta(minutes=2))
+            with self.assertRaisesRegex(ACLReconcileError, "first_wan_cutover_outside_approved_window"):
+                self.apply_exact(client, proof, first_cutover=later, read_dashboard=read_dashboard)
+            read_dashboard.assert_not_called()
+            self.assertEqual(client.reads, original_reads)
+            self.assertEqual(client.requests, [])
+            self.assertEqual(list(root.glob("*.jsonl")), [])
 
     def test_reviewed_exact_apply_writes_once_inside_session_and_verifies_enforcement(self) -> None:
         client = self.exact_writer_client()

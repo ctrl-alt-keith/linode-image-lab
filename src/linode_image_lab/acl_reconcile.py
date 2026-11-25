@@ -22,7 +22,7 @@ from .acl_sync import (
 )
 from .linode_api import LinodeApiError, LinodeClient
 from .registry_version_selection import RegistryVersionSelection
-from .trusted_registry import fetch_registry_from_object_storage, validate_registry
+from .trusted_registry import fetch_registry_from_object_storage, read_current_registry_version, validate_registry
 
 FAMILIES = ("ipv4", "ipv6")
 EXACT_WAN_WRITE_WINDOW = timedelta(minutes=5)
@@ -58,6 +58,45 @@ class MerakiWanEvidence:
 
 
 DashboardReader = Callable[[], list[WanObservation] | MerakiWanEvidence]
+
+
+@dataclass(frozen=True)
+class FirstWanCutover:
+    revision: str
+    not_before: datetime
+    expires_at: datetime
+    receipt_dir: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.revision, str) or not re.fullmatch(r"[0-9a-f]{32}", self.revision)
+            or self.not_before.utcoffset() is None or self.expires_at.utcoffset() is None
+            or not timedelta(0) < self.expires_at - self.not_before <= EXACT_WAN_WRITE_WINDOW
+            or not Path(self.receipt_dir).is_absolute()
+        ):
+            raise ACLReconcileError("invalid_first_wan_cutover")
+
+    def check_window(self, now: datetime) -> None:
+        if not self.not_before <= now < self.expires_at:
+            raise ACLReconcileError("first_wan_cutover_outside_approved_window")
+
+    def reserve(self, cluster_id: int, cluster_label: str, version: str, before: dict, after: dict) -> None:
+        try:
+            descriptor = open_private_error_file(
+                str(receipt_path(self.receipt_dir, cluster_id, before["revision-id"])), sync_parent=True,
+            )
+        except ACLSyncError:
+            raise ACLReconcileError("attempt_receipt_unavailable_or_already_exists") from None
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                record_line(stream, {
+                    "schema_version": 1, "operation": "first_wan_cutover",
+                    "cluster_id": cluster_id, "cluster_label": cluster_label,
+                    "registry_version": version, "not_before": self.not_before.isoformat(),
+                    "expires_at": self.expires_at.isoformat(), "before": before, "after": after,
+                })
+        except (OSError, ValueError):
+            raise ACLReconcileError("first_wan_cutover_receipt_unverified") from None
 
 
 def policy(acl: Any) -> dict[str, Any]:
@@ -697,6 +736,7 @@ def apply_reviewed_exact_wan_acl(
     client: ACLClientProtocol,
     reviewed_proof: str,
     writer_session: AbstractContextManager[None],
+    first_cutover: FirstWanCutover | None = None,
 ) -> dict[str, Any]:
     """Apply a reviewed cutover inside the caller's exclusive writer session."""
     if not isinstance(reviewed_proof, str) or not re.fullmatch(r"[0-9a-f]{64}", reviewed_proof):
@@ -705,6 +745,7 @@ def apply_reviewed_exact_wan_acl(
         approved_slots=approved_slots, read_dashboard=read_dashboard, max_dashboard_age=max_dashboard_age,
         cluster_id=cluster_id, cluster_label=cluster_label, selection=selection, registry_args=registry_args,
         client=client, reviewed_proof=reviewed_proof, writer_session=writer_session,
+        first_cutover=first_cutover,
     )
 
 
@@ -720,10 +761,15 @@ def _apply_exact_wan_acl(
     client: ACLClientProtocol,
     reviewed_proof: str | None,
     writer_session: AbstractContextManager[None],
+    first_cutover: FirstWanCutover | None = None,
 ) -> dict[str, Any]:
     if max_dashboard_age <= timedelta(0):
         raise ACLReconcileError("invalid_dashboard_age")
     with writer_session:
+        if first_cutover is not None:
+            admitted_at = datetime.now(timezone.utc)
+            admitted_monotonic = time.monotonic()
+            first_cutover.check_window(admitted_at)
         plan = _read_exact_wan_acl_plan(
             approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
             cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
@@ -732,6 +778,17 @@ def _apply_exact_wan_acl(
         summary = _exact_wan_summary(plan)
         del summary["review_proof"]
         operation = "reconcile_exact_wan_acl" if reviewed_proof is None else "apply_reviewed_exact_wan_acl"
+        if first_cutover is not None:
+            operation = "first_wan_cutover"
+            if reviewed_proof is None:
+                raise ACLReconcileError("exact_wan_review_required")
+            counts = summary["change_counts"]
+            if (
+                plan.baseline["addresses"]["ipv6"] or counts["additions"]["ipv4"]
+                or not counts["removals"]["ipv4"] or plan.baseline["revision-id"] == first_cutover.revision
+                or plan.device_reported_at is None
+            ):
+                raise ACLReconcileError("invalid_first_wan_cutover_plan")
         summary.update(operation=operation, execution_mode="execute")
         if summary["status"] == "unchanged":
             return {**summary, "enforcement_verified": True}
@@ -740,6 +797,16 @@ def _apply_exact_wan_acl(
         if reviewed_proof is not None and not hmac.compare_digest(reviewed_proof, plan.review_proof):
             raise ACLReconcileError("exact_wan_review_changed")
 
+        if first_cutover is not None:
+            after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []},
+                     "revision-id": first_cutover.revision}
+            first_cutover.reserve(cluster_id, cluster_label, selection.version_id, plan.baseline, after)
+            try:
+                current_version = read_current_registry_version(**registry_args)
+            except ValueError:
+                raise ACLReconcileError("registry_changed_or_unavailable") from None
+            if current_version != selection.version_id:
+                raise ACLReconcileError("registry_changed_or_unavailable")
         try:
             if read_acl(client, cluster_id) != plan.baseline:
                 raise ACLReconcileError("baseline_drift")
@@ -747,18 +814,25 @@ def _apply_exact_wan_acl(
             raise
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             raise ACLReconcileError("final_preflight_failed") from None
-        after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []}, "revision-id": uuid.uuid4().hex}
+        if first_cutover is None:
+            after = {"enabled": True, "addresses": {"ipv4": list(plan.ipv4), "ipv6": []},
+                     "revision-id": uuid.uuid4().hex}
         now = datetime.now(timezone.utc)
+        monotonic_now = time.monotonic()
         wall_age = (now - plan.dashboard_fetched_at).total_seconds()
-        elapsed = max(wall_age, time.monotonic() - plan.dashboard_fetched_monotonic)
+        elapsed = max(wall_age, monotonic_now - plan.dashboard_fetched_monotonic)
         if wall_age < 0 or elapsed >= max_dashboard_age.total_seconds():
             raise ACLReconcileError("dashboard_retrieval_expired")
+        elapsed_at = plan.dashboard_fetched_at + timedelta(seconds=elapsed)
+        if first_cutover is not None:
+            admitted_elapsed_at = admitted_at + timedelta(seconds=monotonic_now - admitted_monotonic)
+            elapsed_at = max(elapsed_at, admitted_elapsed_at)
         if plan.device_reported_at is not None:
-            _require_fresh_device_report(
-                plan.device_reported_at, plan.dashboard_fetched_at + timedelta(seconds=elapsed), max_dashboard_age,
-            )
-        if now >= plan.registry_expires_at:
+            _require_fresh_device_report(plan.device_reported_at, elapsed_at, max_dashboard_age)
+        if (elapsed_at if first_cutover is not None else now) >= plan.registry_expires_at:
             raise ACLReconcileError("registry_wan_observation_not_fresh")
+        if first_cutover is not None:
+            first_cutover.check_window(elapsed_at)
         try:
             client.update_lke_control_plane_acl(cluster_id, after)
         except LinodeApiError as error:

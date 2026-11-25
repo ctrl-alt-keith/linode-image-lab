@@ -25,7 +25,7 @@ MAX_WAN_RESPONSE = 64 * 1024
 WAN_INTERFACES = ("wan1", "wan2")
 
 
-def reconcile_configured_wans(config_path: str | None) -> dict:
+def configured_wan_inputs(config_path: str | None, *, command: str, option: str) -> dict:
     try:
         config = load_config(config_path)["acl-sync"]
         cluster_id = normalize_firewall_id(config["cluster_id"], "cluster_id")
@@ -43,20 +43,25 @@ def reconcile_configured_wans(config_path: str | None) -> dict:
     if not api_key or any(ord(char) < 33 or ord(char) > 126 for char in api_key):
         raise ACLReconcileError("missing_or_invalid_meraki_credential")
     try:
-        client = LinodeClient.from_env(command=COMMAND, option=EXECUTE_FLAG)
+        client = LinodeClient.from_env(command=command, option=option)
     except LinodeTokenError:
         raise ACLReconcileError("missing_linode_credential") from None
 
-    try:
-        version = read_current_registry_version(**registry_args)
-    except ValueError:
-        raise ACLReconcileError("registry_version_unavailable") from None
-    return reconcile_exact_wan_acl(
+    return dict(
         approved_slots={interface: WanSource(serial, interface) for interface in WAN_INTERFACES},
         read_dashboard=lambda: _read_dashboard_wan_evidence(organization, serial, api_key),
         cluster_id=cluster_id, cluster_label=cluster_label, registry_args=registry_args,
-        selection=RegistryVersionSelection(version, secrets.token_bytes(32)), client=client,
+        client=client,
     )
+
+
+def reconcile_configured_wans(config_path: str | None) -> dict:
+    inputs = configured_wan_inputs(config_path, command=COMMAND, option=EXECUTE_FLAG)
+    try:
+        version = read_current_registry_version(**inputs["registry_args"])
+    except ValueError:
+        raise ACLReconcileError("registry_version_unavailable") from None
+    return reconcile_exact_wan_acl(**inputs, selection=RegistryVersionSelection(version, secrets.token_bytes(32)))
 
 
 def _read_dashboard_wan_evidence(organization: str, serial: str, api_key: str) -> MerakiWanEvidence:

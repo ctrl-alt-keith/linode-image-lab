@@ -32,6 +32,11 @@ def version_proof(version_id: str, proof_key: bytes) -> str:
 
 def load_selection(path_text: str) -> RegistryVersionSelection:
     """Read the fixed-path input once; never include its bytes in diagnostics."""
+    return parse_selection(read_protected_document(path_text, limit=4096))
+
+
+def read_protected_document(path_text: str, *, limit: int) -> dict:
+    """Read one bounded object from the protected mounted-file location."""
     try:
         path = Path(path_text)
         if not path.is_absolute() or path.parent.is_symlink():
@@ -43,7 +48,7 @@ def load_selection(path_text: str) -> RegistryVersionSelection:
         with os.fdopen(descriptor, "rb") as stream:
             info = os.fstat(stream.fileno())
             mode = stat.S_IMODE(info.st_mode)
-            if (not stat.S_ISREG(info.st_mode) or info.st_size > 4096
+            if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
                     or info.st_uid not in (0, os.getuid()) or mode & 0o027
                     or not mode & 0o400):
                 raise ValueError()
@@ -52,8 +57,8 @@ def load_selection(path_text: str) -> RegistryVersionSelection:
             if (not current.is_relative_to(path.parent.resolve(strict=True))
                     or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
                 raise ValueError()
-            raw = stream.read(4097)
-        if not raw or len(raw) > 4096:
+            raw = stream.read(limit + 1)
+        if not raw or len(raw) > limit:
             raise ValueError()
         def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
             result: dict[str, object] = {}
@@ -63,6 +68,15 @@ def load_selection(path_text: str) -> RegistryVersionSelection:
                 result[key] = value
             return result
         value = json.loads(raw, object_pairs_hook=unique)
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except (OSError, ValueError, UnicodeError):
+        raise VersionSelectionError("protected registry version selection is invalid") from None
+
+
+def parse_selection(value: dict) -> RegistryVersionSelection:
+    try:
         if not isinstance(value, dict) or set(value) != {"version_id", "proof_key"}:
             raise ValueError()
         version = value["version_id"]
@@ -73,5 +87,5 @@ def load_selection(path_text: str) -> RegistryVersionSelection:
                 or not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)):
             raise ValueError()
         return RegistryVersionSelection(version, bytes.fromhex(key))
-    except (OSError, ValueError, UnicodeError):
+    except (ValueError, UnicodeError):
         raise VersionSelectionError("protected registry version selection is invalid") from None
