@@ -10,7 +10,9 @@ import secrets
 from urllib.parse import quote, urlencode
 from urllib.request import Request
 
-from .acl_reconcile import ACLReconcileError, WanObservation, WanSource, host_route, reconcile_exact_wan_acl
+from .acl_reconcile import (
+    ACLReconcileError, MerakiWanEvidence, WanObservation, WanSource, host_route, reconcile_exact_wan_acl,
+)
 from .config import load_config, normalize_firewall_id
 from .http_transport import open_without_redirect
 from .linode_api import LinodeClient, LinodeTokenError
@@ -51,16 +53,21 @@ def reconcile_configured_wans(config_path: str | None) -> dict:
         raise ACLReconcileError("registry_version_unavailable") from None
     return reconcile_exact_wan_acl(
         approved_slots={interface: WanSource(serial, interface) for interface in WAN_INTERFACES},
-        read_dashboard=lambda: _read_dashboard_wans(organization, serial, api_key),
+        read_dashboard=lambda: _read_dashboard_wan_evidence(organization, serial, api_key),
         cluster_id=cluster_id, cluster_label=cluster_label, registry_args=registry_args,
         selection=RegistryVersionSelection(version, secrets.token_bytes(32)), client=client,
     )
 
 
-def _read_dashboard_wans(organization: str, serial: str, api_key: str) -> list[WanObservation]:
+def _read_dashboard_wan_evidence(organization: str, serial: str, api_key: str) -> MerakiWanEvidence:
+    status = _read_meraki_device(organization, serial, api_key, "/appliance/uplink/statuses")
+    return MerakiWanEvidence(_read_dashboard_wans(organization, serial, api_key), status)
+
+
+def _read_meraki_device(organization: str, serial: str, api_key: str, path: str) -> dict:
     query = urlencode({"serials[]": serial})
     url = (f"https://api.meraki.com/api/v1/organizations/{quote(organization, safe='')}"
-           f"/devices/uplinks/addresses/byDevice?{query}")
+           f"{path}?{query}")
     request = Request(url, method="GET", headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"})
     try:
         with open_without_redirect(request, timeout=30) as response:
@@ -79,7 +86,15 @@ def _read_dashboard_wans(organization: str, serial: str, api_key: str) -> list[W
     try:
         if not isinstance(devices, list) or len(devices) != 1 or devices[0]["serial"] != serial:
             raise ValueError
-        uplinks = devices[0]["uplinks"]
+        return devices[0]
+    except (KeyError, TypeError, ValueError):
+        raise ACLReconcileError("invalid_meraki_wan_observation") from None
+
+
+def _read_dashboard_wans(organization: str, serial: str, api_key: str) -> list[WanObservation]:
+    device = _read_meraki_device(organization, serial, api_key, "/devices/uplinks/addresses/byDevice")
+    try:
+        uplinks = device["uplinks"]
         if not isinstance(uplinks, list):
             raise ValueError
         observations = []

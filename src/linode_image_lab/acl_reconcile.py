@@ -51,6 +51,15 @@ class WanObservation:
     observed_at: datetime | None
 
 
+@dataclass(frozen=True)
+class MerakiWanEvidence:
+    observations: list[WanObservation]
+    device_status: dict[str, Any]
+
+
+DashboardReader = Callable[[], list[WanObservation] | MerakiWanEvidence]
+
+
 def policy(acl: Any) -> dict[str, Any]:
     if not isinstance(acl, dict) or set(acl) != {"enabled", "addresses", "revision-id"}:
         raise ACLReconcileError("invalid_acl_policy")
@@ -172,6 +181,35 @@ def _match_wan_observations(
     return slots, by_source
 
 
+def _device_report_time(value: Any) -> datetime:
+    try:
+        reported_at = datetime.fromisoformat(value)
+        if reported_at.utcoffset() is None:
+            raise ValueError
+        return reported_at.astimezone(timezone.utc)
+    except (OverflowError, TypeError, ValueError):
+        raise ACLReconcileError("invalid_meraki_device_report_time") from None
+
+
+def _match_meraki_device_status(
+    device_status: dict[str, Any], by_source: dict[WanSource, WanObservation],
+) -> datetime:
+    if any(observation.observed_at is not None for observation in by_source.values()):
+        raise ACLReconcileError("mixed_source_observation_times")
+    expected = {source.interface: host_route(observation.ipv4) for source, observation in by_source.items()}
+    try:
+        if {source.device_id for source in by_source} != {device_status["serial"]}:
+            raise ValueError
+        reported = [(row["interface"], f'{row["publicIp"]}/32')
+                    for row in device_status["uplinks"] if row["interface"] in expected]
+        if len(reported) != len(expected) or dict(reported) != expected:
+            raise ValueError
+        reported_at = device_status.get("lastReportedAt")
+    except (KeyError, TypeError, ValueError):
+        raise ACLReconcileError("meraki_device_status_does_not_match_observations") from None
+    return _device_report_time(reported_at)
+
+
 def bind_wan_observations(
     *,
     approved_slots: dict[str, WanSource],
@@ -179,26 +217,30 @@ def bind_wan_observations(
     max_age: timedelta,
     selection: RegistryVersionSelection,
     registry_args: dict[str, Any],
+    meraki_device_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Bind measured WAN observations and their expiry to the selected registry version."""
+    """Bind WAN observations and their freshness basis to the selected registry version."""
     slots, by_source = _match_wan_observations(approved_slots, observations)
     if max_age <= timedelta(0):
         raise ACLReconcileError("invalid_source_observation_age")
     if not selection.version_id:
         raise ACLReconcileError("invalid_registry_version_selection")
 
-    observed = {}
+    device_reported_at = (_match_meraki_device_status(meraki_device_status, by_source)
+                          if meraki_device_status is not None else None)
+    observed = {slot: {"ipv4": by_source[source].ipv4} for slot, source in approved_slots.items()}
     observation_times = []
     try:
-        for slot, source in approved_slots.items():
-            observation = by_source[source]
-            timestamp = observation.observed_at
-            if timestamp is None:
-                raise ACLReconcileError("source_observation_time_unverified")
-            if timestamp.utcoffset() is None:
-                raise ACLReconcileError("source_observation_not_fresh")
-            observation_times.append(timestamp.astimezone(timezone.utc))
-            observed[slot] = {"ipv4": observation.ipv4}
+        if device_reported_at is not None:
+            observation_times.append(device_reported_at)
+        else:
+            for observation in by_source.values():
+                timestamp = observation.observed_at
+                if timestamp is None:
+                    raise ACLReconcileError("source_observation_time_unverified")
+                if timestamp.utcoffset() is None:
+                    raise ACLReconcileError("source_observation_not_fresh")
+                observation_times.append(timestamp.astimezone(timezone.utc))
         valid_until = min(observation_times) + max_age
     except OverflowError:
         raise ACLReconcileError("invalid_source_observation_age") from None
@@ -216,6 +258,7 @@ def bind_wan_observations(
     return {
         "slots": slots, "observed": observed, "registry_version_proof": selection.proof(),
         "source_observations_valid_until": valid_until.isoformat(),
+        **({"source_device_reported_at": device_reported_at.isoformat()} if device_reported_at is not None else {}),
     }
 
 
@@ -342,6 +385,7 @@ def reconcile_acl(
         raise ACLReconcileError("forward_requires_exact_version_and_rollback_uses_receipt")
 
     observation_deadline = None
+    device_reported_at = None
     if rollback:
         original, before = receipt_policies(document, cluster_id, cluster_label)
         if document["operation"] != "reconcile":
@@ -353,13 +397,19 @@ def reconcile_acl(
             "acl", "retained", "slots", "checkpoint", "observed", "registry_version_proof",
         }
         deadline_field = "source_observations_valid_until"
-        if not fields <= document.keys() <= fields | {deadline_field}:
+        device_report_field = "source_device_reported_at"
+        if not fields <= document.keys() <= fields | {deadline_field, device_report_field}:
             raise ACLReconcileError("invalid_reconciliation_input")
         if deadline_field in document:
             observation_deadline = source_observation_deadline(document[deadline_field])
             require_fresh_observations(observation_deadline)
-        elif execute:
+        elif execute or device_report_field in document:
             raise ACLReconcileError("source_observation_deadline_required")
+        if device_report_field in document:
+            device_reported_at = _device_report_time(document[device_report_field])
+            assert observation_deadline is not None
+            if device_reported_at > datetime.now(timezone.utc) or device_reported_at >= observation_deadline:
+                raise ACLReconcileError("source_observation_not_fresh")
         before = policy(document["acl"])
         slots = document["slots"]
         validate_slots(slots)
@@ -437,6 +487,7 @@ def reconcile_acl(
         "execution_mode": "execute" if execute else "dry-run", "baseline_verified": True,
         "enforcement_verified": status in {"unchanged", "enforced"},
         "change_counts": {"additions": added, "removals": removed},
+        **({"observation_basis": "meraki_device_last_reported_at"} if device_reported_at is not None else {}),
         **({"version_proof": selection.proof()} if selection is not None else {}),
     }
 
@@ -480,6 +531,7 @@ class _ExactWanACLPlan:
     ipv4: tuple[str, ...]
     dashboard_fetched_at: datetime
     dashboard_fetched_monotonic: float
+    device_reported_at: datetime | None
     registry_expires_at: datetime
     review_proof: str
     excluded_registry_ipv4: int
@@ -489,22 +541,28 @@ class _ExactWanACLPlan:
 def _read_exact_wan_acl_plan(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     cluster_id: int,
     cluster_label: str,
     selection: RegistryVersionSelection,
     registry_args: dict[str, Any],
     client: ACLClientProtocol,
+    max_dashboard_age: timedelta = EXACT_WAN_WRITE_WINDOW,
 ) -> _ExactWanACLPlan:
     if (type(cluster_id) is not int or cluster_id < 1 or not isinstance(cluster_label, str)
             or not cluster_label or cluster_label != cluster_label.strip()):
         raise ACLReconcileError("invalid_attempt_identity")
     if not selection.version_id or not isinstance(selection.proof_key, bytes) or len(selection.proof_key) != 32:
         raise ACLReconcileError("invalid_registry_version_selection")
-    observations = read_dashboard()
+    evidence = read_dashboard()
     fetched_monotonic = time.monotonic()
     fetched_at = datetime.now(timezone.utc)
+    observations = evidence.observations if isinstance(evidence, MerakiWanEvidence) else evidence
     slots, by_source = _match_wan_observations(approved_slots, observations)
+    device_reported_at = None
+    if isinstance(evidence, MerakiWanEvidence):
+        device_reported_at = _match_meraki_device_status(evidence.device_status, by_source)
+        _require_fresh_device_report(device_reported_at, fetched_at, max_dashboard_age)
     try:
         registry = fetch_registry_from_object_storage(**registry_args, exact_version_id=selection.version_id)
         validate_registry(registry)
@@ -527,6 +585,8 @@ def _read_exact_wan_acl_plan(
             raise ValueError
     except ValueError:
         raise ACLReconcileError("registry_changed_or_unavailable") from None
+    if device_reported_at is not None:
+        _require_fresh_device_report(device_reported_at, now, max_dashboard_age)
 
     interfaces = tuple(slots.values())
     selected = [
@@ -561,11 +621,17 @@ def _read_exact_wan_acl_plan(
     return _ExactWanACLPlan(
         baseline=baseline, ipv4=ipv4, dashboard_fetched_at=fetched_at,
         dashboard_fetched_monotonic=fetched_monotonic,
+        device_reported_at=device_reported_at,
         registry_expires_at=min(registry_expires_at, datetime.fromisoformat(metadata.valid_until)),
         review_proof=proof,
         excluded_registry_ipv4=sum(entry["address_family"] == "ipv4" for entry in current["entries"]) - len(selected),
         excluded_registry_ipv6=sum(entry["address_family"] == "ipv6" for entry in current["entries"]),
     )
+
+
+def _require_fresh_device_report(reported_at: datetime, now: datetime, max_age: timedelta) -> None:
+    if not timedelta(0) <= now - reported_at < max_age:
+        raise ACLReconcileError("meraki_device_report_not_fresh")
 
 
 def _exact_wan_summary(plan: _ExactWanACLPlan) -> dict[str, Any]:
@@ -584,7 +650,9 @@ def _exact_wan_summary(plan: _ExactWanACLPlan) -> dict[str, Any]:
         "outcome_version": 1, "command": "acl-sync", "operation": "preview_exact_wan_acl",
         "status": "planned" if additions or removals or live_ipv6_count else "unchanged",
         "execution_mode": "dry-run", "registry_current_verified": True,
-        "observation_basis": "dashboard_at_retrieval", "dashboard_fetched_at": plan.dashboard_fetched_at.isoformat(),
+        "observation_basis": ("meraki_device_last_reported_at" if plan.device_reported_at is not None
+                              else "dashboard_at_retrieval"),
+        "dashboard_fetched_at": plan.dashboard_fetched_at.isoformat(),
         "review_proof": plan.review_proof,
         "change_counts": {
             "additions": {"ipv4": len(additions), "ipv6": 0},
@@ -603,7 +671,7 @@ def _exact_wan_summary(plan: _ExactWanACLPlan) -> dict[str, Any]:
 def preview_exact_wan_acl(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     cluster_id: int,
     cluster_label: str,
     selection: RegistryVersionSelection,
@@ -620,7 +688,7 @@ def preview_exact_wan_acl(
 def apply_reviewed_exact_wan_acl(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     max_dashboard_age: timedelta,
     cluster_id: int,
     cluster_label: str,
@@ -643,7 +711,7 @@ def apply_reviewed_exact_wan_acl(
 def _apply_exact_wan_acl(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     max_dashboard_age: timedelta,
     cluster_id: int,
     cluster_label: str,
@@ -659,6 +727,7 @@ def _apply_exact_wan_acl(
         plan = _read_exact_wan_acl_plan(
             approved_slots=approved_slots, read_dashboard=read_dashboard, cluster_id=cluster_id,
             cluster_label=cluster_label, selection=selection, registry_args=registry_args, client=client,
+            max_dashboard_age=max_dashboard_age,
         )
         summary = _exact_wan_summary(plan)
         del summary["review_proof"]
@@ -684,6 +753,10 @@ def _apply_exact_wan_acl(
         elapsed = max(wall_age, time.monotonic() - plan.dashboard_fetched_monotonic)
         if wall_age < 0 or elapsed >= max_dashboard_age.total_seconds():
             raise ACLReconcileError("dashboard_retrieval_expired")
+        if plan.device_reported_at is not None:
+            _require_fresh_device_report(
+                plan.device_reported_at, plan.dashboard_fetched_at + timedelta(seconds=elapsed), max_dashboard_age,
+            )
         if now >= plan.registry_expires_at:
             raise ACLReconcileError("registry_wan_observation_not_fresh")
         try:
@@ -716,7 +789,7 @@ def _apply_exact_wan_acl(
 def run_supervised_exact_wan_cutover(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     cluster_id: int,
     cluster_label: str,
     selection: RegistryVersionSelection,
@@ -735,7 +808,7 @@ def run_supervised_exact_wan_cutover(
 def reconcile_exact_wan_acl(
     *,
     approved_slots: dict[str, WanSource],
-    read_dashboard: Callable[[], list[WanObservation]],
+    read_dashboard: DashboardReader,
     cluster_id: int,
     cluster_label: str,
     selection: RegistryVersionSelection,
