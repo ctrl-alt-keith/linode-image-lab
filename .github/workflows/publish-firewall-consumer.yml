@@ -36,8 +36,8 @@ jobs:
       inputs.mode == 'publish'
     runs-on: ubuntu-24.04
     env:
-      SOURCE_SHA: e8922349349e0236301f4a3ea115d66ce6dbbce4
-      TAG: sha-e8922349349e0236301f4a3ea115d66ce6dbbce4
+      SOURCE_SHA: a2f6ae15a8dcb31614a0c3642e756c3290322c11
+      TAG: sha-a2f6ae15a8dcb31614a0c3642e756c3290322c11
     permissions:
       contents: read
       packages: write
