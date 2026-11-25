@@ -18,7 +18,7 @@ from unittest.mock import Mock, PropertyMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from linode_image_lab.acl_reconcile import (
-    EXACT_WAN_WRITE_WINDOW, ACLReconcileError, WanObservation, WanSource,
+    EXACT_WAN_WRITE_WINDOW, ACLReconcileError, MerakiWanEvidence, WanObservation, WanSource,
     apply_reviewed_exact_wan_acl, bind_wan_observations, host_route,
     preview_dashboard_wans, preview_exact_wan_acl, reconcile_acl, reconcile_exact_wan_acl,
     run_supervised_exact_wan_cutover,
@@ -163,6 +163,21 @@ class GuardedACLTest(unittest.TestCase):
         self.assertEqual(self.run_acl(document=legacy, execute=False)["status"], "planned")
         self.assertEqual(self.client.requests, [])
         self.assertEqual(self.receipts(), [])
+
+    def test_device_report_document_requires_a_sane_timestamp_and_deadline(self) -> None:
+        missing = self.document.copy()
+        missing.pop("source_observations_valid_until")
+        now = datetime.now(timezone.utc)
+        for document, error in (
+            ({**missing, "source_device_reported_at": now.isoformat()}, "source_observation_deadline_required"),
+            ({**self.document, "source_device_reported_at": None}, "invalid_meraki_device_report_time"),
+            ({**self.document, "source_device_reported_at": (now + timedelta(minutes=1)).isoformat()},
+             "source_observation_not_fresh"),
+        ):
+            with self.subTest(error=error), self.assertRaisesRegex(ACLReconcileError, f"^{error}$"):
+                self.run_acl(document=document)
+        self.assertEqual(self.client.reads, 0)
+        self.assertEqual(self.client.requests, [])
 
     def test_guarded_preview_and_successive_ipv4_updates_without_ipv6_observations(self) -> None:
         plan = self.run_acl(execute=False)
@@ -672,6 +687,33 @@ class WanObservationBindingTest(unittest.TestCase):
                 reconcile_exact_wan_acl(**self.exact_args(client))
         put.assert_not_called()
 
+    def test_exact_meraki_device_report_expires_during_provider_preflight(self) -> None:
+        report_time = self.now - EXACT_WAN_WRITE_WINDOW + timedelta(seconds=1)
+        evidence = MerakiWanEvidence(
+            [replace(o, observed_at=None) for o in self.observations], self.meraki_status(report_time),
+        )
+        for update in (reconcile_exact_wan_acl, run_supervised_exact_wan_cutover):
+            client = self.exact_writer_client()
+            args = self.exact_args(client) | {"read_dashboard": lambda: evidence}
+            if update is run_supervised_exact_wan_cutover:
+                args["reviewed_proof"] = self.reviewed_proof(client)
+            preflight_reads = client.reads
+            with (
+                self.subTest(update=update.__name__),
+                patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+                    registry_response(self.registry), registry_response(self.registry),
+                ]),
+                patch("linode_image_lab.acl_reconcile.datetime") as clock,
+                patch("linode_image_lab.acl_reconcile.time.monotonic", side_effect=[100.0, 101.0]),
+                patch.object(client, "update_lke_control_plane_acl") as put,
+            ):
+                clock.now.return_value = self.now
+                clock.fromisoformat.side_effect = datetime.fromisoformat
+                with self.assertRaisesRegex(ACLReconcileError, "^meraki_device_report_not_fresh$"):
+                    update(**args)
+                self.assertEqual(client.reads - preflight_reads, 2)
+                put.assert_not_called()
+
     def test_supervised_one_shot_expiry_counts_host_suspend(self) -> None:
         client = self.exact_writer_client()
         proof = self.reviewed_proof(client)
@@ -775,6 +817,16 @@ class WanObservationBindingTest(unittest.TestCase):
             response.headers = Message()
             return response
 
+        def device_status(observed):
+            response = BytesIO(json.dumps([{
+                "serial": serial, "lastReportedAt": self.now.isoformat(), "uplinks": [
+                    {"interface": SLOTS[slot], "publicIp": route["ipv4"].split("/")[0]}
+                    for slot, route in observed.items()
+                ],
+            }]).encode())
+            response.headers = Message()
+            return response
+
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "acl-sync.toml"
             config.write_text('schema_version = 1\n[acl-sync]\ncluster_id = 12345\n'
@@ -798,7 +850,8 @@ class WanObservationBindingTest(unittest.TestCase):
             with patch.dict(os.environ, environment, clear=True), patch(
                 "linode_image_lab.linode_api.urlopen", side_effect=management,
             ), patch("linode_image_lab.acl_wan_command.open_without_redirect", side_effect=[
-                dashboard(OBSERVED), dashboard(OBSERVED), dashboard(current_observations),
+                device_status(OBSERVED), dashboard(OBSERVED), device_status(OBSERVED), dashboard(OBSERVED),
+                device_status(current_observations), dashboard(current_observations),
             ]) as meraki, patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
                 *[registry_response(self.registry, first_version) for _ in range(6)],
                 *[registry_response(registry, next_version) for _ in range(3)],
@@ -808,11 +861,14 @@ class WanObservationBindingTest(unittest.TestCase):
                 self.assertEqual(len(writes), 1)
                 code, second = invoke()
                 self.assertEqual((code, second["status"], second["enforcement_verified"]), (0, "unchanged", True))
+                self.assertEqual(second["observation_basis"], "meraki_device_last_reported_at")
                 self.assertEqual(len(writes), 1)
                 code, third = invoke()
                 self.assertEqual((code, third["status"], third["enforcement_verified"]), (0, "enforced", True))
 
-            self.assertEqual(meraki.call_count, 3)
+            self.assertEqual(meraki.call_count, 6)
+            self.assertEqual([urlsplit(call.args[0].full_url).path.rsplit("/", 1)[-1]
+                              for call in meraki.call_args_list], ["statuses", "byDevice"] * 3)
             for call in meraki.call_args_list:
                 request = call.args[0]
                 self.assertEqual((request.get_method(), urlsplit(request.full_url).netloc), ("GET", "api.meraki.com"))
@@ -933,6 +989,68 @@ class WanObservationBindingTest(unittest.TestCase):
             with self.assertRaisesRegex(ACLReconcileError, "^source_observation_time_unverified$"):
                 self.bind(observations=[first, replace(second, observed_at=None)])
             read.assert_not_called()
+
+    def meraki_status(self, timestamp):
+        return {
+            "serial": "synthetic-device", "lastReportedAt": timestamp.isoformat(),
+            "uplinks": [{"interface": o.source.interface, "publicIp": o.ipv4.split("/")[0]}
+                        for o in self.observations],
+        }
+
+    def test_meraki_device_report_stays_distinct_through_guarded_preview(self) -> None:
+        report_time = self.now - timedelta(seconds=20)
+        observations = [replace(o, observed_at=None) for o in self.observations]
+        with patch("linode_image_lab.trusted_registry.urlopen", side_effect=[
+            registry_response(self.registry), registry_response(self.registry),
+        ]):
+            bound = self.bind(observations=observations, meraki_device_status=self.meraki_status(report_time))
+            self.assertEqual(bound["observed"], OBSERVED)
+            self.assertEqual(bound["source_device_reported_at"], report_time.isoformat())
+            self.assertEqual(bound["source_observations_valid_until"], (report_time + timedelta(minutes=5)).isoformat())
+            client = FakeACL(Path.cwd())
+            summary = reconcile_acl(
+                document={"schema_version": 1, "cluster_id": 12345, "cluster_label": "synthetic-cluster",
+                          "acl": BASELINE, "retained": RETAINED, "checkpoint": None, **bound},
+                cluster_id=12345, cluster_label="synthetic-cluster", rollback=False, execute=False,
+                receipt_dir=None, selection=SELECTION, registry_args=REGISTRY_ARGS, client=client,
+            )
+        self.assertEqual(summary["observation_basis"], "meraki_device_last_reported_at")
+        self.assertNotIn("source_device_reported_at", summary)
+        self.assertEqual(client.requests, [])
+
+    def test_meraki_device_report_rejects_wrong_identity_uplink_or_address(self) -> None:
+        report = self.meraki_status(self.now)
+        rows = report["uplinks"]
+        observations = [replace(o, observed_at=None) for o in self.observations]
+        for invalid in (
+            {**report, "serial": "different-device"},
+            {**report, "uplinks": rows[:1]},
+            {**report, "uplinks": [rows[0], rows[0]]},
+            {**report, "uplinks": [rows[0], {**rows[1], "publicIp": "192.0.2.100"}]},
+        ):
+            with self.subTest(invalid=invalid), patch("linode_image_lab.trusted_registry.urlopen") as read:
+                with self.assertRaisesRegex(ACLReconcileError, "^meraki_device_status_does_not_match_observations$"):
+                    self.bind(observations=observations, meraki_device_status=invalid)
+                read.assert_not_called()
+
+    def test_meraki_device_report_rejects_mixed_freshness_inputs(self) -> None:
+        first, second = self.observations
+        with patch("linode_image_lab.trusted_registry.urlopen") as read:
+            with self.assertRaisesRegex(ACLReconcileError, "^mixed_source_observation_times$"):
+                self.bind(observations=[first, replace(second, observed_at=None)],
+                          meraki_device_status=self.meraki_status(self.now))
+            read.assert_not_called()
+
+    def test_meraki_device_report_rejects_stale_future_and_naive_times(self) -> None:
+        observations = [replace(o, observed_at=None) for o in self.observations]
+        for timestamp, error in (
+            (self.now - timedelta(minutes=5), "source_observation_not_fresh"),
+            (self.now + timedelta(minutes=1), "source_observation_not_fresh"),
+            (self.now.replace(tzinfo=None), "invalid_meraki_device_report_time"),
+        ):
+            with self.subTest(error=error), patch("linode_image_lab.trusted_registry.urlopen",
+                    return_value=registry_response(self.registry)), self.assertRaisesRegex(ACLReconcileError, f"^{error}$"):
+                self.bind(observations=observations, meraki_device_status=self.meraki_status(timestamp))
 
     def test_in_memory_preview_matches_retained_routes_without_writes_or_files(self) -> None:
         retained = {**RETAINED, "ipv4": [*RETAINED["ipv4"], *(entry["ipv4"] for entry in OBSERVED.values())]}

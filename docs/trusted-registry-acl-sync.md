@@ -72,7 +72,8 @@ supply the following fields.
 - `registry_version_proof` and `source_observations_valid_until` bind the
   observation fields to the exact registry version and the earlier source
   expiry. Use a timezone-aware ISO 8601 deadline. Forward execution requires
-  it.
+  it. For Meraki device-report freshness, include the binder's separate
+  `source_device_reported_at` field and retain the protected input for review.
 - `retained` initially copies both baseline lists and `checkpoint` is
   `null`. Later, use the prior enforced receipt's `intent` and `outcome` as
   the checkpoint. Only its managed IPv4 routes may be retired. Preserve manual,
@@ -80,14 +81,21 @@ supply the following fields.
   covered by retained access stays covered by that route.
 
 Use `acl_reconcile.bind_wan_observations` with the independently approved
-appliance/interface mapping, verified per-uplink sample times, and the approved
-age limit. Registry v1 lacks appliance identity. The
+appliance/interface mapping and age limit. Registry v1 lacks appliance
+identity. Supply verified per-uplink sample times when using that evidence.
+For Meraki API evidence, pass the exact approved appliance's record from
+[MX status](https://developer.cisco.com/meraki/api-v1/get-organization-appliance-uplink-statuses/)
+as `meraki_device_status`. Build the two observations from the separate
 [Meraki addresses GET](https://developer.cisco.com/meraki/api-v1/get-organization-devices-uplinks-addresses-by-device/)
-lacks per-uplink sample times. [MX status](https://developer.cisco.com/meraki/api-v1/get-organization-appliance-uplink-statuses/)
-reports `lastReportedAt` for the device. Supply `None` to stop the binder when
-sample time is unverified. Keep publication and retrieval times separate from
-sample time. Recollect expired observations and use the binder's fields with the
-same selection.
+with `observed_at=None`. Mixed freshness inputs stop the binder. It checks the
+serial and both interface/public IPv4 pairs against the status record, then
+corroborates them against the exact registry version. Use the binder's fields
+with the same selection. The deadline is the device-level `lastReportedAt`
+plus the approved age limit. Keep that timestamp distinct from per-uplink sample,
+Dashboard retrieval, and registry publication times. Summary output labels
+this basis `meraki_device_last_reported_at`. Use a synchronized runner clock.
+On a stale, future, or mismatched device report, stop and recollect both GETs
+before planning again.
 
 For an in-memory guarded preview, use `acl_reconcile.reconcile_acl` with
 `rollback=False`, `execute=False`, `receipt_dir=None` and the protected
@@ -175,8 +183,8 @@ Use the existing `[acl-sync]` cluster and registry settings and the S3 and
 Linode credentials above. Supply the approved appliance through
 `MERAKI_ORGANIZATION_ID` and `MERAKI_DEVICE_SERIAL` and the existing read key
 through `MERAKI_DASHBOARD_API_KEY`. Keep these inputs protected. The command
-checks `wan1` and `wan2` for that appliance and selects the current immutable
-S3 version in memory on every run. Output is one sanitized JSON summary. Exit
+corroborates `wan1` and `wan2` across the Meraki status and addresses GETs for
+that appliance and selects the current immutable S3 version in memory. Exit
 zero means an enforced change or verified no-op. A failed, rejected or
 uncertain attempt exits nonzero.
 
@@ -187,7 +195,10 @@ routes. Suspend scheduling before manual recovery. Apply
 The recurring command and supervised cutover read fresh Meraki and Linode data,
 validate the current registry version, and block on live IPv6. A matching
 policy sends no PUT. Otherwise reread the live ACL and start at most one PUT
-within five minutes of receiving the Meraki response. Read back the enforced
+within five minutes of receiving the Meraki addresses response. When using
+Meraki device-report evidence, validate its age during planning and again
+before PUT against the same write window. If either deadline expires during
+preflight, stop before PUT and recollect both GETs. Read back the enforced
 policy and revision.
 Report rejected or uncertain writes and let the next run recompute from fresh
 inputs. Never retry the previous payload.
